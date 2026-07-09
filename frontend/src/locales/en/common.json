@@ -100,10 +100,11 @@
         "desc": "Full agentic loop with subagents, hooks and MCP servers. Packaged as an ARM64 container via CodeBuild, models via Bedrock."
       },
       "studio": {
-        "badge": "VISUAL EDITOR · PHASE 12",
+        "badge": "ZIP PATH LIVE · CANVAS PHASE 12",
         "title": "Strands Studio",
         "desc": "Drag-and-drop canvas for single, hierarchical, graph and swarm topologies. Generates Strands code, deploys via zip fast path.",
-        "spec2": "multi-agent topologies"
+        "spec2": "multi-agent topologies",
+        "spec3": "config-bundle + ADOT baked in"
       }
     },
     "configure": {
@@ -117,7 +118,9 @@
       "memory": "MEMORY",
       "memoryShort": "short-term · session",
       "memoryLong": "long-term · user preferences",
-      "note": "Config-bundle contract baked in. Generated agents read system prompt & tool descriptions via get_config_bundle() with defaults as fallback — required for A/B experiments in the Evaluation layer. OTEL (ADOT) instrumentation is added automatically."
+      "note": "Config-bundle contract baked in. Generated agents read system prompt & tool descriptions via get_config_bundle() with defaults as fallback — required for A/B experiments in the Evaluation layer. OTEL (ADOT) instrumentation is added automatically.",
+      "titleZip": "CONFIGURE — STRANDS · ZIP FAST PATH",
+      "templateTools": "TOOLS — STRANDS TEMPLATE"
     },
     "launchPanel": {
       "title": "LAUNCH PLAN",

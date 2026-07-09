@@ -100,10 +100,11 @@
         "desc": "具备子 Agent、Hooks 与 MCP 服务器的完整智能体循环。经 CodeBuild 打包为 ARM64 容器,模型走 Bedrock。"
       },
       "studio": {
-        "badge": "可视化编排 · 第 12 阶段",
+        "badge": "ZIP 通道已上线 · 画布第 12 阶段",
         "title": "Strands Studio",
         "desc": "拖拽式画布,支持单体、层级、图与蜂群拓扑。自动生成 Strands 代码,经 zip 快速通道部署。",
-        "spec2": "多 Agent 拓扑"
+        "spec2": "多 Agent 拓扑",
+        "spec3": "内置 config-bundle 与 ADOT"
       }
     },
     "configure": {
@@ -117,7 +118,9 @@
       "memory": "记忆",
       "memoryShort": "短期 · 会话",
       "memoryLong": "长期 · 用户偏好",
-      "note": "已内置 Config-bundle 契约。生成的 Agent 通过 get_config_bundle() 读取系统提示词与工具描述并以默认值兜底 — 这是评估层 A/B 实验的前提。OTEL(ADOT)埋点自动注入。"
+      "note": "已内置 Config-bundle 契约。生成的 Agent 通过 get_config_bundle() 读取系统提示词与工具描述并以默认值兜底 — 这是评估层 A/B 实验的前提。OTEL(ADOT)埋点自动注入。",
+      "titleZip": "配置 — STRANDS · ZIP 快速通道",
+      "templateTools": "工具 — STRANDS 模板"
     },
     "launchPanel": {
       "title": "发射计划",

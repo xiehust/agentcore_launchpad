@@ -17,9 +17,12 @@ interface LaunchState {
   jobId: string;
 }
 
+type Method = "harness" | "zip_runtime";
+
 export function CreateAgent() {
   const { t } = useTranslation();
   const [step, setStep] = useState<Step>(1);
+  const [method, setMethod] = useState<Method>("harness");
   const [name, setName] = useState("");
   const [modelId, setModelId] = useState(DEFAULT_MODEL);
   const [systemPrompt, setSystemPrompt] = useState("");
@@ -55,7 +58,7 @@ export function CreateAgent() {
     try {
       const res = await api.createAgent({
         name,
-        method: "harness",
+        method,
         model_id: modelId,
         system_prompt: systemPrompt,
         tools: tools.map((n) => ({ type: "builtin", name: n })),
@@ -95,7 +98,12 @@ export function CreateAgent() {
       {step === 1 && (
         <>
           <div className="methods">
-            <div className="method sel" style={{ "--i": 0 } as CSSProperties}>
+            <div
+              className={`method${method === "harness" ? " sel" : ""}`}
+              style={{ "--i": 0 } as CSSProperties}
+              onClick={() => setMethod("harness")}
+              data-method="harness"
+            >
               <div className="m-badge">{t("create.methods.harness.badge")}</div>
               <div className="m-icon">◇</div>
               <h3>{t("create.methods.harness.title")}</h3>
@@ -116,14 +124,20 @@ export function CreateAgent() {
                 <span>CLAUDE_CODE_USE_BEDROCK=1</span>
               </div>
             </div>
-            <div className="method" style={{ opacity: 0.55, "--i": 2 } as CSSProperties}>
-              <div className="m-badge plain">{t("create.methods.studio.badge")}</div>
+            <div
+              className={`method${method === "zip_runtime" ? " sel" : ""}`}
+              style={{ "--i": 2 } as CSSProperties}
+              onClick={() => setMethod("zip_runtime")}
+              data-method="zip_runtime"
+            >
+              <div className="m-badge">{t("create.methods.studio.badge")}</div>
               <div className="m-icon">⬡</div>
               <h3>{t("create.methods.studio.title")}</h3>
               <p>{t("create.methods.studio.desc")}</p>
               <div className="m-specs">
                 <span>pip (arm64) → zip → S3 → Runtime</span>
                 <span>{t("create.methods.studio.spec2")}</span>
+                <span>{t("create.methods.studio.spec3")}</span>
               </div>
             </div>
           </div>
@@ -139,8 +153,18 @@ export function CreateAgent() {
         <div className="cfg-grid">
           <Panel
             brk
-            title={t("create.configure.title")}
-            sub={name ? `harnessName: ${name.replace(/-/g, "_")}` : undefined}
+            title={
+              method === "harness"
+                ? t("create.configure.title")
+                : t("create.configure.titleZip")
+            }
+            sub={
+              name
+                ? method === "harness"
+                  ? `harnessName: ${name.replace(/-/g, "_")}`
+                  : `runtime: ${name.replace(/-/g, "_")}_*`
+                : undefined
+            }
             style={{ "--i": 0 } as CSSProperties}
           >
             <div className="field">
@@ -174,19 +198,30 @@ export function CreateAgent() {
               />
             </div>
             <div className="field">
-              <label>{t("create.configure.tools")}</label>
+              <label>
+                {method === "harness"
+                  ? t("create.configure.tools")
+                  : t("create.configure.templateTools")}
+              </label>
               <div className="selchips">
-                {BUILTIN_TOOLS.map((tool) => (
-                  <button
-                    key={tool}
-                    type="button"
-                    className={`selchip${tools.includes(tool) ? " on" : ""}`}
-                    style={{ cursor: "pointer" }}
-                    onClick={() => toggleTool(tool)}
-                  >
-                    {tool} · builtin {tools.includes(tool) ? "✓" : "+"}
-                  </button>
-                ))}
+                {method === "harness" ? (
+                  BUILTIN_TOOLS.map((tool) => (
+                    <button
+                      key={tool}
+                      type="button"
+                      className={`selchip${tools.includes(tool) ? " on" : ""}`}
+                      style={{ cursor: "pointer" }}
+                      onClick={() => toggleTool(tool)}
+                    >
+                      {tool} · builtin {tools.includes(tool) ? "✓" : "+"}
+                    </button>
+                  ))
+                ) : (
+                  <>
+                    <span className="selchip on">calculator · template ✓</span>
+                    <span className="selchip on">current_utc_time · template ✓</span>
+                  </>
+                )}
                 <span className="selchip" style={{ opacity: 0.5 }}>
                   {t("create.configure.gatewayToolsSoon")}
                 </span>

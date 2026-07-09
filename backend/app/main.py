@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 import app.deployer.harness  # noqa: F401 — registers the harness deploy method
+import app.deployer.zip_runtime  # noqa: F401 — registers zip_runtime + studio methods
 from app.core.config import get_settings
 from app.core.db import init_db
 from app.core.errors import register_error_handlers

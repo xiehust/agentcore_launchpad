@@ -71,11 +71,10 @@ def test_invoke_active_agent(client, monkeypatch):
     db.commit()
     db.close()
 
-    monkeypatch.setattr(agents_router, "data_client", lambda: object())
     monkeypatch.setattr(
-        agents_router.hc,
-        "invoke_harness_text",
-        lambda client, arn, prompt, session_id=None, actor_id="default": {
+        agents_router,
+        "invoke_agent_text",
+        lambda agent, prompt, session_id=None, actor_id="default": {
             "text": "4",
             "session_id": "s" * 40,
         },

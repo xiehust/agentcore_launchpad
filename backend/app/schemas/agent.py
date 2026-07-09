@@ -36,6 +36,8 @@ class AgentSpec(BaseModel):
     system_prompt: str = Field(min_length=1, max_length=20000)
     tools: list[ToolRef] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
+    # extra pip requirements for zip_runtime/studio agents (on top of the template base set)
+    requirements: list[str] = Field(default_factory=list)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     env: dict[str, str] = Field(default_factory=dict)
     max_iterations: int = Field(default=10, ge=1, le=100)

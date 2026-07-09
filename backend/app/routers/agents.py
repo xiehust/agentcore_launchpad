@@ -11,15 +11,15 @@ from sqlalchemy.orm import Session
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
 from app.deployer import harness as harness_method
+from app.deployer import zip_runtime as zip_method
 from app.deployer.pipeline import create_deployment, start_deploy_async
 from app.models.ledger import Agent, Deployment, Job
 from app.schemas.agent import AgentSpec, InvokeRequest, InvokeResponse
-from app.services.agentcore import harness as hc
-from app.services.agentcore.client import data_client
+from app.services.invoke import invoke_agent_text
 
 router = APIRouter(prefix="/api", tags=["agents"])
 
-SUPPORTED_METHODS = {"harness"}  # zip_runtime → phase 4, container → 5, studio → 12
+SUPPORTED_METHODS = {"harness", "zip_runtime"}  # container → phase 5, studio → phase 12
 
 
 def _agent_out(agent: Agent, deployment: Deployment | None = None) -> dict[str, Any]:
@@ -130,8 +130,8 @@ def invoke_agent(
             status_code=409,
         )
     started = time.monotonic()
-    result = hc.invoke_harness_text(
-        data_client(), agent.arn, req.prompt, session_id=req.session_id, actor_id=req.actor_id
+    result = invoke_agent_text(
+        agent, req.prompt, session_id=req.session_id, actor_id=req.actor_id
     )
     return InvokeResponse(
         text=result["text"],
@@ -147,6 +147,8 @@ def delete_agent(agent_id: str, db: Session = Depends(get_db)) -> dict[str, Any]
         raise NotFoundError("agent.not_found", "agent not found")
     if agent.method == "harness":
         harness_method.delete_agent_resources(agent)
+    elif agent.method in ("zip_runtime", "studio"):
+        zip_method.delete_agent_resources(agent)
     agent.status = "deleted"
     agent.updated_at = datetime.now(UTC)
     db.commit()

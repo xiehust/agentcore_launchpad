@@ -11,6 +11,7 @@ dependencies = [
     "pyyaml>=6.0,<7",
     "boto3>=1.35",
     "bedrock-agentcore==1.17.*",
+    "pip>=24",
 ]
 
 [dependency-groups]
