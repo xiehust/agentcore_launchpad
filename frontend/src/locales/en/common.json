@@ -1,0 +1,117 @@
+{
+  "topbar": {
+    "console": "CONSOLE",
+    "allSystemsGo": "ALL SYSTEMS GO",
+    "acct": "ACCT"
+  },
+  "nav": {
+    "platform": "PLATFORM",
+    "operate": "OPERATE",
+    "phase02": "PHASE 02",
+    "overview": "Overview",
+    "createAgent": "Create Agent",
+    "registry": "Registry",
+    "chat": "Chat Playground",
+    "evaluation": "Evaluation",
+    "governance": "Governance",
+    "payments": "Payments",
+    "settings": "Settings"
+  },
+  "sidebar": {
+    "region": "REGION",
+    "sdk": "SDK",
+    "cli": "CLI",
+    "store": "STORE",
+    "storeValue": "sqlite · local"
+  },
+  "footer": {
+    "phase": "PHASE 01 · LOCAL",
+    "payments": "PAYMENTS DEFERRED TO PHASE 02",
+    "palette": "PALETTE VALIDATED · DARK #141816"
+  },
+  "overview": {
+    "kicker": "// MISSION CONTROL",
+    "title": "Overview",
+    "meta": "LOCAL CONTROL PLANE · LIVE DATA ARRIVES IN LATER PHASES",
+    "tiles": {
+      "deployedAgents": "DEPLOYED AGENTS",
+      "activeSessions": "ACTIVE SESSIONS",
+      "registryAssets": "REGISTRY ASSETS",
+      "evalPassRate": "EVAL PASS RATE",
+      "none": "none yet",
+      "breakdownEmpty": "0 agents · 0 tools · 0 skills",
+      "noRuns": "no runs yet"
+    },
+    "health": {
+      "title": "SERVICE HEALTH",
+      "sub": "control plane",
+      "pending": "AWAITING BOOTSTRAP · PHASE 2+",
+      "runtime": "Runtime",
+      "gateway": "Gateway",
+      "memory": "Memory",
+      "registry": "Registry",
+      "policy": "Policy",
+      "evaluation": "Evaluation",
+      "observability": "Observability"
+    },
+    "feed": {
+      "title": "LAUNCH FEED",
+      "sub": "recent deployments · unified pipeline",
+      "agent": "AGENT",
+      "method": "METHOD",
+      "stage": "STAGE",
+      "status": "STATUS",
+      "runtimeArn": "RUNTIME ARN",
+      "age": "AGE",
+      "empty": "NO DEPLOYMENTS YET — CREATE YOUR FIRST AGENT IN 02 · CREATE AGENT"
+    }
+  },
+  "create": {
+    "kicker": "// SELF-SERVICE LAUNCH",
+    "title": "Create Agent",
+    "meta": "UNIFIED PIPELINE — GENERATE → PACKAGE → PROVISION → DEPLOY → REGISTER",
+    "placeholderTitle": "CREATE WIZARD",
+    "placeholderBody": "The three creation methods (Managed Harness, Claude Agent SDK, Strands Studio) and the unified launch pipeline arrive in phases 3–5."
+  },
+  "registry": {
+    "kicker": "// DISCOVERY LAYER",
+    "title": "Registry",
+    "meta": "AGENTCORE REGISTRY · SYNC PENDING",
+    "placeholderTitle": "ASSET CONSOLE",
+    "placeholderBody": "Agents (A2A), MCP tools and Skills catalogs wired to the real AgentCore Registry arrive in phase 7."
+  },
+  "chat": {
+    "kicker": "// LIVE CHANNEL",
+    "title": "Chat Playground",
+    "meta": "SAME BACKEND AS PUBLIC API",
+    "placeholderTitle": "PLAYGROUND",
+    "placeholderBody": "Streaming chat with session memory, tool cards and trace rail arrives in phase 8."
+  },
+  "evaluation": {
+    "kicker": "// QUALITY TELEMETRY",
+    "title": "Evaluation & Optimization",
+    "meta": "BATCH + ONLINE · LLM-AS-A-JUDGE",
+    "placeholderTitle": "EVALUATION CONSOLE",
+    "placeholderBody": "Batch/online runs, evaluator scores, insights failure triage and A/B experiments arrive in phases 10–11."
+  },
+  "governance": {
+    "kicker": "// CONTROL PLANE",
+    "title": "Governance",
+    "meta": "GATEWAY · CEDAR POLICY · DECISION LOG",
+    "placeholderTitle": "POLICY & OBSERVABILITY",
+    "placeholderBody": "Gateway targets, Cedar policies and the live decision log arrive in phase 9."
+  },
+  "common": {
+    "comingSoon": "COMING SOON",
+    "phaseTag": "PLANNED · PHASE {{phase}}"
+  },
+  "errors": {
+    "http": {
+      "404": "Resource not found",
+      "500": "Internal server error"
+    },
+    "validation": {
+      "invalid_request": "Request validation failed"
+    }
+  }
+}

@@ -1,0 +1,117 @@
+{
+  "topbar": {
+    "console": "控制台",
+    "allSystemsGo": "系统运行正常",
+    "acct": "账户"
+  },
+  "nav": {
+    "platform": "平台",
+    "operate": "运维",
+    "phase02": "第二阶段",
+    "overview": "总览",
+    "createAgent": "创建 Agent",
+    "registry": "注册中心",
+    "chat": "对话演练场",
+    "evaluation": "评估",
+    "governance": "治理",
+    "payments": "支付",
+    "settings": "设置"
+  },
+  "sidebar": {
+    "region": "区域",
+    "sdk": "SDK",
+    "cli": "CLI",
+    "store": "存储",
+    "storeValue": "sqlite · 本地"
+  },
+  "footer": {
+    "phase": "第一阶段 · 本地",
+    "payments": "支付功能延后至第二阶段",
+    "palette": "配色已验证 · 深色 #141816"
+  },
+  "overview": {
+    "kicker": "// 任务控制中心",
+    "title": "总览",
+    "meta": "本地控制平面 · 实时数据将在后续阶段接入",
+    "tiles": {
+      "deployedAgents": "已部署 AGENT",
+      "activeSessions": "活跃会话",
+      "registryAssets": "注册资产",
+      "evalPassRate": "评估通过率",
+      "none": "暂无",
+      "breakdownEmpty": "0 个 Agent · 0 个工具 · 0 个技能",
+      "noRuns": "暂无评估运行"
+    },
+    "health": {
+      "title": "服务健康",
+      "sub": "控制平面",
+      "pending": "等待引导 · 第 2+ 阶段",
+      "runtime": "Runtime",
+      "gateway": "Gateway",
+      "memory": "Memory",
+      "registry": "Registry",
+      "policy": "Policy",
+      "evaluation": "Evaluation",
+      "observability": "Observability"
+    },
+    "feed": {
+      "title": "发布动态",
+      "sub": "最近部署 · 统一流水线",
+      "agent": "AGENT",
+      "method": "创建方式",
+      "stage": "阶段",
+      "status": "状态",
+      "runtimeArn": "RUNTIME ARN",
+      "age": "时间",
+      "empty": "暂无部署 — 前往 02 · 创建 Agent 启动第一个 Agent"
+    }
+  },
+  "create": {
+    "kicker": "// 自助发射台",
+    "title": "创建 Agent",
+    "meta": "统一流水线 — 生成 → 打包 → 供给 → 部署 → 注册",
+    "placeholderTitle": "创建向导",
+    "placeholderBody": "三种创建方式(托管 Harness、Claude Agent SDK、Strands Studio)与统一发布流水线将在第 3–5 阶段上线。"
+  },
+  "registry": {
+    "kicker": "// 发现层",
+    "title": "注册中心",
+    "meta": "AGENTCORE REGISTRY · 同步待接入",
+    "placeholderTitle": "资产控制台",
+    "placeholderBody": "对接真实 AgentCore Registry 的 Agent(A2A)、MCP 工具与技能目录将在第 7 阶段上线。"
+  },
+  "chat": {
+    "kicker": "// 实时频道",
+    "title": "对话演练场",
+    "meta": "与公开 API 共用同一后端",
+    "placeholderTitle": "演练场",
+    "placeholderBody": "带会话记忆、工具卡片与链路追踪的流式对话将在第 8 阶段上线。"
+  },
+  "evaluation": {
+    "kicker": "// 质量遥测",
+    "title": "评估与优化",
+    "meta": "批量 + 在线 · LLM 评审",
+    "placeholderTitle": "评估控制台",
+    "placeholderBody": "批量/在线评估、评估器得分、失败归因洞察与 A/B 实验将在第 10–11 阶段上线。"
+  },
+  "governance": {
+    "kicker": "// 控制平面",
+    "title": "治理",
+    "meta": "GATEWAY · CEDAR 策略 · 决策日志",
+    "placeholderTitle": "策略与可观测",
+    "placeholderBody": "Gateway 目标、Cedar 策略与实时决策日志将在第 9 阶段上线。"
+  },
+  "common": {
+    "comingSoon": "即将上线",
+    "phaseTag": "规划中 · 第 {{phase}} 阶段"
+  },
+  "errors": {
+    "http": {
+      "404": "资源不存在",
+      "500": "服务器内部错误"
+    },
+    "validation": {
+      "invalid_request": "请求校验失败"
+    }
+  }
+}

@@ -1,0 +1,41 @@
+import { useTranslation } from "react-i18next";
+import { Outlet, useLocation } from "react-router-dom";
+
+import { NAV_ENTRIES } from "./nav";
+import { Sidebar } from "./Sidebar";
+import { Topbar } from "./Topbar";
+import { useHealth } from "./useHealth";
+
+function crumbKeyFor(pathname: string): string {
+  const entry =
+    NAV_ENTRIES.find((e) => e.to !== "/" && pathname.startsWith(e.to)) ??
+    NAV_ENTRIES[0];
+  return entry.labelKey;
+}
+
+export function Shell() {
+  const location = useLocation();
+  const { t } = useTranslation();
+  const health = useHealth();
+
+  return (
+    <>
+      <Topbar crumbKey={crumbKeyFor(location.pathname)} health={health} />
+      <div className="layout">
+        <Sidebar health={health} />
+        <main>
+          <div className="view">
+            <Outlet />
+            <footer>
+              {t("footer.phase")}
+              <span className="sep">|</span>
+              {t("footer.payments")}
+              <span className="sep">|</span>
+              {t("footer.palette")}
+            </footer>
+          </div>
+        </main>
+      </div>
+    </>
+  );
+}

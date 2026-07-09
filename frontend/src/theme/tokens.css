@@ -1,0 +1,21 @@
+/* ================= design tokens — ported verbatim from design/mockup.html ================= */
+:root{
+  --bg:#0B0E0D;            /* page plane */
+  --panel:#141816;         /* chart / card surface (palette validated against this) */
+  --panel-2:#191E1B;       /* raised surface */
+  --line:#232B27;          /* hairline */
+  --line-2:#2E3833;
+  --ink:#E9EDEA;           /* primary */
+  --ink-2:#A3ACA6;         /* secondary */
+  --ink-3:#69736C;         /* muted */
+  --amber:#FFB000;         /* brand signal — chrome only, never a data series */
+  --amber-soft:rgba(255,176,0,.13);
+  --s1:#3987E5;            /* series 1 blue   */
+  --s2:#199E70;            /* series 2 aqua   */
+  --s3:#C98500;            /* series 3 yellow */
+  --s5:#9085E9;            /* series 5 violet (trace spans) */
+  --good:#0CA30C; --warn:#FAB219; --serious:#EC835A; --crit:#D03B3B;
+  --grid:#212823;
+  --mono:"IBM Plex Mono",ui-monospace,monospace;
+  --sans:"Archivo Variable","Archivo",system-ui,sans-serif;
+}
