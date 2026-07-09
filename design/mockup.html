@@ -1,0 +1,936 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AgentCore Launchpad — UI Mockup v0.1</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ================= design tokens ================= */
+:root{
+  --bg:#0B0E0D;            /* page plane */
+  --panel:#141816;         /* chart / card surface (palette validated against this) */
+  --panel-2:#191E1B;       /* raised surface */
+  --line:#232B27;          /* hairline */
+  --line-2:#2E3833;
+  --ink:#E9EDEA;           /* primary */
+  --ink-2:#A3ACA6;         /* secondary */
+  --ink-3:#69736C;         /* muted */
+  --amber:#FFB000;         /* brand signal — chrome only, never a data series */
+  --amber-soft:rgba(255,176,0,.13);
+  --s1:#3987E5;            /* series 1 blue   */
+  --s2:#199E70;            /* series 2 aqua   */
+  --s3:#C98500;            /* series 3 yellow */
+  --s5:#9085E9;            /* series 5 violet (trace spans) */
+  --good:#0CA30C; --warn:#FAB219; --serious:#EC835A; --crit:#D03B3B;
+  --grid:#212823;
+  --mono:"IBM Plex Mono",ui-monospace,monospace;
+  --sans:"Archivo",system-ui,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:var(--sans);color:var(--ink);background:var(--bg);
+  font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased;overflow-x:hidden;
+  background-image:
+    radial-gradient(1100px 500px at 75% -10%, rgba(255,176,0,.045), transparent 60%),
+    repeating-linear-gradient(0deg, rgba(255,255,255,.014) 0 1px, transparent 1px 56px),
+    repeating-linear-gradient(90deg, rgba(255,255,255,.014) 0 1px, transparent 1px 56px);
+}
+body::after{ /* film grain */
+  content:"";position:fixed;inset:0;pointer-events:none;opacity:.05;z-index:99;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='.6'/%3E%3C/svg%3E");
+}
+::selection{background:var(--amber);color:#141210}
+
+/* ================= chrome ================= */
+.topbar{
+  height:52px;display:flex;align-items:center;gap:20px;padding:0 20px;
+  border-bottom:1px solid var(--line);background:rgba(11,14,13,.92);backdrop-filter:blur(6px);
+  position:sticky;top:0;z-index:50;
+}
+.brand{display:flex;align-items:center;gap:10px;font-stretch:125%;font-weight:800;letter-spacing:.14em;font-size:13px;white-space:nowrap}
+.brand .glyph{width:22px;height:22px;display:grid;place-items:center;background:var(--amber);color:#131008;clip-path:polygon(50% 0,100% 100%,0 100%);font-size:0}
+.brand em{color:var(--amber);font-style:normal}
+.crumb{font-family:var(--mono);font-size:11px;color:var(--ink-3);letter-spacing:.06em}
+.crumb b{color:var(--ink-2);font-weight:500}
+.topbar .right{margin-left:auto;display:flex;align-items:center;gap:10px}
+.syschip{font-family:var(--mono);font-size:10.5px;color:var(--ink-2);border:1px solid var(--line);padding:4px 9px;display:flex;gap:7px;align-items:center;background:var(--panel)}
+.syschip .led{width:6px;height:6px;border-radius:50%;background:var(--good);box-shadow:0 0 6px var(--good);animation:pulse 2.4s infinite}
+.avatar{display:flex;align-items:center;gap:8px;border:1px solid var(--line);padding:4px 10px 4px 4px;background:var(--panel)}
+.avatar .pic{width:24px;height:24px;background:linear-gradient(135deg,var(--amber),#8a5c00);display:grid;place-items:center;font-weight:800;font-size:10px;color:#131008}
+.avatar span{font-family:var(--mono);font-size:10.5px;color:var(--ink-2)}
+.avatar .role{color:var(--amber)}
+
+.layout{display:grid;grid-template-columns:216px 1fr;min-height:calc(100vh - 52px)}
+
+/* sidebar */
+.side{border-right:1px solid var(--line);padding:18px 0;display:flex;flex-direction:column;gap:2px;position:sticky;top:52px;height:calc(100vh - 52px)}
+.side .label{font-family:var(--mono);font-size:9.5px;letter-spacing:.22em;color:var(--ink-3);padding:8px 20px 6px}
+.nav-item{
+  display:flex;align-items:center;gap:11px;padding:9px 20px;cursor:pointer;color:var(--ink-2);
+  border-left:2px solid transparent;font-weight:500;font-size:13px;user-select:none;
+}
+.nav-item .idx{font-family:var(--mono);font-size:9.5px;color:var(--ink-3);width:20px}
+.nav-item:hover{color:var(--ink);background:rgba(255,255,255,.02)}
+.nav-item.active{color:var(--amber);border-left-color:var(--amber);background:linear-gradient(90deg,var(--amber-soft),transparent 70%)}
+.nav-item.active .idx{color:var(--amber)}
+.nav-item.dim{opacity:.38;cursor:default}
+.side .sys{margin-top:auto;padding:14px 20px;border-top:1px solid var(--line);font-family:var(--mono);font-size:9.5px;color:var(--ink-3);line-height:1.9}
+.side .sys b{color:var(--ink-2);font-weight:500}
+
+/* main */
+main{padding:26px 28px 60px;max-width:1460px}
+.view{display:none}
+.view.active{display:block}
+.view.active .panel,.view.active .tile{animation:rise .5s cubic-bezier(.22,.9,.3,1) both;animation-delay:calc(var(--i,0)*70ms)}
+@keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+.vhead{display:flex;align-items:baseline;gap:16px;margin-bottom:20px;flex-wrap:wrap}
+.kicker{font-family:var(--mono);font-size:10px;letter-spacing:.24em;color:var(--amber)}
+.vhead h1{font-stretch:118%;font-weight:800;font-size:26px;letter-spacing:.01em}
+.vhead .meta{font-family:var(--mono);font-size:10.5px;color:var(--ink-3);margin-left:auto}
+
+.panel{background:var(--panel);border:1px solid var(--line);position:relative}
+.panel.brk::before,.panel.brk::after{content:"";position:absolute;width:11px;height:11px;pointer-events:none}
+.panel.brk::before{top:-1px;left:-1px;border-top:2px solid var(--amber);border-left:2px solid var(--amber)}
+.panel.brk::after{bottom:-1px;right:-1px;border-bottom:2px solid var(--amber);border-right:2px solid var(--amber)}
+.phead{display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line)}
+.phead h2{font-size:12px;font-weight:700;letter-spacing:.09em;font-stretch:112%}
+.phead .sub{font-family:var(--mono);font-size:10px;color:var(--ink-3)}
+.phead .end{margin-left:auto;display:flex;gap:8px;align-items:center}
+.pbody{padding:16px}
+
+/* chips / status — icon + label always, never color alone */
+.chip{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;letter-spacing:.05em;padding:3px 8px;border:1px solid var(--line-2);color:var(--ink-2);white-space:nowrap}
+.chip i{font-style:normal;font-size:9px;line-height:1}
+.chip.good{color:var(--good);border-color:rgba(12,163,12,.4)}
+.chip.warn{color:var(--warn);border-color:rgba(250,178,25,.35)}
+.chip.crit{color:var(--crit);border-color:rgba(208,59,59,.45)}
+.chip.muted{color:var(--ink-3)}
+.chip.amber{color:var(--amber);border-color:rgba(255,176,0,.4)}
+.chip.blue{color:var(--s1);border-color:rgba(57,135,229,.4)}
+.chip.aqua{color:var(--s2);border-color:rgba(25,158,112,.4)}
+
+.btn{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;letter-spacing:.08em;padding:8px 16px;cursor:pointer;border:1px solid var(--line-2);color:var(--ink);background:transparent}
+.btn:hover{border-color:var(--ink-3)}
+.btn.primary{background:var(--amber);border-color:var(--amber);color:#161207;font-weight:600}
+.btn.primary:hover{background:#ffc23d}
+
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;color:var(--ink-3);text-align:left;font-weight:500;padding:9px 14px;border-bottom:1px solid var(--line)}
+td{padding:10px 14px;border-bottom:1px solid var(--grid);color:var(--ink-2);vertical-align:middle}
+tr:hover td{background:rgba(255,255,255,.018)}
+td.pri{color:var(--ink);font-weight:600}
+.mono{font-family:var(--mono);font-size:11px}
+.dim{color:var(--ink-3)}
+.arn{font-family:var(--mono);font-size:10px;color:var(--ink-3);max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:middle}
+
+/* ================= overview ================= */
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:14px}
+.tile{background:var(--panel);border:1px solid var(--line);padding:15px 16px 13px;position:relative}
+.tile .t-label{font-family:var(--mono);font-size:9.5px;letter-spacing:.2em;color:var(--ink-3);margin-bottom:10px}
+.tile .t-val{font-stretch:115%;font-weight:800;font-size:34px;line-height:1;letter-spacing:.01em}
+.tile .t-val small{font-size:16px;color:var(--ink-3);font-weight:600}
+.tile .t-foot{display:flex;align-items:center;gap:8px;margin-top:10px;font-family:var(--mono);font-size:10px;color:var(--ink-3)}
+.delta-up{color:var(--good)}
+.tile svg.spark{position:absolute;right:14px;bottom:14px}
+.grid-2{display:grid;grid-template-columns:2fr 1fr;gap:14px;margin-bottom:14px}
+
+.legend{display:flex;gap:14px;align-items:center}
+.legend .li{display:flex;gap:6px;align-items:center;font-family:var(--mono);font-size:10px;color:var(--ink-2)}
+.legend .sw{width:10px;height:10px;border-radius:2px}
+
+.health{display:flex;flex-direction:column}
+.health .row{display:flex;align-items:center;gap:10px;padding:9.5px 16px;border-bottom:1px solid var(--grid);font-size:12.5px}
+.health .row:last-child{border-bottom:0}
+.health .led{width:7px;height:7px;border-radius:50%}
+.health .led.g{background:var(--good);box-shadow:0 0 7px rgba(12,163,12,.7);animation:pulse 3s infinite}
+.health .led.w{background:var(--warn);box-shadow:0 0 7px rgba(250,178,25,.7);animation:pulse 1.4s infinite}
+.health .nm{font-weight:600;color:var(--ink)}
+.health .st{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--ink-3)}
+
+/* chart shells */
+.chart-wrap{position:relative}
+.tooltip{
+  position:absolute;pointer-events:none;background:#0E1211;border:1px solid var(--line-2);
+  padding:8px 10px;font-family:var(--mono);font-size:10.5px;color:var(--ink-2);display:none;z-index:10;min-width:130px;box-shadow:0 8px 24px rgba(0,0,0,.5)
+}
+.tooltip .tt-h{color:var(--ink);margin-bottom:5px;font-weight:600}
+.tooltip .tt-r{display:flex;align-items:center;gap:6px;line-height:1.8}
+.tooltip .dot{width:7px;height:7px;border-radius:2px}
+.tooltip .v{margin-left:auto;color:var(--ink)}
+
+/* ================= create ================= */
+.steps{display:flex;gap:0;margin-bottom:20px;border:1px solid var(--line);background:var(--panel)}
+.step{flex:1;display:flex;gap:10px;align-items:center;padding:12px 18px;border-right:1px solid var(--line);color:var(--ink-3)}
+.step:last-child{border-right:0}
+.step .n{font-family:var(--mono);font-size:10px;border:1px solid var(--line-2);width:22px;height:22px;display:grid;place-items:center}
+.step.done{color:var(--ink-2)} .step.done .n{border-color:var(--good);color:var(--good)}
+.step.now{color:var(--amber)} .step.now .n{border-color:var(--amber);color:var(--amber);background:var(--amber-soft)}
+.step b{font-size:11px;letter-spacing:.12em;font-weight:700}
+.methods{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:14px}
+.method{background:var(--panel);border:1px solid var(--line);padding:18px;cursor:pointer;position:relative;transition:border-color .2s}
+.method:hover{border-color:var(--line-2)}
+.method.sel{border-color:var(--amber);box-shadow:0 0 0 1px var(--amber),0 12px 40px -18px rgba(255,176,0,.35)}
+.method .m-badge{position:absolute;top:-1px;right:-1px;font-family:var(--mono);font-size:9px;letter-spacing:.14em;padding:4px 9px;background:var(--amber);color:#161207;font-weight:600}
+.method .m-badge.plain{background:var(--panel-2);color:var(--ink-3);border:1px solid var(--line)}
+.method .m-icon{font-family:var(--mono);font-size:20px;color:var(--amber);margin-bottom:12px}
+.method h3{font-stretch:112%;font-size:15px;font-weight:700;margin-bottom:6px}
+.method p{font-size:12px;color:var(--ink-2);line-height:1.55;margin-bottom:12px}
+.method .m-specs{display:flex;flex-direction:column;gap:5px;font-family:var(--mono);font-size:10px;color:var(--ink-3)}
+.method .m-specs span::before{content:"— ";color:var(--line-2)}
+.cfg-grid{display:grid;grid-template-columns:1.15fr .85fr;gap:14px}
+.field{margin-bottom:14px}
+.field label{display:block;font-family:var(--mono);font-size:9.5px;letter-spacing:.18em;color:var(--ink-3);margin-bottom:7px}
+.field .input{background:#0E1210;border:1px solid var(--line-2);padding:9px 12px;font-size:13px;color:var(--ink);width:100%;font-family:var(--sans)}
+.field .input.mono{font-family:var(--mono);font-size:11.5px;line-height:1.7;color:var(--ink-2)}
+.field .input:focus-within{border-color:var(--amber)}
+.selchips{display:flex;flex-wrap:wrap;gap:7px}
+.selchip{display:inline-flex;gap:7px;align-items:center;font-family:var(--mono);font-size:10.5px;padding:6px 10px;border:1px solid var(--line-2);color:var(--ink-2);background:#0E1210}
+.selchip.on{border-color:var(--s2);color:var(--s2)}
+.selchip .x{color:var(--ink-3);cursor:pointer}
+.note{display:flex;gap:9px;font-size:11.5px;color:var(--ink-2);background:var(--amber-soft);border:1px solid rgba(255,176,0,.25);padding:10px 12px;line-height:1.5}
+.note .i{color:var(--amber);font-family:var(--mono)}
+.pipeline{display:flex;align-items:flex-start;gap:0;padding:26px 16px 20px;overflow-x:auto}
+.pstage{flex:1;min-width:120px;text-align:center;position:relative}
+.pstage::before{content:"";position:absolute;top:14px;left:calc(-50% + 15px);width:calc(100% - 30px);height:2px;background:var(--line-2)}
+.pstage:first-child::before{display:none}
+.pstage.done::before{background:var(--good)}
+.pstage.now::before{background:linear-gradient(90deg,var(--good),var(--amber))}
+.pstage .node{width:30px;height:30px;margin:0 auto 10px;border:2px solid var(--line-2);border-radius:50%;display:grid;place-items:center;font-family:var(--mono);font-size:11px;background:var(--panel);position:relative;z-index:1;color:var(--ink-3)}
+.pstage.done .node{border-color:var(--good);color:var(--good)}
+.pstage.now .node{border-color:var(--amber);color:var(--amber);box-shadow:0 0 0 4px var(--amber-soft);animation:pulse 1.6s infinite}
+.pstage .pn{font-size:11px;font-weight:700;letter-spacing:.1em}
+.pstage .pt{font-family:var(--mono);font-size:9.5px;color:var(--ink-3);margin-top:3px}
+.pstage.now .pn{color:var(--amber)}
+
+/* ================= registry ================= */
+.tabs{display:flex;gap:0;border-bottom:1px solid var(--line);margin-bottom:0}
+.tab{font-family:var(--mono);font-size:11px;letter-spacing:.1em;padding:11px 18px;color:var(--ink-3);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab:hover{color:var(--ink-2)}
+.tab.active{color:var(--amber);border-bottom-color:var(--amber)}
+.tab .cnt{color:var(--ink-3);margin-left:5px}
+.reg-grid{display:grid;grid-template-columns:1fr 330px;gap:14px}
+.search{display:flex;gap:9px;align-items:center;background:#0E1210;border:1px solid var(--line-2);padding:8px 12px;font-family:var(--mono);font-size:11px;color:var(--ink-3);flex:1;max-width:420px}
+.flowchips{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:9.5px;color:var(--ink-3)}
+.flowchips i{font-style:normal;color:var(--line-2)}
+.drawer .sect{padding:13px 16px;border-bottom:1px solid var(--grid)}
+.drawer .sect h4{font-family:var(--mono);font-size:9.5px;letter-spacing:.18em;color:var(--ink-3);margin-bottom:9px;font-weight:500}
+.kv{display:flex;justify-content:space-between;font-size:12px;padding:3px 0;gap:12px}
+.kv .k{color:var(--ink-3)} .kv .v{color:var(--ink-2);font-family:var(--mono);font-size:11px;text-align:right}
+.code{background:#0A0D0C;border:1px solid var(--grid);padding:12px;font-family:var(--mono);font-size:10.5px;line-height:1.75;color:var(--ink-2);overflow-x:auto;white-space:pre}
+.code .k1{color:var(--amber)} .code .k2{color:var(--s2)} .code .k3{color:var(--s1)} .code .cm{color:var(--ink-3)}
+
+/* ================= chat ================= */
+.chat-grid{display:grid;grid-template-columns:1fr 340px;gap:14px}
+.thread{display:flex;flex-direction:column;gap:16px;padding:20px;height:560px;overflow-y:auto}
+.msg{max-width:78%}
+.msg .who{font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;color:var(--ink-3);margin-bottom:6px}
+.msg .bub{padding:12px 15px;font-size:13.5px;line-height:1.6;border:1px solid var(--line)}
+.msg.user{align-self:flex-end;text-align:right}
+.msg.user .bub{background:var(--panel-2);text-align:left;border-color:var(--line-2)}
+.msg.agent .bub{background:transparent}
+.msg .bub b{color:var(--amber);font-weight:700}
+.toolcard{align-self:flex-start;width:78%;border:1px solid var(--grid);background:#0E1211;padding:10px 13px;font-family:var(--mono);font-size:10.5px;color:var(--ink-2);display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center}
+.toolcard .tc-ic{color:var(--s2)}
+.toolcard .args{color:var(--ink-3)}
+.memline{align-self:flex-start;font-family:var(--mono);font-size:10px;color:var(--ink-3);display:flex;gap:8px;align-items:center}
+.memline i{font-style:normal;color:var(--s3)}
+.caret{display:inline-block;width:8px;height:15px;background:var(--amber);vertical-align:-2px;animation:blink .9s steps(1) infinite;margin-left:2px}
+@keyframes blink{50%{opacity:0}}
+.chatbar{display:flex;gap:10px;padding:13px 16px;border-top:1px solid var(--line)}
+.chatbar .input{flex:1;background:#0E1210;border:1px solid var(--line-2);padding:11px 14px;color:var(--ink-3);font-size:13px}
+.tl{padding:14px 16px}
+.tl .trow{display:grid;grid-template-columns:118px 1fr 44px;gap:8px;align-items:center;margin-bottom:9px}
+.tl .tn{font-family:var(--mono);font-size:9.5px;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tl .track{height:12px;position:relative;background:rgba(255,255,255,.025)}
+.tl .span{position:absolute;top:2px;bottom:2px;border-radius:2px;min-width:3px}
+.tl .ms{font-family:var(--mono);font-size:9px;color:var(--ink-3);text-align:right}
+
+/* ================= evaluation ================= */
+.eval-grid{display:grid;grid-template-columns:1.25fr .75fr;gap:14px;margin-bottom:14px}
+.hbar{display:grid;grid-template-columns:128px 1fr 44px;gap:11px;align-items:center;margin-bottom:13px}
+.hbar .hn{font-size:12px;color:var(--ink-2);text-align:right}
+.hbar .track{height:12px;background:rgba(255,255,255,.03);position:relative}
+.hbar .fill{position:absolute;inset:1px auto 1px 0;background:var(--s1);border-radius:0 4px 4px 0}
+.hbar .hv{font-family:var(--mono);font-size:11px;color:var(--ink)}
+.ab-metric{margin-bottom:15px}
+.am-h{font-size:12px;color:var(--ink-2);margin-bottom:7px;display:flex;justify-content:space-between}
+.am-h .d{font-family:var(--mono);font-size:10px;color:var(--good)}
+.abbar{display:grid;grid-template-columns:74px 1fr 40px;gap:10px;align-items:center;margin-bottom:4px}
+.abbar .an{font-family:var(--mono);font-size:9px;letter-spacing:.1em;color:var(--ink-3);text-align:right}
+.abbar .track{height:11px;background:rgba(255,255,255,.03);position:relative}
+.abbar .fill{position:absolute;inset:1px auto 1px 0;border-radius:0 4px 4px 0}
+.abbar .av{font-family:var(--mono);font-size:10.5px;color:var(--ink)}
+.verdict{display:flex;gap:12px;align-items:center;background:rgba(12,163,12,.08);border:1px solid rgba(12,163,12,.35);padding:12px 14px;margin-top:14px}
+.verdict .vt{font-stretch:112%;font-weight:800;font-size:13px;letter-spacing:.06em;color:var(--good)}
+.verdict .vm{font-family:var(--mono);font-size:10px;color:var(--ink-2)}
+.split{display:flex;height:14px;gap:2px;margin:8px 0 4px}
+.split div{border-radius:2px}
+.insight{padding:11px 0;border-bottom:1px solid var(--grid)}
+.insight:last-child{border-bottom:0}
+.insight .ih{display:flex;align-items:center;gap:10px;margin-bottom:5px}
+.insight .ih b{font-size:12.5px;font-weight:700}
+.insight .pct{font-family:var(--mono);font-size:11px;color:var(--serious);margin-left:auto}
+.insight .fix{font-size:11.5px;color:var(--ink-3);line-height:1.5;padding-left:2px}
+.insight .fix em{color:var(--s2);font-style:normal;font-family:var(--mono);font-size:10px;letter-spacing:.08em}
+
+/* ================= governance ================= */
+.gov-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+.dlog .row{display:flex;gap:12px;align-items:center;padding:8.5px 16px;border-bottom:1px solid var(--grid);font-family:var(--mono);font-size:10.5px;color:var(--ink-2)}
+.dlog .row:last-child{border-bottom:0}
+.dlog .t{color:var(--ink-3)}
+.dlog .who{color:var(--s1)}
+.dlog .res{color:var(--ink-2);flex:1}
+
+footer{margin-top:34px;display:flex;gap:14px;align-items:center;font-family:var(--mono);font-size:9.5px;color:var(--ink-3);letter-spacing:.1em}
+footer .sep{color:var(--line-2)}
+@media(max-width:1180px){.tiles{grid-template-columns:repeat(2,1fr)}.grid-2,.reg-grid,.chat-grid,.eval-grid,.gov-grid,.cfg-grid{grid-template-columns:1fr}.methods{grid-template-columns:1fr}}
+</style>
+</head>
+<body data-palette="#3987E5,#199E70,#C98500" data-surface="#141816">
+
+<!-- ═══════════ TOP BAR ═══════════ -->
+<div class="topbar">
+  <div class="brand"><span class="glyph">▲</span>AGENTCORE<em>//</em>LAUNCHPAD</div>
+  <div class="crumb" id="crumb">CONSOLE / <b>OVERVIEW</b></div>
+  <div class="right">
+    <div class="syschip"><span class="led"></span>ALL SYSTEMS GO</div>
+    <div class="syschip">us-west-2</div>
+    <div class="syschip">ACCT 4344-4414-5045</div>
+    <div class="avatar"><div class="pic">RX</div><span>river · <b class="role">PLATFORM-ADMIN</b></span></div>
+  </div>
+</div>
+
+<div class="layout">
+<!-- ═══════════ SIDEBAR ═══════════ -->
+<nav class="side">
+  <div class="label">PLATFORM</div>
+  <div class="nav-item active" data-view="overview"><span class="idx">01</span>Overview</div>
+  <div class="nav-item" data-view="create"><span class="idx">02</span>Create Agent</div>
+  <div class="nav-item" data-view="registry"><span class="idx">03</span>Registry</div>
+  <div class="nav-item" data-view="chat"><span class="idx">04</span>Chat Playground</div>
+  <div class="label">OPERATE</div>
+  <div class="nav-item" data-view="evaluation"><span class="idx">05</span>Evaluation</div>
+  <div class="nav-item" data-view="governance"><span class="idx">06</span>Governance</div>
+  <div class="label">PHASE 02</div>
+  <div class="nav-item dim"><span class="idx">07</span>Payments</div>
+  <div class="nav-item dim"><span class="idx">08</span>Settings</div>
+  <div class="sys">
+    REGION <b>us-west-2</b><br>
+    SDK <b>bedrock-agentcore 1.17.0</b><br>
+    CLI <b>agentcore 0.21.1</b><br>
+    STORE <b>sqlite · local</b>
+  </div>
+</nav>
+
+<main>
+<!-- ═══════════════════ 01 OVERVIEW ═══════════════════ -->
+<section class="view active" id="view-overview">
+  <div class="vhead">
+    <span class="kicker">// MISSION CONTROL</span>
+    <h1>Overview</h1>
+    <span class="meta">T+ 14 DAYS SINCE FIRST LAUNCH · REFRESHED 09:41:22 PDT</span>
+  </div>
+
+  <div class="tiles">
+    <div class="tile" style="--i:0">
+      <div class="t-label">DEPLOYED AGENTS</div>
+      <div class="t-val">12</div>
+      <div class="t-foot"><span class="delta-up">▲ 3</span> this week</div>
+      <svg class="spark" id="spark1" width="110" height="34"></svg>
+    </div>
+    <div class="tile" style="--i:1">
+      <div class="t-label">ACTIVE SESSIONS</div>
+      <div class="t-val">47</div>
+      <div class="t-foot"><span class="delta-up">● LIVE</span> p50 latency 1.9s</div>
+    </div>
+    <div class="tile" style="--i:2">
+      <div class="t-label">REGISTRY ASSETS</div>
+      <div class="t-val">28</div>
+      <div class="t-foot">9 agents · 13 tools · 6 skills</div>
+    </div>
+    <div class="tile" style="--i:3">
+      <div class="t-label">EVAL PASS RATE</div>
+      <div class="t-val">87.5<small>%</small></div>
+      <div class="t-foot"><span class="delta-up">▲ 2.1 pts</span> vs run-0040</div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel brk" style="--i:4">
+      <div class="phead">
+        <h2>INVOCATIONS — LAST 24H</h2><span class="sub">InvokeAgentRuntime · per hour</span>
+        <div class="end legend">
+          <span class="li"><span class="sw" style="background:var(--s1)"></span>Chat UI</span>
+          <span class="li"><span class="sw" style="background:var(--s2)"></span>API</span>
+        </div>
+      </div>
+      <div class="pbody chart-wrap" id="lineWrap">
+        <svg id="lineChart" viewBox="0 0 780 230" width="100%" style="display:block"></svg>
+        <div class="tooltip" id="lineTip"></div>
+      </div>
+    </div>
+    <div class="panel" style="--i:5">
+      <div class="phead"><h2>SERVICE HEALTH</h2><span class="sub">control plane</span></div>
+      <div class="health">
+        <div class="row"><span class="led g"></span><span class="nm">Runtime</span><span class="st">ACTIVE · 42ms</span></div>
+        <div class="row"><span class="led g"></span><span class="nm">Harness</span><span class="st">ACTIVE · 38ms</span></div>
+        <div class="row"><span class="led g"></span><span class="nm">Gateway</span><span class="st">ACTIVE · 51ms</span></div>
+        <div class="row"><span class="led g"></span><span class="nm">Memory</span><span class="st">ACTIVE · 12ms</span></div>
+        <div class="row"><span class="led g"></span><span class="nm">Registry</span><span class="st">ACTIVE · 9ms</span></div>
+        <div class="row"><span class="led g"></span><span class="nm">Policy</span><span class="st">ACTIVE · 4ms</span></div>
+        <div class="row"><span class="led w"></span><span class="nm">Evaluation</span><span class="st">⚠ BATCH RUNNING · acct lock</span></div>
+        <div class="row"><span class="led g"></span><span class="nm">Observability</span><span class="st">TX SEARCH ON</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" style="--i:6">
+    <div class="phead"><h2>LAUNCH FEED</h2><span class="sub">recent deployments · unified pipeline</span>
+      <div class="end"><button class="btn">VIEW ALL</button></div>
+    </div>
+    <table>
+      <thead><tr><th>AGENT</th><th>METHOD</th><th>STAGE</th><th>STATUS</th><th>RUNTIME ARN</th><th>AGE</th></tr></thead>
+      <tbody>
+        <tr><td class="pri">hr-assistant-v2</td><td><span class="chip amber"><i>◇</i>HARNESS</span></td><td class="mono dim">register ✓</td><td><span class="chip good"><i>●</i>ACTIVE</span></td><td><span class="arn">arn:aws:bedrock-agentcore:us-west-2:4344…:runtime/hr_assistant_v2-x9K2</span></td><td class="mono dim">2m</td></tr>
+        <tr><td class="pri">support-triage</td><td><span class="chip blue"><i>▣</i>CLAUDE SDK</span></td><td class="mono dim">codebuild · arm64 · 4m12s</td><td><span class="chip warn"><i>◐</i>DEPLOYING</span></td><td><span class="arn">—</span></td><td class="mono dim">6m</td></tr>
+        <tr><td class="pri">doc-pipeline</td><td><span class="chip aqua"><i>⬡</i>STUDIO</span></td><td class="mono dim">zip → s3 ✓</td><td><span class="chip good"><i>●</i>ACTIVE</span></td><td><span class="arn">arn:aws:bedrock-agentcore:us-west-2:4344…:runtime/doc_pipeline-mm41</span></td><td class="mono dim">1h</td></tr>
+        <tr><td class="pri">finance-analyst</td><td><span class="chip aqua"><i>⬡</i>STUDIO</span></td><td class="mono dim">register ✓</td><td><span class="chip good"><i>●</i>ACTIVE</span></td><td><span class="arn">arn:aws:bedrock-agentcore:us-west-2:4344…:runtime/finance_analyst-p0c8</span></td><td class="mono dim">3h</td></tr>
+        <tr><td class="pri">churn-scorer</td><td><span class="chip amber"><i>◇</i>HARNESS</span></td><td class="mono dim">provision ✕ iam role missing bedrock:InvokeModel</td><td><span class="chip crit"><i>✕</i>FAILED</span></td><td><span class="arn">—</span></td><td class="mono dim">5h</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <footer>MOCKUP v0.1<span class="sep">|</span>PHASE 01 · LOCAL<span class="sep">|</span>PAYMENTS DEFERRED TO PHASE 02<span class="sep">|</span>PALETTE VALIDATED · DARK #141816</footer>
+</section>
+
+<!-- ═══════════════════ 02 CREATE ═══════════════════ -->
+<section class="view" id="view-create">
+  <div class="vhead">
+    <span class="kicker">// SELF-SERVICE LAUNCH</span>
+    <h1>Create Agent</h1>
+    <span class="meta">UNIFIED PIPELINE — GENERATE → PACKAGE → PROVISION → DEPLOY → REGISTER</span>
+  </div>
+
+  <div class="steps">
+    <div class="step done"><span class="n">✓</span><b>01 · METHOD</b></div>
+    <div class="step now"><span class="n">02</span><b>02 · CONFIGURE</b></div>
+    <div class="step"><span class="n">03</span><b>03 · LAUNCH</b></div>
+  </div>
+
+  <div class="methods">
+    <div class="method sel" style="--i:0">
+      <div class="m-badge">RECOMMENDED · NO BUILD</div>
+      <div class="m-icon">◇</div>
+      <h3>Managed Harness</h3>
+      <p>Declarative agent — model, prompt, tools, skills, memory. No orchestration code, no container. Runs in seconds.</p>
+      <div class="m-specs">
+        <span>CreateHarness · InvokeHarness</span>
+        <span>tools: gateway / mcp / browser / code-interpreter</span>
+        <span>exportable to Strands code</span>
+        <span>deploy ≈ 30s</span>
+      </div>
+    </div>
+    <div class="method" style="--i:1">
+      <div class="m-badge plain">CONTAINER · ~6 MIN</div>
+      <div class="m-icon">▣</div>
+      <h3>Claude Agent SDK</h3>
+      <p>Full agentic loop with subagents, hooks and MCP servers. Packaged as an ARM64 container via CodeBuild, models via Bedrock.</p>
+      <div class="m-specs">
+        <span>system prompt + subagents + MCP config</span>
+        <span>CodeBuild → ECR → Runtime</span>
+        <span>CLAUDE_CODE_USE_BEDROCK=1</span>
+      </div>
+    </div>
+    <div class="method" style="--i:2">
+      <div class="m-badge plain">VISUAL EDITOR</div>
+      <div class="m-icon">⬡</div>
+      <h3>Strands Studio</h3>
+      <p>Drag-and-drop canvas for single, hierarchical, graph and swarm topologies. Generates Strands code, deploys via zip fast path.</p>
+      <div class="m-specs">
+        <span>opens Studio sub-app ↗</span>
+        <span>pip (arm64) → zip → S3 → Runtime</span>
+        <span>multi-agent topologies</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="cfg-grid">
+    <div class="panel brk" style="--i:3">
+      <div class="phead"><h2>CONFIGURE — MANAGED HARNESS</h2><span class="sub">harnessName: hr_assistant_v3</span></div>
+      <div class="pbody">
+        <div class="field"><label>AGENT NAME</label><div class="input">hr-assistant-v3</div></div>
+        <div class="field"><label>MODEL · BEDROCK</label><div class="input mono">global.anthropic.claude-sonnet-5-20250929-v1:0</div></div>
+        <div class="field"><label>SYSTEM PROMPT</label>
+          <div class="input mono" style="min-height:88px">You are an HR assistant for Octank Inc. Verify the employee ID with the
+hr-database tool before answering. Never fabricate verification results.
+Prefer concise answers.</div>
+        </div>
+        <div class="field"><label>TOOLS — FROM REGISTRY</label>
+          <div class="selchips">
+            <span class="selchip on">hr-database · gateway <span class="x">✕</span></span>
+            <span class="selchip on">code-interpreter · builtin <span class="x">✕</span></span>
+            <span class="selchip on">jira-cloud · gateway <span class="x">✕</span></span>
+            <span class="selchip">+ browse registry…</span>
+          </div>
+        </div>
+        <div class="field"><label>SKILLS</label>
+          <div class="selchips"><span class="selchip on">expense-report-writer v1.1 <span class="x">✕</span></span><span class="selchip">+ add skill…</span></div>
+        </div>
+        <div class="field"><label>MEMORY</label>
+          <div class="selchips"><span class="selchip on">short-term · session ✓</span><span class="selchip on">long-term · user preferences ✓</span></div>
+        </div>
+        <div class="note"><span class="i">[i]</span><span><b>Config-bundle contract baked in.</b> Generated config reads system prompt & tool descriptions via <span class="mono">get_config_bundle()</span> with defaults as fallback — required for A/B experiments in the Evaluation layer. OTEL (ADOT) instrumentation is added automatically.</span></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel" style="--i:4">
+        <div class="phead"><h2>LAUNCH SEQUENCE</h2><span class="sub">job #J-0117 · boto3 fast path</span></div>
+        <div class="pipeline">
+          <div class="pstage done"><div class="node">✓</div><div class="pn">GENERATE</div><div class="pt">00:02</div></div>
+          <div class="pstage done"><div class="node">✓</div><div class="pn">PACKAGE</div><div class="pt">skipped · harness</div></div>
+          <div class="pstage done"><div class="node">✓</div><div class="pn">PROVISION</div><div class="pt">iam role · 00:11</div></div>
+          <div class="pstage now"><div class="node">●</div><div class="pn">DEPLOY</div><div class="pt">polling ACTIVE…</div></div>
+          <div class="pstage"><div class="node">5</div><div class="pn">REGISTER</div><div class="pt">registry + a2a card</div></div>
+        </div>
+        <div class="pbody" style="padding-top:0">
+          <div class="kv"><span class="k">Shared infra</span><span class="v">CDK stack launchpad-base ✓</span></div>
+          <div class="kv"><span class="k">Agent resources</span><span class="v">boto3 fast path · tracked in ledger</span></div>
+          <div class="kv"><span class="k">Observability</span><span class="v">ADOT auto-instrument · TX search</span></div>
+          <div class="kv"><span class="k">On success</span><span class="v">auto-register → Registry (A2A)</span></div>
+        </div>
+      </div>
+      <div style="height:14px"></div>
+      <div class="panel" style="--i:5">
+        <div class="pbody" style="display:flex;gap:10px;justify-content:flex-end">
+          <button class="btn">SAVE DRAFT</button>
+          <button class="btn primary">▲ LAUNCH AGENT</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ 03 REGISTRY ═══════════════════ -->
+<section class="view" id="view-registry">
+  <div class="vhead">
+    <span class="kicker">// DISCOVERY LAYER</span>
+    <h1>Registry</h1>
+    <span class="meta">AGENTCORE REGISTRY · launchpad-registry · SYNC ON</span>
+  </div>
+
+  <div class="panel brk" style="--i:0;margin-bottom:14px">
+    <div class="phead" style="border-bottom:0;padding-bottom:0">
+      <div class="search">⌕ Search records… <span style="margin-left:auto;color:var(--line-2)">SearchRegistryRecords</span></div>
+      <div class="end flowchips">
+        <span class="chip muted"><i>○</i>DRAFT</span><i>→</i>
+        <span class="chip warn"><i>◍</i>SUBMITTED</span><i>→</i>
+        <span class="chip good" style="opacity:.75"><i>◎</i>APPROVED</span><i>→</i>
+        <span class="chip good"><i>●</i>PUBLISHED</span>
+      </div>
+    </div>
+    <div class="tabs" style="padding:0 16px">
+      <div class="tab" data-tab="agents">AGENTS · A2A<span class="cnt">9</span></div>
+      <div class="tab active" data-tab="tools">MCP TOOLS<span class="cnt">13</span></div>
+      <div class="tab" data-tab="skills">SKILLS<span class="cnt">6</span></div>
+    </div>
+
+    <div class="reg-grid" style="padding:14px 14px 14px">
+      <div>
+        <table id="regTable">
+          <thead><tr><th>NAME</th><th>SOURCE</th><th>VERSION</th><th>STATE</th><th>AUTH</th></tr></thead>
+          <tbody data-tabpane="tools">
+            <tr style="background:rgba(255,176,0,.045)"><td class="pri">hr-database</td><td><span class="chip aqua"><i>⇄</i>GATEWAY · LAMBDA</span></td><td class="mono">v1.2</td><td><span class="chip good"><i>●</i>PUBLISHED</span></td><td class="mono dim">IAM SigV4</td></tr>
+            <tr><td class="pri">jira-cloud</td><td><span class="chip aqua"><i>⇄</i>GATEWAY · REST/OpenAPI</span></td><td class="mono">v2.0</td><td><span class="chip good"><i>●</i>PUBLISHED</span></td><td class="mono dim">OAuth2 · Identity</td></tr>
+            <tr><td class="pri">code-interpreter</td><td><span class="chip muted"><i>◆</i>BUILTIN</span></td><td class="mono">v1</td><td><span class="chip good"><i>●</i>PUBLISHED</span></td><td class="mono dim">—</td></tr>
+            <tr><td class="pri">browser-tool</td><td><span class="chip muted"><i>◆</i>BUILTIN</span></td><td class="mono">v1</td><td><span class="chip good"><i>●</i>PUBLISHED</span></td><td class="mono dim">—</td></tr>
+            <tr><td class="pri">expense-payout</td><td><span class="chip aqua"><i>⇄</i>GATEWAY · LAMBDA</span></td><td class="mono">v0.3</td><td><span class="chip warn"><i>◍</i>SUBMITTED</span></td><td class="mono dim">IAM · policy-gated</td></tr>
+            <tr><td class="pri">weather-api</td><td><span class="chip aqua"><i>⇄</i>GATEWAY · REST</span></td><td class="mono">v1.0</td><td><span class="chip muted"><i>○</i>DRAFT</span></td><td class="mono dim">API key</td></tr>
+          </tbody>
+          <tbody data-tabpane="agents" style="display:none">
+            <tr><td class="pri">hr-assistant-v2</td><td><span class="chip amber"><i>◇</i>HARNESS</span></td><td class="mono">v2</td><td><span class="chip good"><i>●</i>PUBLISHED</span></td><td class="mono dim">a2a card ✓</td></tr>
+            <tr><td class="pri">support-triage</td><td><span class="chip blue"><i>▣</i>CLAUDE SDK</span></td><td class="mono">v1</td><td><span class="chip good" style="opacity:.75"><i>◎</i>APPROVED</span></td><td class="mono dim">a2a card ✓</td></tr>
+            <tr><td class="pri">doc-pipeline</td><td><span class="chip aqua"><i>⬡</i>STUDIO</span></td><td class="mono">v4</td><td><span class="chip good"><i>●</i>PUBLISHED</span></td><td class="mono dim">a2a card ✓</td></tr>
+            <tr><td class="pri">churn-scorer</td><td><span class="chip amber"><i>◇</i>HARNESS</span></td><td class="mono">v3</td><td><span class="chip muted"><i>○</i>DRAFT</span></td><td class="mono dim">—</td></tr>
+          </tbody>
+          <tbody data-tabpane="skills" style="display:none">
+            <tr><td class="pri">expense-report-writer</td><td><span class="chip muted"><i>❖</i>AGENT_SKILLS</span></td><td class="mono">v1.1</td><td><span class="chip good"><i>●</i>PUBLISHED</span></td><td class="mono dim">6 files</td></tr>
+            <tr><td class="pri">sql-analyst</td><td><span class="chip muted"><i>❖</i>AGENT_SKILLS</span></td><td class="mono">v2.0</td><td><span class="chip good"><i>●</i>PUBLISHED</span></td><td class="mono dim">4 files</td></tr>
+            <tr><td class="pri">brand-guidelines</td><td><span class="chip muted"><i>❖</i>AGENT_SKILLS</span></td><td class="mono">v1.0</td><td><span class="chip warn"><i>◍</i>SUBMITTED</span></td><td class="mono dim">3 files</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="panel drawer" style="border-color:var(--line-2)">
+        <div class="phead"><h2>hr-database</h2><span class="chip good"><i>●</i>PUBLISHED</span></div>
+        <div class="sect">
+          <div class="kv"><span class="k">Descriptor type</span><span class="v">MCP</span></div>
+          <div class="kv"><span class="k">Source</span><span class="v">gateway target · lambda</span></div>
+          <div class="kv"><span class="k">Sync</span><span class="v">URL · 12m ago</span></div>
+          <div class="kv"><span class="k">Owner</span><span class="v">platform-team</span></div>
+          <div class="kv"><span class="k">Versions</span><span class="v">v1.2 · v1.1 · v1.0</span></div>
+        </div>
+        <div class="sect"><h4>TOOLS (3)</h4>
+          <div class="kv"><span class="k mono">get_employee</span><span class="v">read</span></div>
+          <div class="kv"><span class="k mono">list_departments</span><span class="v">read</span></div>
+          <div class="kv"><span class="k mono">update_record</span><span class="v" style="color:var(--warn)">⚠ role: hr-writer</span></div>
+        </div>
+        <div class="sect"><h4>SCHEMA · get_employee</h4>
+          <div class="code">{
+  <span class="k2">"employee_id"</span>: {
+    <span class="k1">"type"</span>: <span class="k3">"string"</span>,
+    <span class="k1">"pattern"</span>: <span class="k3">"^EMP-\\d{4}$"</span>
+  }
+}</div>
+        </div>
+        <div class="sect" style="display:flex;gap:9px;border-bottom:0">
+          <button class="btn primary" style="flex:1;justify-content:center">USE IN NEW AGENT</button>
+          <button class="btn">DISABLE</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ 04 CHAT ═══════════════════ -->
+<section class="view" id="view-chat">
+  <div class="vhead">
+    <span class="kicker">// LIVE CHANNEL</span>
+    <h1>Chat Playground</h1>
+    <span class="meta">SAME BACKEND AS PUBLIC API · SigV4 PROXY</span>
+  </div>
+
+  <div class="chat-grid">
+    <div class="panel brk" style="--i:0">
+      <div class="phead">
+        <h2>hr-assistant-v2</h2>
+        <span class="chip amber"><i>◇</i>HARNESS</span>
+        <span class="chip good"><i>●</i>ACTIVE</span>
+        <div class="end">
+          <span class="chip muted mono">session 7f3a-…-91c2</span>
+          <span class="chip aqua"><i>◈</i>MEMORY ON</span>
+        </div>
+      </div>
+      <div class="thread">
+        <div class="msg user"><div class="who">RIVER · 09:38:12</div><div class="bub">How many vacation days does employee EMP-1024 have left this year?</div></div>
+        <div class="memline"><i>◈</i> memory.retrieve — user preference: “prefers concise answers” · 88ms</div>
+        <div class="toolcard"><span class="tc-ic">⇄</span>gateway · hr-database.get_employee <span class="args">{"employee_id":"EMP-1024"}</span><span class="chip good" style="margin-left:auto"><i>✓</i>POLICY ALLOW</span><span class="dim">412ms</span></div>
+        <div class="msg agent"><div class="who">HR-ASSISTANT-V2 · 09:38:15</div><div class="bub">Maya Chen (EMP-1024) has <b>9 vacation days</b> remaining of 25 for 2026. Three days pending approval are not counted.</div></div>
+        <div class="memline"><i>◈</i> memory.create_event — turn saved to short-term · 54ms</div>
+        <div class="msg user"><div class="who">RIVER · 09:39:03</div><div class="bub">Book the first week of August off for her.</div></div>
+        <div class="toolcard"><span class="tc-ic">⇄</span>gateway · hr-database.check_calendar <span class="args">{"range":"2026-08-03..2026-08-07"}</span><span class="chip warn" style="margin-left:auto"><i>◐</i>RUNNING</span></div>
+        <div class="msg agent"><div class="who">HR-ASSISTANT-V2 · STREAMING</div><div class="bub">Checking team calendar conflicts for Aug 3–7 before submitting the request<span class="caret"></span></div></div>
+      </div>
+      <div class="chatbar">
+        <div class="input">Message hr-assistant-v2…</div>
+        <button class="btn primary">SEND ▸</button>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel" style="--i:1">
+        <div class="phead"><h2>TRACE</h2><span class="sub mono">1-6866f2…c41a</span><div class="end"><span class="chip muted">CLOUDWATCH ↗</span></div></div>
+        <div class="tl" id="traceRows"></div>
+        <div class="pbody" style="padding-top:4px;border-top:1px solid var(--grid)">
+          <div class="legend" style="flex-wrap:wrap;gap:8px">
+            <span class="li"><span class="sw" style="background:var(--s1)"></span>model</span>
+            <span class="li"><span class="sw" style="background:var(--s2)"></span>tool</span>
+            <span class="li"><span class="sw" style="background:var(--s3)"></span>memory</span>
+            <span class="li"><span class="sw" style="background:var(--s5)"></span>policy</span>
+          </div>
+        </div>
+      </div>
+      <div style="height:14px"></div>
+      <div class="panel" style="--i:2">
+        <div class="phead"><h2>SESSION MEMORY</h2></div>
+        <div class="pbody">
+          <div class="kv"><span class="k">Short-term events</span><span class="v">6</span></div>
+          <div class="kv"><span class="k">Long-term records</span><span class="v">2</span></div>
+          <div class="kv"><span class="k">Last extraction</span><span class="v">09:38 · auto</span></div>
+          <div class="code" style="margin-top:10px"><span class="cm">// long-term · semantic</span>
+“prefers concise answers”
+“works in HR ops, Octank”</div>
+        </div>
+      </div>
+      <div style="height:14px"></div>
+      <div class="panel" style="--i:3">
+        <div class="phead"><h2>API EQUIVALENT</h2></div>
+        <div class="pbody">
+          <div class="code">curl -X POST \
+  https://api.launchpad.local/v1/agents/\
+hr-assistant-v2/invoke \
+  -H <span class="k3">"x-api-key: lp_live_…"</span> \
+  -d <span class="k3">'{"prompt":"…","session_id":"7f3a…"}'</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ 05 EVALUATION ═══════════════════ -->
+<section class="view" id="view-evaluation">
+  <div class="vhead">
+    <span class="kicker">// QUALITY TELEMETRY</span>
+    <h1>Evaluation & Optimization</h1>
+    <span class="meta">BATCH + ONLINE · LLM-AS-A-JUDGE · 1 BATCH / ACCOUNT — QUEUE MANAGED</span>
+  </div>
+
+  <div class="eval-grid">
+    <div class="panel brk" style="--i:0">
+      <div class="phead"><h2>RUNS</h2><span class="sub">batch evaluation history</span>
+        <div class="end"><button class="btn primary">▸ NEW RUN</button></div>
+      </div>
+      <table>
+        <thead><tr><th>RUN</th><th>AGENT</th><th>DATASET</th><th>EVALUATORS</th><th>SCORE</th><th>STATUS</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">run-0043</td><td class="pri">doc-pipeline</td><td class="mono dim">docs-golden · 18</td><td class="mono dim">4</td><td class="mono dim">—</td><td><span class="chip muted"><i>◌</i>QUEUED · acct lock</span></td></tr>
+          <tr style="background:rgba(255,176,0,.045)"><td class="mono">run-0042</td><td class="pri">hr-assistant-v2</td><td class="mono dim">hr-baseline-en · 24</td><td class="mono dim">5</td><td class="mono" style="color:var(--good)">0.87</td><td><span class="chip good"><i>●</i>COMPLETE</span></td></tr>
+          <tr><td class="mono">run-0041</td><td class="pri">hr-assistant-v2</td><td class="mono dim">failure-injection · 24</td><td class="mono dim">insights</td><td class="mono dim">—</td><td><span class="chip aqua"><i>◈</i>INSIGHTS READY</span></td></tr>
+          <tr><td class="mono">run-0040</td><td class="pri">support-triage</td><td class="mono dim">triage-golden · 36</td><td class="mono dim">4</td><td class="mono" style="color:var(--warn)">0.79</td><td><span class="chip good"><i>●</i>COMPLETE</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="panel" style="--i:1">
+      <div class="phead"><h2>EVALUATOR SCORES</h2><span class="sub">run-0042 · hr-assistant-v2</span></div>
+      <div class="pbody">
+        <div class="hbar"><span class="hn">Correctness</span><div class="track"><div class="fill" style="width:91%"></div></div><span class="hv">0.91</span></div>
+        <div class="hbar"><span class="hn">Tool selection</span><div class="track"><div class="fill" style="width:88%"></div></div><span class="hv">0.88</span></div>
+        <div class="hbar"><span class="hn">Faithfulness</span><div class="track"><div class="fill" style="width:86%"></div></div><span class="hv">0.86</span></div>
+        <div class="hbar"><span class="hn">Helpfulness</span><div class="track"><div class="fill" style="width:83%"></div></div><span class="hv">0.83</span></div>
+        <div class="hbar"><span class="hn">Goal success</span><div class="track"><div class="fill" style="width:78%"></div></div><span class="hv">0.78</span></div>
+        <div class="note" style="margin-top:6px"><span class="i">[i]</span><span>13 built-in evaluators + custom LLM-judge supported. Threshold 0.75 · <b>5/5 above threshold.</b></span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="eval-grid">
+    <div class="panel" style="--i:2">
+      <div class="phead"><h2>EXPERIMENT EXP-007</h2><span class="sub">config-bundle A/B · 50/50 · gateway routed</span>
+        <div class="end legend">
+          <span class="li"><span class="sw" style="background:var(--s1)"></span>Control v1</span>
+          <span class="li"><span class="sw" style="background:var(--s3)"></span>Treatment v2</span>
+        </div>
+      </div>
+      <div class="pbody">
+        <div class="ab-metric">
+          <div class="am-h"><span>Correctness</span><span class="d">+0.07</span></div>
+          <div class="abbar"><span class="an">CONTROL</span><div class="track"><div class="fill" style="width:84%;background:var(--s1)"></div></div><span class="av">0.84</span></div>
+          <div class="abbar"><span class="an">TREAT</span><div class="track"><div class="fill" style="width:91%;background:var(--s3)"></div></div><span class="av">0.91</span></div>
+        </div>
+        <div class="ab-metric">
+          <div class="am-h"><span>Tool-call accuracy</span><span class="d">+0.07</span></div>
+          <div class="abbar"><span class="an">CONTROL</span><div class="track"><div class="fill" style="width:81%;background:var(--s1)"></div></div><span class="av">0.81</span></div>
+          <div class="abbar"><span class="an">TREAT</span><div class="track"><div class="fill" style="width:88%;background:var(--s3)"></div></div><span class="av">0.88</span></div>
+        </div>
+        <div class="ab-metric">
+          <div class="am-h"><span>Helpfulness</span><span class="d">+0.03</span></div>
+          <div class="abbar"><span class="an">CONTROL</span><div class="track"><div class="fill" style="width:82%;background:var(--s1)"></div></div><span class="av">0.82</span></div>
+          <div class="abbar"><span class="an">TREAT</span><div class="track"><div class="fill" style="width:85%;background:var(--s3)"></div></div><span class="av">0.85</span></div>
+        </div>
+        <div class="verdict">
+          <span class="vt">◎ TREATMENT WINS</span>
+          <span class="vm">avg +6.2 pts · p = 0.031 · n = 240</span>
+          <button class="btn primary" style="margin-left:auto">PROMOTE ▸</button>
+        </div>
+        <div style="margin-top:14px">
+          <div class="am-h" style="font-size:11px;color:var(--ink-3)"><span class="mono">TARGET CANARY — hr-assistant v2 challenger</span><span class="mono">RAMP 10 → 50 → 100</span></div>
+          <div class="split"><div style="flex:0 0 49%;background:var(--s1)"></div><div style="flex:1;background:var(--s3)"></div></div>
+          <div class="mono dim" style="font-size:9.5px">champion 50% · challenger 50% — ramping (stage 2/3)</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" style="--i:3">
+      <div class="phead"><h2>INSIGHTS — FAILURE TRIAGE</h2><span class="sub">run-0041 · 24 sessions</span></div>
+      <div class="pbody">
+        <div class="insight">
+          <div class="ih"><span class="chip crit"><i>✕</i></span><b>Tool misuse</b><span class="pct">42%</span></div>
+          <div class="fix">Unknown employee-ID passed verbatim to hr-database. <em>FIX →</em> add input-validation guidance to tool description.</div>
+        </div>
+        <div class="insight">
+          <div class="ih"><span class="chip crit"><i>✕</i></span><b>Fabricated verification</b><span class="pct">31%</span></div>
+          <div class="fix">Claims policy doc was checked without a tool call. <em>FIX →</em> strengthen tool-first instruction in system prompt.</div>
+        </div>
+        <div class="insight">
+          <div class="ih"><span class="chip warn"><i>⚠</i></span><b>Compliance shortcut</b><span class="pct">19%</span></div>
+          <div class="fix">Proceeds on missing manager approval. <em>FIX →</em> require explicit approval check before write actions.</div>
+        </div>
+        <div class="insight">
+          <div class="ih"><span class="chip muted"><i>○</i></span><b>Other</b><span class="pct">8%</span></div>
+          <div class="fix">Long-tail — see intent clusters & execution patterns.</div>
+        </div>
+        <div class="note" style="margin-top:12px"><span class="i">[▸]</span><span>AI recommendations generated from these traces feed <b>EXP-007</b> treatment bundle.</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ 06 GOVERNANCE ═══════════════════ -->
+<section class="view" id="view-governance">
+  <div class="vhead">
+    <span class="kicker">// CONTROL PLANE</span>
+    <h1>Governance</h1>
+    <span class="meta">GATEWAY · CEDAR POLICY · DECISION LOG</span>
+  </div>
+
+  <div class="gov-grid">
+    <div class="panel brk" style="--i:0">
+      <div class="phead"><h2>GATEWAY TARGETS</h2><span class="sub">launchpad-gw · MCP endpoint</span></div>
+      <table>
+        <thead><tr><th>TARGET</th><th>TYPE</th><th>AUTH OUT</th><th>POLICY</th><th>STATUS</th></tr></thead>
+        <tbody>
+          <tr><td class="pri">hr-database</td><td class="mono dim">Lambda → MCP</td><td class="mono dim">IAM</td><td><span class="chip amber"><i>◆</i>ENFORCED</span></td><td><span class="chip good"><i>●</i>READY</span></td></tr>
+          <tr><td class="pri">jira-cloud</td><td class="mono dim">OpenAPI → MCP</td><td class="mono dim">OAuth2</td><td><span class="chip amber"><i>◆</i>ENFORCED</span></td><td><span class="chip good"><i>●</i>READY</span></td></tr>
+          <tr><td class="pri">expense-payout</td><td class="mono dim">Lambda → MCP</td><td class="mono dim">IAM</td><td><span class="chip amber"><i>◆</i>ENFORCED</span></td><td><span class="chip warn"><i>◍</i>PENDING APPROVAL</span></td></tr>
+        </tbody>
+      </table>
+      <div class="pbody">
+        <div class="kv"><span class="k">Inbound auth</span><span class="v">Cognito JWT · launchpad-users</span></div>
+        <div class="kv"><span class="k">Policy engine</span><span class="v">launchpad-pe · ATTACHED</span></div>
+        <div class="kv"><span class="k">Principal source</span><span class="v">JWT claims → role</span></div>
+      </div>
+    </div>
+
+    <div class="panel" style="--i:1">
+      <div class="phead"><h2>CEDAR POLICY — R-02</h2><span class="sub">tool access by role</span>
+        <div class="end"><span class="chip good"><i>●</i>ACTIVE</span></div>
+      </div>
+      <div class="pbody">
+        <div class="code"><span class="cm">// finance write tools require platform-admin</span>
+<span class="k1">forbid</span> (
+  principal,
+  action == AgentCore::Action::<span class="k3">"InvokeTool"</span>,
+  resource == Gateway::Tool::<span class="k3">"expense-payout"</span>
+) <span class="k1">unless</span> {
+  principal.role == <span class="k3">"platform-admin"</span>
+};
+
+<span class="cm">// hr-analyst may read the HR database</span>
+<span class="k1">permit</span> (
+  principal <span class="k1">in</span> Role::<span class="k3">"hr-analyst"</span>,
+  action == AgentCore::Action::<span class="k3">"InvokeTool"</span>,
+  resource <span class="k1">in</span> Gateway::Target::<span class="k3">"hr-database"</span>
+);</div>
+        <div style="display:flex;gap:9px;margin-top:12px">
+          <button class="btn">TEST · Evaluate()</button>
+          <button class="btn">GENERATE FROM TRACES</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel dlog" style="--i:2">
+    <div class="phead"><h2>DECISION LOG</h2><span class="sub">policy evaluations · live</span></div>
+    <div class="row"><span class="t">09:41:07</span><span class="who">river@platform-admin</span><span class="res">expense-payout.create_payout</span><span class="chip good"><i>✓</i>ALLOW</span></div>
+    <div class="row"><span class="t">09:40:52</span><span class="who">demo@hr-analyst</span><span class="res">expense-payout.create_payout</span><span class="chip crit"><i>✕</i>DENY · rule R-02</span></div>
+    <div class="row"><span class="t">09:40:11</span><span class="who">demo@hr-analyst</span><span class="res">hr-database.get_employee</span><span class="chip good"><i>✓</i>ALLOW</span></div>
+    <div class="row"><span class="t">09:38:14</span><span class="who">river@platform-admin</span><span class="res">hr-database.get_employee</span><span class="chip good"><i>✓</i>ALLOW</span></div>
+  </div>
+</section>
+
+</main>
+</div>
+
+<script>
+/* ---------- view switching ---------- */
+const crumb = document.getElementById('crumb');
+document.querySelectorAll('.nav-item[data-view]').forEach(it=>{
+  it.addEventListener('click',()=>{
+    document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+    it.classList.add('active');
+    document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+    document.getElementById('view-'+it.dataset.view).classList.add('active');
+    crumb.innerHTML = 'CONSOLE / <b>'+it.textContent.replace(/^\d+/,'').trim().toUpperCase()+'</b>';
+  });
+});
+if(location.hash){
+  const v=location.hash.slice(1);
+  const el=document.querySelector(`.nav-item[data-view="${v}"]`);
+  if(el) el.click();
+}
+
+/* ---------- registry tabs ---------- */
+document.querySelectorAll('.tab').forEach(t=>{
+  t.addEventListener('click',()=>{
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+    t.classList.add('active');
+    document.querySelectorAll('[data-tabpane]').forEach(p=>p.style.display = p.dataset.tabpane===t.dataset.tab?'':'none');
+  });
+});
+
+/* ---------- sparkline ---------- */
+(function(){
+  const d=[4,5,5,6,7,7,8,9,9,10,11,12], w=110,h=34,max=13;
+  const pts=d.map((v,i)=>`${(i/(d.length-1))*w},${h-3-(v/max)*(h-8)}`).join(' ');
+  document.getElementById('spark1').innerHTML =
+    `<polyline points="${pts}" fill="none" stroke="var(--s1)" stroke-width="1.5" stroke-linejoin="round"/>`+
+    `<circle cx="${w}" cy="${h-3-(12/max)*(h-8)}" r="2.6" fill="var(--s1)"/>`;
+})();
+
+/* ---------- line chart: invocations 24h ---------- */
+(function(){
+  const chat=[12,9,7,6,8,14,22,35,48,61,72,68,75,84,91,88,79,83,95,102,94,76,58,41];
+  const api =[30,28,26,24,25,31,40,52,66,74,83,90,97,105,112,118,109,114,126,133,121,104,88,72];
+  const L=46,R=706,T=14,B=196,YMAX=140;
+  const x=i=>L+i*(R-L)/23, y=v=>B-(v/YMAX)*(B-T);
+  const svg=document.getElementById('lineChart');
+  let g='';
+  for(let t=0;t<=YMAX;t+=35){
+    g+=`<line x1="${L}" y1="${y(t)}" x2="${R}" y2="${y(t)}" stroke="${t===0?'#383835':'var(--grid)'}" stroke-width="1"/>`;
+    g+=`<text x="${L-8}" y="${y(t)+3.5}" text-anchor="end" font-family="IBM Plex Mono" font-size="10" fill="#69736C">${t}</text>`;
+  }
+  [0,4,8,12,16,20,23].forEach(i=>{
+    g+=`<text x="${x(i)}" y="${B+18}" text-anchor="middle" font-family="IBM Plex Mono" font-size="10" fill="#69736C">${i===23?'now':String(i).padStart(2,'0')+':00'}</text>`;
+  });
+  const line=(d,c)=>`<polyline points="${d.map((v,i)=>`${x(i)},${y(v)}`).join(' ')}" fill="none" stroke="${c}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+  g+=line(api,'var(--s2)')+line(chat,'var(--s1)');
+  g+=`<circle cx="${x(23)}" cy="${y(chat[23])}" r="3.5" fill="var(--s1)" stroke="var(--panel)" stroke-width="2"/>`;
+  g+=`<circle cx="${x(23)}" cy="${y(api[23])}" r="3.5" fill="var(--s2)" stroke="var(--panel)" stroke-width="2"/>`;
+  g+=`<text x="${R+8}" y="${y(chat[23])+3}" font-family="IBM Plex Mono" font-size="10" fill="#A3ACA6">${chat[23]}</text>`;
+  g+=`<text x="${R+8}" y="${y(api[23])+3}" font-family="IBM Plex Mono" font-size="10" fill="#A3ACA6">${api[23]}</text>`;
+  g+=`<line id="xh" x1="0" y1="${T}" x2="0" y2="${B}" stroke="#3A453F" stroke-width="1" stroke-dasharray="3 3" visibility="hidden"/>`;
+  g+=`<rect id="hover" x="${L}" y="${T}" width="${R-L}" height="${B-T}" fill="transparent"/>`;
+  svg.innerHTML=g;
+  const tip=document.getElementById('lineTip'), wrap=document.getElementById('lineWrap'), xh=svg.querySelector('#xh');
+  svg.querySelector('#hover').addEventListener('mousemove',e=>{
+    const r=svg.getBoundingClientRect(), sx=780/r.width;
+    const px=(e.clientX-r.left)*sx;
+    const i=Math.max(0,Math.min(23,Math.round((px-L)/((R-L)/23))));
+    xh.setAttribute('x1',x(i));xh.setAttribute('x2',x(i));xh.setAttribute('visibility','visible');
+    tip.style.display='block';
+    const wr=wrap.getBoundingClientRect();
+    tip.style.left=Math.min(e.clientX-wr.left+14,wr.width-160)+'px';
+    tip.style.top=(e.clientY-wr.top-14)+'px';
+    tip.innerHTML=`<div class="tt-h">${i===23?'now':String(i).padStart(2,'0')+':00'}</div>
+      <div class="tt-r"><span class="dot" style="background:var(--s1)"></span>Chat UI<span class="v">${chat[i]}</span></div>
+      <div class="tt-r"><span class="dot" style="background:var(--s2)"></span>API<span class="v">${api[i]}</span></div>`;
+  });
+  svg.querySelector('#hover').addEventListener('mouseleave',()=>{tip.style.display='none';xh.setAttribute('visibility','hidden')});
+})();
+
+/* ---------- trace waterfall ---------- */
+(function(){
+  const total=3240;
+  const spans=[
+    ['InvokeAgentRuntime',0,3240,'#69736C'],
+    ['model.invoke',60,1760,'var(--s1)'],
+    ['policy.evaluate ✓',1872,9,'var(--s5)'],
+    ['gw hr-database',1880,412,'var(--s2)'],
+    ['memory.retrieve',120,88,'var(--s3)'],
+    ['model.invoke',2300,880,'var(--s1)'],
+    ['memory.create_event',3186,54,'var(--s3)'],
+  ];
+  document.getElementById('traceRows').innerHTML=spans.map(([n,o,d,c])=>
+    `<div class="trow"><span class="tn">${n}</span><div class="track"><div class="span" style="left:${o/total*100}%;width:${Math.max(d/total*100,.8)}%;background:${c}"></div></div><span class="ms">${d}ms</span></div>`
+  ).join('');
+})();
+</script>
+</body>
+</html>

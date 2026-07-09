@@ -1,0 +1,33 @@
+# --- session / tool artifacts ---
+.claude/
+.codegraph/
+.supergoal/
+.mcp.json
+
+# --- python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- node ---
+node_modules/
+dist/
+*.tsbuildinfo
+.npm/
+
+# --- local data & generated config ---
+data/*.db
+data/*.db-journal
+config/launchpad.yaml
+
+# --- misc ---
+.DS_Store
+*.log
+.env
+.env.*
+cdk.out/
