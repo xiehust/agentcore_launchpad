@@ -101,11 +101,12 @@
         "spec3": "subagents via .claude/agents"
       },
       "studio": {
-        "badge": "ZIP PATH LIVE · CANVAS PHASE 12",
+        "badge": "ZIP PATH LIVE · STUDIO LIVE",
         "title": "Strands Studio",
         "desc": "Drag-and-drop canvas for single, hierarchical, graph and swarm topologies. Generates Strands code, deploys via zip fast path.",
         "spec2": "multi-agent topologies",
-        "spec3": "config-bundle + ADOT baked in"
+        "spec3": "config-bundle + ADOT baked in",
+        "open": "Open Strands Studio ↗"
       }
     },
     "configure": {

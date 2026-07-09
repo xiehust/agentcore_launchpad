@@ -83,14 +83,34 @@ def build_zip(
     return zip_path
 
 
+def _generate_code(spec: AgentSpec) -> tuple[str, str]:
+    """(code, source label) — studio artifacts arrive pre-generated."""
+    if spec.method == "studio" and spec.code:
+        from app.templates.studio_agent import adapt_studio_code
+
+        return adapt_studio_code(spec.code), "studio artifact (adapted)"
+    return render_main_py(spec), "strands template"
+
+
+STUDIO_EXTRA_REQUIREMENTS = [
+    # studio's generator imports the strands_tools catalog (incl. mem0_memory)
+    "strands-agents-tools[mem0_memory]",
+]
+
+
+def _method_requirements(spec: AgentSpec) -> list[str]:
+    extra = STUDIO_EXTRA_REQUIREMENTS if spec.method == "studio" else []
+    return base_requirements() + extra + spec.requirements
+
+
 def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
     spec = AgentSpec(**agent.spec)
-    code = render_main_py(spec)
-    requirements = base_requirements() + spec.requirements
+    code, source = _generate_code(spec)
+    requirements = _method_requirements(spec)
     ctx.scratch["code"] = code
     ctx.scratch["requirements"] = requirements
-    ctx.log(f"strands template rendered · {len(code)} bytes · model {spec.model_id}")
-    return StageResult(detail=f"strands template · {len(code)} bytes")
+    ctx.log(f"{source} · {len(code)} bytes · model {spec.model_id}")
+    return StageResult(detail=f"{source} · {len(code)} bytes")
 
 
 def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
@@ -99,8 +119,8 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
     if not bucket:
         raise RuntimeError("artifacts_bucket missing from config — run scripts/bootstrap.py")
     spec = AgentSpec(**agent.spec)
-    code = ctx.scratch.get("code") or render_main_py(spec)
-    requirements = ctx.scratch.get("requirements") or (base_requirements() + spec.requirements)
+    code = ctx.scratch.get("code") or _generate_code(spec)[0]
+    requirements = ctx.scratch.get("requirements") or _method_requirements(spec)
 
     build_dir = Path(f"/tmp/launchpad_build_{agent.name}")
     t0 = time.monotonic()

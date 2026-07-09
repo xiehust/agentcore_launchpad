@@ -8,6 +8,8 @@ import type { DeploymentInfo, JobInfo, StageInfo } from "../lib/api";
 import { api, ApiError } from "../lib/api";
 
 const DEFAULT_MODEL = "global.anthropic.claude-sonnet-4-6";
+const STUDIO_URL =
+  (import.meta.env.VITE_STUDIO_URL as string | undefined) ?? "http://localhost:5273";
 const BUILTIN_TOOLS = ["code-interpreter", "browser"] as const;
 type StageKey = "generate" | "package" | "provision" | "deploy" | "register";
 
@@ -181,6 +183,15 @@ export function CreateAgent() {
                 <span>{t("create.methods.studio.spec2")}</span>
                 <span>{t("create.methods.studio.spec3")}</span>
               </div>
+              <a
+                className="studio-link"
+                href={STUDIO_URL}
+                target="_blank"
+                rel="noreferrer"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {t("create.methods.studio.open")}
+              </a>
             </div>
           </div>
           <div style={{ display: "flex", justifyContent: "flex-end" }}>

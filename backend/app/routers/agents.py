@@ -20,7 +20,7 @@ from app.services.invoke import invoke_agent_text
 
 router = APIRouter(prefix="/api", tags=["agents"])
 
-SUPPORTED_METHODS = {"harness", "zip_runtime", "container"}  # studio → phase 12
+SUPPORTED_METHODS = {"harness", "zip_runtime", "container", "studio"}
 
 
 def _agent_out(agent: Agent, deployment: Deployment | None = None) -> dict[str, Any]:

@@ -38,6 +38,8 @@ class AgentSpec(BaseModel):
     skills: list[str] = Field(default_factory=list)
     # extra pip requirements for zip_runtime/studio agents (on top of the template base set)
     requirements: list[str] = Field(default_factory=list)
+    # pre-generated agent code (studio method) — bypasses the strands template
+    code: str | None = Field(default=None, max_length=200000)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     env: dict[str, str] = Field(default_factory=dict)
     max_iterations: int = Field(default=10, ge=1, le=100)

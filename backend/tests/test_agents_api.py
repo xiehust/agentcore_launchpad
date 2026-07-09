@@ -43,7 +43,9 @@ def test_duplicate_name_conflict(client):
     assert res.json()["code"] == "agent.name_exists"
 
 
-def test_unsupported_method_rejected(client):
+def test_unsupported_method_rejected(client, monkeypatch):
+    # all four methods ship now — simulate a future/disabled method gate
+    monkeypatch.setattr(agents_router, "SUPPORTED_METHODS", {"harness"})
     res = client.post("/api/agents", json={**SPEC, "method": "studio"})
     assert res.status_code == 400
     assert res.json()["code"] == "agent.method_not_available"

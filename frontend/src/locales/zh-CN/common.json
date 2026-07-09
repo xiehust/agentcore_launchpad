@@ -101,11 +101,12 @@
         "spec3": "经 .claude/agents 支持子 Agent"
       },
       "studio": {
-        "badge": "ZIP 通道已上线 · 画布第 12 阶段",
+        "badge": "ZIP 通道已上线 · Studio 已上线",
         "title": "Strands Studio",
         "desc": "拖拽式画布,支持单体、层级、图与蜂群拓扑。自动生成 Strands 代码,经 zip 快速通道部署。",
         "spec2": "多 Agent 拓扑",
-        "spec3": "内置 config-bundle 与 ADOT"
+        "spec3": "内置 config-bundle 与 ADOT",
+        "open": "打开 Strands Studio ↗"
       }
     },
     "configure": {
