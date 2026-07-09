@@ -315,5 +315,21 @@
       "sub": "failure analysis · user intents",
       "empty": "RUN INSIGHTS ON A COMPLETED RUN'S SESSIONS"
     }
+  },
+  "expPage": {
+    "title": "EXPERIMENTS",
+    "sub": "config-bundle A/B · gateway routed",
+    "none": "no experiments yet",
+    "startHint": "AI recommendations → bundles → A/B 50/50 → verdict",
+    "start": "START EXPERIMENT",
+    "running": "loop running — recommend → bundles → gateway → A/B → traffic → verdict…",
+    "noMetrics": "no per-arm metrics yet (online eval lag)",
+    "promote": "PROMOTE",
+    "promoted": "PROMOTED",
+    "canaryTitle": "TARGET CANARY",
+    "ramp": "RAMP",
+    "cleanup": "CLEANUP",
+    "pickChallenger": "pick challenger agent…",
+    "startCanary": "START CANARY 90/10"
   }
 }

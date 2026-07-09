@@ -315,5 +315,21 @@
       "sub": "失败分析 · 用户意图",
       "empty": "对已完成运行的会话执行洞察"
     }
+  },
+  "expPage": {
+    "title": "实验",
+    "sub": "config-bundle A/B · 经 gateway 路由",
+    "none": "暂无实验",
+    "startHint": "AI 建议 → 配置包 → A/B 50/50 → 判定",
+    "start": "启动实验",
+    "running": "流程运行中 — 建议 → 配置包 → gateway → A/B → 流量 → 判定……",
+    "noMetrics": "暂无分组指标(在线评估存在延迟)",
+    "promote": "晋级",
+    "promoted": "已晋级",
+    "canaryTitle": "目标金丝雀",
+    "ramp": "放量",
+    "cleanup": "清理",
+    "pickChallenger": "选择挑战者 Agent……",
+    "startCanary": "启动金丝雀 90/10"
   }
 }

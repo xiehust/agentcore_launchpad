@@ -238,6 +238,31 @@ class LaunchpadBaseStack(Stack):
         )
         exec_role.add_to_policy(
             iam.PolicyStatement(
+                sid="ABTestOrchestration",
+                actions=[
+                    "bedrock-agentcore:GetGateway",
+                    "bedrock-agentcore:GetGatewayTarget",
+                    "bedrock-agentcore:ListGatewayTargets",
+                    "bedrock-agentcore:InvokeAgentRuntime",
+                    "bedrock-agentcore:GetConfigurationBundle",
+                    "bedrock-agentcore:GetConfigurationBundleVersion",
+                    "bedrock-agentcore:GetOnlineEvaluationConfig",
+                    "bedrock-agentcore:GetABTest",
+                    "bedrock-agentcore:StartBatchEvaluation",
+                    "bedrock-agentcore:GetBatchEvaluation",
+                    # A/B tests manage routing rules on the experiment gateway
+                    "bedrock-agentcore:CreateGatewayRule",
+                    "bedrock-agentcore:GetGatewayRule",
+                    "bedrock-agentcore:UpdateGatewayRule",
+                    "bedrock-agentcore:DeleteGatewayRule",
+                    "bedrock-agentcore:ListGatewayRules",
+                    "bedrock-agentcore:UpdateGateway",
+                ],
+                resources=["*"],
+            )
+        )
+        exec_role.add_to_policy(
+            iam.PolicyStatement(
                 sid="IdentityVaultSecrets",
                 actions=["secretsmanager:GetSecretValue"],
                 resources=[
@@ -254,6 +279,11 @@ class LaunchpadBaseStack(Stack):
                     "logs:PutLogEvents",
                     "logs:DescribeLogGroups",
                     "logs:DescribeLogStreams",
+                    "logs:StartQuery",
+                    "logs:GetQueryResults",
+                    "logs:StopQuery",
+                    "logs:FilterLogEvents",
+                    "logs:GetLogEvents",
                     "xray:PutTraceSegments",
                     "xray:PutTelemetryRecords",
                     "xray:GetSamplingRules",
@@ -338,6 +368,18 @@ class LaunchpadBaseStack(Stack):
                     "bedrock-agentcore:GetWorkloadAccessToken",
                 ],
                 resources=["*"],
+            )
+        )
+        gateway_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="InvokeRuntimeTargets",
+                actions=[
+                    "bedrock-agentcore:InvokeAgentRuntime",
+                    "bedrock-agentcore:InvokeAgentRuntimeForUser",
+                ],
+                resources=[
+                    f"arn:aws:bedrock-agentcore:{self.region}:{self.account}:runtime/*"
+                ],
             )
         )
         gateway_role.add_to_policy(
