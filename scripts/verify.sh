@@ -19,6 +19,14 @@ if [ -d "$ROOT/backend" ]; then
   (cd "$ROOT/backend" && uv run pytest -q); result $? "pytest"
 fi
 
+if [ -d "$ROOT/infra" ]; then
+  section "infra · ruff"
+  (cd "$ROOT/infra" && uv run ruff check .); result $? "infra ruff"
+
+  section "infra · pytest"
+  (cd "$ROOT/infra" && uv run pytest -q); result $? "infra pytest"
+fi
+
 if [ -d "$ROOT/frontend" ]; then
   section "frontend · eslint"
   (cd "$ROOT/frontend" && npm run --silent lint); result $? "eslint"

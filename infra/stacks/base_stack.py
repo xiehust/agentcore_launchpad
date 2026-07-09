@@ -1,0 +1,231 @@
+"""LaunchpadBaseStack — shared substrate every deploy path reuses.
+
+Per-agent resources (runtimes, harnesses) are created by the platform's
+boto3 fast path and tracked in the ledger; only account-shared resources
+live here.
+"""
+
+from aws_cdk import (
+    CfnOutput,
+    Duration,
+    RemovalPolicy,
+    Stack,
+)
+from aws_cdk import (
+    aws_codebuild as codebuild,
+)
+from aws_cdk import (
+    aws_cognito as cognito,
+)
+from aws_cdk import (
+    aws_ecr as ecr,
+)
+from aws_cdk import (
+    aws_iam as iam,
+)
+from aws_cdk import (
+    aws_s3 as s3,
+)
+from constructs import Construct
+
+DEMO_USERS = [
+    {"username": "river", "email": "river@launchpad.local", "group": "platform-admin"},
+    {"username": "demo", "email": "demo@launchpad.local", "group": "hr-analyst"},
+]
+
+
+class LaunchpadBaseStack(Stack):
+    def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
+        super().__init__(scope, construct_id, **kwargs)
+
+        # ---- artifacts bucket (agent source zips, codebuild inputs) ----
+        artifacts = s3.Bucket(
+            self,
+            "ArtifactsBucket",
+            bucket_name=f"launchpad-artifacts-{self.account}-{self.region}",
+            versioned=True,
+            encryption=s3.BucketEncryption.S3_MANAGED,
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            enforce_ssl=True,
+            removal_policy=RemovalPolicy.DESTROY,
+            auto_delete_objects=True,
+        )
+
+        # ---- ECR repo for Claude-SDK container images ----
+        repo = ecr.Repository(
+            self,
+            "AgentsRepo",
+            repository_name="launchpad-agents",
+            removal_policy=RemovalPolicy.DESTROY,
+            empty_on_delete=True,
+        )
+
+        # ---- CodeBuild: ARM64 image builder (buildspec ships in source zip) ----
+        build_project = codebuild.Project(
+            self,
+            "AgentBuilder",
+            project_name="launchpad-agent-builder",
+            source=codebuild.Source.s3(bucket=artifacts, path="builds/placeholder/source.zip"),
+            environment=codebuild.BuildEnvironment(
+                build_image=codebuild.LinuxArmBuildImage.AMAZON_LINUX_2023_STANDARD_3_0,
+                compute_type=codebuild.ComputeType.SMALL,
+                privileged=True,  # docker build
+            ),
+            timeout=Duration.minutes(30),
+        )
+        repo.grant_pull_push(build_project)
+        artifacts.grant_read(build_project)
+
+        # ---- Cognito: users, roles for Cedar policy demos ----
+        pool = cognito.UserPool(
+            self,
+            "Users",
+            user_pool_name="launchpad-users",
+            self_sign_up_enabled=False,
+            sign_in_aliases=cognito.SignInAliases(username=True, email=True),
+            password_policy=cognito.PasswordPolicy(
+                min_length=12,
+                require_lowercase=True,
+                require_uppercase=True,
+                require_digits=True,
+                require_symbols=False,
+            ),
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+        client = pool.add_client(
+            "Console",
+            user_pool_client_name="launchpad-console",
+            auth_flows=cognito.AuthFlow(user_password=True, user_srp=True),
+            id_token_validity=Duration.hours(8),
+            access_token_validity=Duration.hours(8),
+        )
+
+        for role_name in ("platform-admin", "hr-analyst"):
+            cognito.CfnUserPoolGroup(
+                self,
+                f"Group-{role_name}",
+                user_pool_id=pool.user_pool_id,
+                group_name=role_name,
+                description=f"Launchpad role: {role_name}",
+            )
+
+        for spec in DEMO_USERS:
+            user = cognito.CfnUserPoolUser(
+                self,
+                f"User-{spec['username']}",
+                user_pool_id=pool.user_pool_id,
+                username=spec["username"],
+                message_action="SUPPRESS",
+                user_attributes=[
+                    cognito.CfnUserPoolUser.AttributeTypeProperty(
+                        name="email", value=spec["email"]
+                    ),
+                    cognito.CfnUserPoolUser.AttributeTypeProperty(
+                        name="email_verified", value="true"
+                    ),
+                ],
+            )
+            attachment = cognito.CfnUserPoolUserToGroupAttachment(
+                self,
+                f"Attach-{spec['username']}",
+                user_pool_id=pool.user_pool_id,
+                group_name=spec["group"],
+                username=spec["username"],
+            )
+            attachment.add_dependency(user)
+
+        # ---- IAM: execution role assumed by AgentCore Runtime workloads ----
+        exec_role = iam.Role(
+            self,
+            "AgentExecutionRole",
+            role_name="launchpad-agent-execution-role",
+            assumed_by=iam.ServicePrincipal(
+                "bedrock-agentcore.amazonaws.com",
+                conditions={
+                    "StringEquals": {"aws:SourceAccount": self.account},
+                },
+            ),
+            description="Assumed by AgentCore Runtime/Harness workloads launched by Launchpad",
+        )
+        exec_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="BedrockModels",
+                actions=["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+                resources=["*"],
+            )
+        )
+        exec_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="AgentCoreDataPlane",
+                actions=[
+                    "bedrock-agentcore:CreateEvent",
+                    "bedrock-agentcore:GetEvent",
+                    "bedrock-agentcore:ListEvents",
+                    "bedrock-agentcore:ListSessions",
+                    "bedrock-agentcore:ListActors",
+                    "bedrock-agentcore:RetrieveMemoryRecords",
+                    "bedrock-agentcore:GetMemoryRecord",
+                    "bedrock-agentcore:ListMemoryRecords",
+                    "bedrock-agentcore:GetResourceApiKey",
+                    "bedrock-agentcore:GetResourceOauth2Token",
+                    "bedrock-agentcore:GetWorkloadAccessToken",
+                    "bedrock-agentcore:GetWorkloadAccessTokenForJWT",
+                    "bedrock-agentcore:GetWorkloadAccessTokenForUserId",
+                    "bedrock-agentcore:InvokeCodeInterpreter",
+                    "bedrock-agentcore:StartCodeInterpreterSession",
+                    "bedrock-agentcore:StopCodeInterpreterSession",
+                    "bedrock-agentcore:GetCodeInterpreterSession",
+                    "bedrock-agentcore:ConnectBrowserAutomationStream",
+                    "bedrock-agentcore:ConnectBrowserLiveViewStream",
+                    "bedrock-agentcore:StartBrowserSession",
+                    "bedrock-agentcore:StopBrowserSession",
+                    "bedrock-agentcore:GetBrowserSession",
+                ],
+                resources=["*"],
+            )
+        )
+        exec_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="EcrPull",
+                actions=[
+                    "ecr:GetDownloadUrlForLayer",
+                    "ecr:BatchGetImage",
+                ],
+                resources=[repo.repository_arn],
+            )
+        )
+        exec_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="EcrAuth",
+                actions=["ecr:GetAuthorizationToken"],
+                resources=["*"],
+            )
+        )
+        exec_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="Telemetry",
+                actions=[
+                    "logs:CreateLogGroup",
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents",
+                    "logs:DescribeLogGroups",
+                    "logs:DescribeLogStreams",
+                    "xray:PutTraceSegments",
+                    "xray:PutTelemetryRecords",
+                    "xray:GetSamplingRules",
+                    "xray:GetSamplingTargets",
+                    "cloudwatch:PutMetricData",
+                ],
+                resources=["*"],
+            )
+        )
+
+        # ---- outputs consumed by backend bootstrap ----
+        CfnOutput(self, "ArtifactsBucketName", value=artifacts.bucket_name)
+        CfnOutput(self, "EcrRepoName", value=repo.repository_name)
+        CfnOutput(self, "EcrRepoUri", value=repo.repository_uri)
+        CfnOutput(self, "CodeBuildProjectName", value=build_project.project_name)
+        CfnOutput(self, "CodeBuildRoleArn", value=build_project.role.role_arn)
+        CfnOutput(self, "UserPoolId", value=pool.user_pool_id)
+        CfnOutput(self, "UserPoolClientId", value=client.user_pool_client_id)
+        CfnOutput(self, "AgentExecutionRoleArn", value=exec_role.role_arn)

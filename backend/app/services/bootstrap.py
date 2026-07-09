@@ -1,0 +1,244 @@
+"""Idempotent AgentCore bootstrap.
+
+Reads the CDK stack outputs, ensures the account-singleton AgentCore
+resources (registry, memory) exist exactly once, and writes the resulting
+identifiers into ``config/launchpad.yaml``.
+
+Every ``ensure_*`` function is single-purpose and create-if-missing by
+name so later phases can add ``ensure_gateway()`` / ``ensure_policy_engine()``
+alongside without touching existing behaviour.
+"""
+
+import secrets
+import string
+import time
+from typing import Any
+
+import boto3
+import yaml
+
+from app.core.config import CONFIG_FILE, get_settings
+
+STACK_NAME = "launchpad-base"
+REGISTRY_NAME = "launchpad-registry"
+MEMORY_NAME = "launchpad_memory"  # AgentCore memory names disallow hyphens
+MEMORY_EVENT_EXPIRY_DAYS = 30
+
+DEMO_USERS = [
+    {"username": "river", "group": "platform-admin"},
+    {"username": "demo", "group": "hr-analyst"},
+]
+
+
+def _client(service: str, region: str):
+    return boto3.client(service, region_name=region)
+
+
+def get_stack_outputs(region: str, stack_name: str = STACK_NAME) -> dict[str, str]:
+    """CDK CfnOutputs as a flat dict; raises if the stack is absent."""
+    cfn = _client("cloudformation", region)
+    stacks = cfn.describe_stacks(StackName=stack_name)["Stacks"]
+    return {o["OutputKey"]: o["OutputValue"] for o in stacks[0].get("Outputs", [])}
+
+
+def ensure_registry(control: Any, name: str = REGISTRY_NAME) -> tuple[dict[str, str], bool]:
+    """Return ({id, arn}, created). Reuses an existing registry with the same name."""
+    paginator_items: list[dict[str, Any]] = []
+    token: str | None = None
+    while True:
+        kwargs = {"maxResults": 100} | ({"nextToken": token} if token else {})
+        page = control.list_registries(**kwargs)
+        paginator_items.extend(page.get("registries", []))
+        token = page.get("nextToken")
+        if not token:
+            break
+    for reg in paginator_items:
+        if reg.get("name") == name:
+            return {"id": reg["registryId"], "arn": reg["registryArn"]}, False
+    created = control.create_registry(
+        name=name,
+        description="AgentCore Launchpad asset catalog (agents / MCP tools / skills)",
+    )
+    # CreateRegistry returns only the ARN; the id is its final path segment.
+    arn = created["registryArn"]
+    return {"id": arn.split("/")[-1], "arn": arn}, True
+
+
+def ensure_memory(
+    control: Any,
+    name: str = MEMORY_NAME,
+    execution_role_arn: str | None = None,
+    wait: bool = True,
+) -> tuple[dict[str, str], bool]:
+    """Return ({id, arn}, created).
+
+    Creates short-term event storage plus two long-term strategies
+    (semantic facts + user preferences) used by the chat playground.
+    """
+    memories: list[dict[str, Any]] = []
+    token: str | None = None
+    while True:
+        kwargs = {"maxResults": 100} | ({"nextToken": token} if token else {})
+        page = control.list_memories(**kwargs)
+        memories.extend(page.get("memories", []))
+        token = page.get("nextToken")
+        if not token:
+            break
+    for mem in memories:
+        mem_id = mem.get("id") or mem.get("memoryId")
+        if mem_id and mem_id.startswith(f"{name}-"):
+            return {"id": mem_id, "arn": mem["arn"]}, False
+
+    params: dict[str, Any] = {
+        "name": name,
+        "description": "Launchpad shared memory — short-term events + long-term strategies",
+        "eventExpiryDuration": MEMORY_EVENT_EXPIRY_DAYS,
+        "memoryStrategies": [
+            {
+                "semanticMemoryStrategy": {
+                    "name": "semantic_facts",
+                    "namespaces": ["/facts/{actorId}"],
+                }
+            },
+            {
+                "userPreferenceMemoryStrategy": {
+                    "name": "user_preferences",
+                    "namespaces": ["/preferences/{actorId}"],
+                }
+            },
+        ],
+    }
+    if execution_role_arn:
+        params["memoryExecutionRoleArn"] = execution_role_arn
+    created = control.create_memory(**params)["memory"]
+    mem_id, arn = created["id"], created["arn"]
+    if wait:
+        _wait_memory_active(control, mem_id)
+    return {"id": mem_id, "arn": arn}, True
+
+
+def _wait_memory_active(control: Any, memory_id: str, timeout_s: int = 300) -> None:
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        status = control.get_memory(memoryId=memory_id)["memory"]["status"]
+        if status == "ACTIVE":
+            return
+        if status == "FAILED":
+            raise RuntimeError(f"memory {memory_id} entered FAILED state")
+        time.sleep(10)
+    raise TimeoutError(f"memory {memory_id} not ACTIVE after {timeout_s}s")
+
+
+def generate_password(length: int = 16) -> str:
+    alphabet = string.ascii_letters + string.digits
+    pw = [
+        secrets.choice(string.ascii_lowercase),
+        secrets.choice(string.ascii_uppercase),
+        secrets.choice(string.digits),
+    ]
+    pw += [secrets.choice(alphabet) for _ in range(length - len(pw))]
+    return "".join(pw)
+
+
+def ensure_demo_user_passwords(
+    cognito: Any, user_pool_id: str, existing: dict[str, Any] | None = None
+) -> tuple[dict[str, str], bool]:
+    """Set permanent passwords for demo users still in FORCE_CHANGE_PASSWORD.
+
+    Returns ({username: password}, changed). Existing known passwords are kept.
+    """
+    existing = existing or {}
+    passwords: dict[str, str] = dict(existing)
+    changed = False
+    for spec in DEMO_USERS:
+        username = spec["username"]
+        user = cognito.admin_get_user(UserPoolId=user_pool_id, Username=username)
+        if user["UserStatus"] == "CONFIRMED" and username in passwords:
+            continue
+        password = passwords.get(username) or generate_password()
+        cognito.admin_set_user_password(
+            UserPoolId=user_pool_id,
+            Username=username,
+            Password=password,
+            Permanent=True,
+        )
+        passwords[username] = password
+        changed = True
+    return passwords, changed
+
+
+def load_config() -> dict[str, Any]:
+    if CONFIG_FILE.is_file():
+        data = yaml.safe_load(CONFIG_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    return {}
+
+
+def merge_config(base: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
+    """Deep-merge update into base (update wins; nested dicts merged)."""
+    merged = dict(base)
+    for key, value in update.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = merge_config(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def write_config(update: dict[str, Any]) -> dict[str, Any]:
+    merged = merge_config(load_config(), update)
+    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG_FILE.write_text(
+        "# Generated by scripts/bootstrap.py — do not commit (gitignored).\n"
+        + yaml.safe_dump(merged, sort_keys=True, allow_unicode=True),
+        encoding="utf-8",
+    )
+    return merged
+
+
+def run_bootstrap(region: str | None = None) -> dict[str, Any]:
+    """Full bootstrap pass. Returns a summary of what was created vs reused."""
+    region = region or get_settings().region
+    outputs = get_stack_outputs(region)
+    control = _client("bedrock-agentcore-control", region)
+    cognito = _client("cognito-idp", region)
+    sts = _client("sts", region)
+
+    account_id = sts.get_caller_identity()["Account"]
+    registry, registry_created = ensure_registry(control)
+    memory, memory_created = ensure_memory(
+        control, execution_role_arn=outputs.get("AgentExecutionRoleArn")
+    )
+    existing_pw = (load_config().get("demo_users") or {}).get("passwords", {})
+    passwords, pw_changed = ensure_demo_user_passwords(
+        cognito, outputs["UserPoolId"], existing_pw
+    )
+
+    write_config(
+        {
+            "account_id": account_id,
+            "region": region,
+            "resources": {
+                "artifacts_bucket": outputs["ArtifactsBucketName"],
+                "ecr_repo": outputs["EcrRepoName"],
+                "ecr_repo_uri": outputs["EcrRepoUri"],
+                "codebuild_project": outputs["CodeBuildProjectName"],
+                "user_pool_id": outputs["UserPoolId"],
+                "user_pool_client_id": outputs["UserPoolClientId"],
+                "execution_role_arn": outputs["AgentExecutionRoleArn"],
+                "registry_id": registry["id"],
+                "registry_arn": registry["arn"],
+                "memory_id": memory["id"],
+                "memory_arn": memory["arn"],
+            },
+            "demo_users": {"passwords": passwords},
+        }
+    )
+    return {
+        "account_id": account_id,
+        "region": region,
+        "registry": {**registry, "created": registry_created},
+        "memory": {**memory, "created": memory_created},
+        "demo_passwords_set": pw_changed,
+        "stack_outputs": outputs,
+    }
