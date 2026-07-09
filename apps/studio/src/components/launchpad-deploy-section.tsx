@@ -2,7 +2,7 @@
  * Launchpad-specific addition (see LICENSE): deploy the generated flow through
  * the Launchpad platform's unified pipeline instead of studio's direct path.
  */
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Rocket } from 'lucide-react';
 import {
   deployToLaunchpad,
@@ -22,6 +22,15 @@ export function LaunchpadDeploySection({ getCode }: Props) {
   const [arn, setArn] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const timer = useRef<number | null>(null);
+  const alive = useRef(true);
+
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+      if (timer.current !== null) window.clearTimeout(timer.current);
+    };
+  }, []);
 
   const deploy = async () => {
     const code = getCode();
@@ -35,22 +44,31 @@ export function LaunchpadDeploySection({ getCode }: Props) {
     try {
       const result = await deployToLaunchpad(agentName, code);
       const poll = async () => {
-        const [agent, job] = await Promise.all([
-          getLaunchpadAgent(result.agent.id),
-          getLaunchpadJob(result.job_id),
-        ]);
-        setEvents(job.events ?? []);
-        if (agent.status === 'active') {
-          setStatus('active');
-          setArn(agent.arn);
-          return;
-        }
-        if (agent.status === 'failed') {
+        if (!alive.current) return;
+        try {
+          const [agent, job] = await Promise.all([
+            getLaunchpadAgent(result.agent.id),
+            getLaunchpadJob(result.job_id),
+          ]);
+          if (!alive.current) return;
+          setEvents(job.events ?? []);
+          if (agent.status === 'active') {
+            setStatus('active');
+            setArn(agent.arn);
+            return;
+          }
+          if (agent.status === 'failed') {
+            setStatus('failed');
+            setError(job.events?.slice(-1)[0]?.msg ?? 'deployment failed');
+            return;
+          }
+        } catch (err) {
+          if (!alive.current) return;
           setStatus('failed');
-          setError(job.events?.slice(-1)[0]?.msg ?? 'deployment failed');
+          setError(err instanceof Error ? err.message : String(err));
           return;
         }
-        timer.current = window.setTimeout(poll, 4000);
+        timer.current = window.setTimeout(() => void poll(), 4000);
       };
       void poll();
     } catch (err) {

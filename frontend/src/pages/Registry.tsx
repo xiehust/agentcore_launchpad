@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
-import { Btn, Chip, Panel, ViewHead } from "../components";
+import { Btn, Chip, ConfirmDialog, Panel, useToast, ViewHead } from "../components";
 import type { ChipTone } from "../components";
 
 type RecordType = "A2A" | "MCP" | "AGENT_SKILLS";
@@ -56,21 +56,26 @@ function descriptorExcerpt(record: RegistryRecord): string {
 export function Registry() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const [records, setRecords] = useState<RegistryRecord[]>([]);
+  const toast = useToast();
+  const [records, setRecords] = useState<RegistryRecord[] | null>(null);
   const [tab, setTab] = useState<RecordType>("A2A");
   const [selected, setSelected] = useState<RegistryRecord | null>(null);
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [confirmDisable, setConfirmDisable] = useState<RegistryRecord | null>(null);
 
   const load = useCallback(async () => {
     try {
       const res = await fetch("/api/registry/records");
-      if (!res.ok) return;
+      if (!res.ok) {
+        setRecords((prev) => prev ?? []);
+        return;
+      }
       const body = (await res.json()) as { records: RegistryRecord[] };
       setRecords(body.records);
     } catch {
-      /* backend offline */
+      setRecords((prev) => prev ?? []); // backend offline — show empty state
     }
   }, []);
 
@@ -114,7 +119,12 @@ export function Registry() {
         const updated = (await res.json()) as RegistryRecord;
         setSelected(updated);
         void load();
+      } else {
+        const env = (await res.json().catch(() => ({}))) as { message?: string };
+        toast(t("common.actionFailed", { msg: env.message ?? `HTTP ${res.status}` }));
       }
+    } catch (err) {
+      toast(t("common.actionFailed", { msg: String(err) }));
     } finally {
       setBusy(false);
     }
@@ -142,8 +152,10 @@ export function Registry() {
     }
   };
 
-  const visible = searching ? records : records.filter((r) => r.type === tab);
-  const counts = (type: RecordType) => records.filter((r) => r.type === type).length;
+  const loading = records === null;
+  const loaded = records ?? [];
+  const visible = searching ? loaded : loaded.filter((r) => r.type === tab);
+  const counts = (type: RecordType) => loaded.filter((r) => r.type === type).length;
 
   return (
     <section>
@@ -243,7 +255,14 @@ export function Registry() {
                     </tr>
                   );
                 })}
-                {visible.length === 0 && (
+                {loading && (
+                  <tr>
+                    <td colSpan={4} className="loading-line">
+                      {t("common.loading")}
+                    </td>
+                  </tr>
+                )}
+                {!loading && visible.length === 0 && (
                   <tr>
                     <td colSpan={4} className="dim mono" style={{ textAlign: "center" }}>
                       {t("registry.empty")}
@@ -314,7 +333,7 @@ export function Registry() {
                     </Btn>
                   )}
                   {selected.status === "APPROVED" && (
-                    <Btn disabled={busy} onClick={() => void action(selected, "disable")}>
+                    <Btn disabled={busy} onClick={() => setConfirmDisable(selected)}>
                       {t("registry.drawer.disable")}
                     </Btn>
                   )}
@@ -324,6 +343,18 @@ export function Registry() {
           </Panel>
         </div>
       </Panel>
+
+      <ConfirmDialog
+        open={confirmDisable !== null}
+        title={t("registry.confirmDisable.title")}
+        body={t("registry.confirmDisable.body", { name: confirmDisable?.name ?? "" })}
+        confirmLabel={t("registry.drawer.disable")}
+        onConfirm={() => {
+          if (confirmDisable) void action(confirmDisable, "disable");
+          setConfirmDisable(null);
+        }}
+        onCancel={() => setConfirmDisable(null)}
+      />
     </section>
   );
 }

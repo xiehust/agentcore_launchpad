@@ -32,8 +32,7 @@
   "status": {
     "active": "ACTIVE",
     "deploying": "DEPLOYING",
-    "failed": "FAILED",
-    "deleted": "DELETED"
+    "failed": "FAILED"
   },
   "overview": {
     "kicker": "// MISSION CONTROL",
@@ -47,12 +46,15 @@
       "none": "none yet",
       "inFlight": "{{count}} in flight",
       "breakdownEmpty": "0 agents · 0 tools · 0 skills",
-      "noRuns": "no runs yet"
+      "noRuns": "no runs yet",
+      "last24h": "last 24 h",
+      "breakdown": "{{agents}} agents · {{tools}} tools · {{skills}} skills",
+      "runCount": "{{count}} runs"
     },
     "health": {
       "title": "SERVICE HEALTH",
       "sub": "control plane",
-      "pending": "AWAITING BOOTSTRAP · PHASE 2+",
+      "pending": "AWAITING BOOTSTRAP",
       "activeCount": "ACTIVE · {{count}} agent(s)",
       "runtime": "Runtime",
       "gateway": "Gateway",
@@ -60,7 +62,8 @@
       "registry": "Registry",
       "policy": "Policy",
       "evaluation": "Evaluation",
-      "observability": "Observability"
+      "observability": "Observability",
+      "ready": "READY"
     },
     "feed": {
       "title": "LAUNCH FEED",
@@ -149,12 +152,12 @@
       "provision": "PROVISION",
       "deploy": "DEPLOY",
       "register": "REGISTER"
-    }
+    },
+    "launchFailedToast": "Launch failed at {{stage}}: {{msg}}"
   },
   "registry": {
     "kicker": "// DISCOVERY LAYER",
     "title": "Registry",
-    "meta": "AGENTCORE REGISTRY · SYNC PENDING",
     "metaLive": "AGENTCORE REGISTRY · launchpad-registry · SYNC ON",
     "searchPlaceholder": "Search records…",
     "searchResults": "SEARCH RESULTS",
@@ -187,18 +190,20 @@
       "submit": "SUBMIT",
       "approve": "APPROVE · PUBLISH",
       "disable": "DISABLE"
+    },
+    "confirmDisable": {
+      "title": "Disable record",
+      "body": "“{{name}}” will be set to DEPRECATED — a terminal state. To revive it later you must delete and recreate the record."
     }
   },
   "chat": {
     "kicker": "// LIVE CHANNEL",
     "title": "Chat Playground",
-    "meta": "SAME BACKEND AS PUBLIC API",
     "metaLive": "SAME BACKEND AS PUBLIC /v1 API · SSE STREAMING"
   },
   "evaluation": {
     "kicker": "// QUALITY TELEMETRY",
-    "title": "Evaluation & Optimization",
-    "meta": "BATCH + ONLINE · LLM-AS-A-JUDGE"
+    "title": "Evaluation & Optimization"
   },
   "governance": {
     "kicker": "// CONTROL PLANE",
@@ -237,10 +242,6 @@
       "empty": "NO DECISIONS YET — RUN A POLICY TEST"
     }
   },
-  "common": {
-    "comingSoon": "COMING SOON",
-    "phaseTag": "PLANNED · PHASE {{phase}}"
-  },
   "apiErrors": {
     "agent.name_exists": "An agent with this name already exists",
     "agent.method_not_available": "This creation method ships in a later phase",
@@ -261,7 +262,6 @@
     "toolCalled": "TOOL CALLED",
     "memorySaved": "memory.create_event — turn saved to short-term",
     "traceTitle": "TRACE",
-    "tracePhase9": "phase 9",
     "tracePlaceholder": "END-TO-END TRACE RAIL ARRIVES WITH OBSERVABILITY (PHASE 9)",
     "memoryTitle": "SESSION MEMORY",
     "shortTermEvents": "Short-term events",
@@ -274,7 +274,11 @@
     "keyEnabled": "enabled ✓",
     "keyDisabled": "disabled",
     "traceLoad": "LOAD TRACE",
-    "traceEmpty": "NO SPANS YET — TRACES LAND IN ~1 MIN, RELOAD"
+    "traceEmpty": "NO SPANS YET — TRACES LAND IN ~1 MIN, RELOAD",
+    "confirmDisableKey": {
+      "title": "Disable API key",
+      "body": "Clients using “{{name}}” will start receiving 401s immediately. You can re-enable it later."
+    }
   },
   "evalPage": {
     "metaLive": "BATCH + INSIGHTS · LLM-AS-A-JUDGE · 1 BATCH / ACCOUNT — QUEUE MANAGED",
@@ -315,7 +319,8 @@
       "title": "INSIGHTS — FAILURE TRIAGE",
       "sub": "failure analysis · user intents",
       "empty": "RUN INSIGHTS ON A COMPLETED RUN'S SESSIONS"
-    }
+    },
+    "runFailedToast": "Eval run failed — {{agent}}: {{msg}}"
   },
   "expPage": {
     "title": "EXPERIMENTS",
@@ -331,6 +336,15 @@
     "ramp": "RAMP",
     "cleanup": "CLEANUP",
     "pickChallenger": "pick challenger agent…",
-    "startCanary": "START CANARY 90/10"
+    "startCanary": "START CANARY 90/10",
+    "confirmCleanup": {
+      "title": "Clean up experiment",
+      "body": "This deletes the experiment's AWS resources (challenger runtime, gateway targets, A/B tests, online evaluators). This cannot be undone."
+    }
+  },
+  "common": {
+    "cancel": "Cancel",
+    "loading": "LOADING ▸",
+    "actionFailed": "Action failed: {{msg}}"
   }
 }

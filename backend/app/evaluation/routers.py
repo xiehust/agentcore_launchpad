@@ -7,7 +7,7 @@ import json
 from typing import Any
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
@@ -26,7 +26,17 @@ router = APIRouter(prefix="/api/eval", tags=["evaluation"])
 class DatasetCreate(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     locale: str = "en"
-    items: list[dict[str, Any]] = Field(min_length=1)
+    items: list[dict[str, Any]] = Field(min_length=1, max_length=200)
+
+    @field_validator("items")
+    @classmethod
+    def _cap_item_size(cls, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        for item in items:
+            if len(str(item.get("prompt", ""))) > 8000:
+                raise ValueError("dataset item prompt exceeds 8000 characters")
+            if len(json.dumps(item, ensure_ascii=False)) > 16000:
+                raise ValueError("dataset item exceeds 16000 characters serialized")
+        return items
 
 
 def _dataset_out(dataset: EvalDataset) -> dict[str, Any]:

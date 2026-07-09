@@ -15,6 +15,7 @@
   --s3:#C98500;            /* series 3 yellow */
   --s5:#9085E9;            /* series 5 violet (trace spans) */
   --good:#0CA30C; --warn:#FAB219; --serious:#EC835A; --crit:#D03B3B;
+  --crit-text:#DD5252;     /* crit as TEXT on --panel: 4.61:1 (AA); #D03B3B = 3.73:1 is fills/borders only */
   --grid:#212823;
   --mono:"IBM Plex Mono",ui-monospace,monospace;
   --sans:"Archivo Variable","Archivo",system-ui,sans-serif;

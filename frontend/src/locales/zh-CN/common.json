@@ -32,8 +32,7 @@
   "status": {
     "active": "运行中",
     "deploying": "部署中",
-    "failed": "失败",
-    "deleted": "已删除"
+    "failed": "失败"
   },
   "overview": {
     "kicker": "// 任务控制中心",
@@ -47,12 +46,15 @@
       "none": "暂无",
       "inFlight": "{{count}} 个进行中",
       "breakdownEmpty": "0 个 Agent · 0 个工具 · 0 个技能",
-      "noRuns": "暂无评估运行"
+      "noRuns": "暂无评估运行",
+      "last24h": "近 24 小时",
+      "breakdown": "{{agents}} 个 Agent · {{tools}} 个工具 · {{skills}} 个技能",
+      "runCount": "{{count}} 次运行"
     },
     "health": {
       "title": "服务健康",
       "sub": "控制平面",
-      "pending": "等待引导 · 第 2+ 阶段",
+      "pending": "等待引导初始化",
       "activeCount": "运行中 · {{count}} 个 Agent",
       "runtime": "Runtime",
       "gateway": "Gateway",
@@ -60,7 +62,8 @@
       "registry": "Registry",
       "policy": "Policy",
       "evaluation": "Evaluation",
-      "observability": "Observability"
+      "observability": "Observability",
+      "ready": "就绪"
     },
     "feed": {
       "title": "发布动态",
@@ -149,12 +152,12 @@
       "provision": "供给",
       "deploy": "部署",
       "register": "注册"
-    }
+    },
+    "launchFailedToast": "部署在 {{stage}} 阶段失败:{{msg}}"
   },
   "registry": {
     "kicker": "// 发现层",
     "title": "注册中心",
-    "meta": "AGENTCORE REGISTRY · 同步待接入",
     "metaLive": "AGENTCORE REGISTRY · launchpad-registry · 同步开启",
     "searchPlaceholder": "搜索记录……",
     "searchResults": "搜索结果",
@@ -187,18 +190,20 @@
       "submit": "提交",
       "approve": "批准 · 发布",
       "disable": "停用"
+    },
+    "confirmDisable": {
+      "title": "停用记录",
+      "body": "“{{name}}”将被置为 DEPRECATED——这是终态。若要恢复,只能删除后重新创建该记录。"
     }
   },
   "chat": {
     "kicker": "// 实时频道",
     "title": "对话演练场",
-    "meta": "与公开 API 共用同一后端",
     "metaLive": "与公开 /v1 API 共用后端 · SSE 流式"
   },
   "evaluation": {
     "kicker": "// 质量遥测",
-    "title": "评估与优化",
-    "meta": "批量 + 在线 · LLM 评审"
+    "title": "评估与优化"
   },
   "governance": {
     "kicker": "// 控制平面",
@@ -237,10 +242,6 @@
       "empty": "暂无决策 — 先运行一次策略测试"
     }
   },
-  "common": {
-    "comingSoon": "即将上线",
-    "phaseTag": "规划中 · 第 {{phase}} 阶段"
-  },
   "apiErrors": {
     "agent.name_exists": "同名 Agent 已存在",
     "agent.method_not_available": "该创建方式将在后续阶段开放",
@@ -261,7 +262,6 @@
     "toolCalled": "已调用工具",
     "memorySaved": "memory.create_event — 本轮已存入短期记忆",
     "traceTitle": "链路追踪",
-    "tracePhase9": "第 9 阶段",
     "tracePlaceholder": "端到端链路追踪将随可观测性上线(第 9 阶段)",
     "memoryTitle": "会话记忆",
     "shortTermEvents": "短期事件",
@@ -274,7 +274,11 @@
     "keyEnabled": "已启用 ✓",
     "keyDisabled": "已停用",
     "traceLoad": "加载链路",
-    "traceEmpty": "暂无 SPAN — 链路约 1 分钟后落地,请重试"
+    "traceEmpty": "暂无 SPAN — 链路约 1 分钟后落地,请重试",
+    "confirmDisableKey": {
+      "title": "停用 API 密钥",
+      "body": "使用“{{name}}”的客户端将立即收到 401。之后可以重新启用。"
+    }
   },
   "evalPage": {
     "metaLive": "批量 + 洞察 · LLM 评审 · 每账户 1 个批任务 — 队列托管",
@@ -315,7 +319,8 @@
       "title": "洞察 — 失败归因",
       "sub": "失败分析 · 用户意图",
       "empty": "对已完成运行的会话执行洞察"
-    }
+    },
+    "runFailedToast": "评估运行失败 — {{agent}}:{{msg}}"
   },
   "expPage": {
     "title": "实验",
@@ -331,6 +336,15 @@
     "ramp": "放量",
     "cleanup": "清理",
     "pickChallenger": "选择挑战者 Agent……",
-    "startCanary": "启动金丝雀 90/10"
+    "startCanary": "启动金丝雀 90/10",
+    "confirmCleanup": {
+      "title": "清理实验",
+      "body": "将删除该实验的 AWS 资源(挑战者运行时、网关目标、A/B 测试、在线评估器),此操作不可撤销。"
+    }
+  },
+  "common": {
+    "cancel": "取消",
+    "loading": "加载中 ▸",
+    "actionFailed": "操作失败:{{msg}}"
   }
 }

@@ -58,6 +58,7 @@ export async function getLaunchpadAgent(agentId: string): Promise<{
   deployments?: { stages: { name: string; status: string; detail: string }[] }[];
 }> {
   const res = await fetch(`${BASE}/agents/${agentId}`);
+  if (!res.ok) throw new Error(`Launchpad agent poll failed (${res.status})`);
   return res.json();
 }
 
@@ -66,5 +67,6 @@ export async function getLaunchpadJob(jobId: string): Promise<{
   events: LaunchpadJobEvent[];
 }> {
   const res = await fetch(`${BASE}/jobs/${jobId}`);
+  if (!res.ok) throw new Error(`Launchpad job poll failed (${res.status})`);
   return res.json();
 }

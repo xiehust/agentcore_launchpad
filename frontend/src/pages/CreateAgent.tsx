@@ -1,9 +1,9 @@
 import type { CSSProperties } from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
-import { Btn, Chip, Panel, ViewHead } from "../components";
+import { Btn, Chip, Panel, useToast, ViewHead } from "../components";
 import type { DeploymentInfo, JobInfo, StageInfo } from "../lib/api";
 import { api, ApiError } from "../lib/api";
 
@@ -24,6 +24,7 @@ type Method = "harness" | "zip_runtime" | "container";
 
 export function CreateAgent() {
   const { t } = useTranslation();
+  const toast = useToast();
   const [params] = useSearchParams();
   const prefillGateway = params.get("gateway");
   const prefillSkill = params.get("skill");
@@ -62,17 +63,30 @@ export function CreateAgent() {
   const [job, setJob] = useState<JobInfo | null>(null);
   const [agentStatus, setAgentStatus] = useState<string>("deploying");
 
+  const failureToasted = useRef(false);
   const poll = useCallback(async () => {
     if (!launch) return;
     try {
       const agent = await api.getAgent(launch.agentId);
-      setAgentStatus(agent.status);
       setDeployment(agent.deployments?.[0] ?? null);
       setJob(await api.getJob(launch.jobId));
+      if (agent.status === "failed" && !failureToasted.current) {
+        failureToasted.current = true;
+        const failedStage = (agent.deployments?.[0]?.stages ?? []).find(
+          (s) => s.status === "failed",
+        );
+        toast(
+          t("create.launchFailedToast", {
+            stage: failedStage?.name ?? "deploy",
+            msg: (failedStage?.detail ?? "").slice(0, 120),
+          }),
+        );
+      }
+      setAgentStatus(agent.status);
     } catch {
       /* transient poll errors are retried on the next tick */
     }
-  }, [launch]);
+  }, [launch, t, toast]);
 
   useEffect(() => {
     if (!launch || agentStatus === "active" || agentStatus === "failed") return;
@@ -102,6 +116,7 @@ export function CreateAgent() {
           ? { env: { LAUNCHPAD_MCP_SERVERS: mcpServers.trim() } }
           : {}),
       });
+      failureToasted.current = false;
       setLaunch({ agentId: res.agent.id, jobId: res.job_id });
       setAgentStatus("deploying");
       setStep(3);

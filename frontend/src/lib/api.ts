@@ -83,6 +83,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
+export interface OverviewInfo {
+  registry_assets: { agents: number; tools: number; skills: number; total: number };
+  active_sessions: number;
+  eval_pass_rate: number | null;
+  eval_runs: number;
+  services: Record<string, boolean>;
+  service_detail: Record<string, string>;
+}
+
 export const api = {
   createAgent: (spec: AgentSpecInput) =>
     request<{ agent: AgentInfo; job_id: string; deployment_id: string }>("/api/agents", {
@@ -90,6 +99,7 @@ export const api = {
       body: JSON.stringify(spec),
     }),
   listAgents: () => request<{ agents: AgentInfo[] }>("/api/agents"),
+  getOverview: () => request<OverviewInfo>("/api/overview"),
   getAgent: (id: string) => request<AgentInfo>(`/api/agents/${id}`),
   getJob: (id: string) => request<JobInfo>(`/api/jobs/${id}`),
   invokeAgent: (id: string, prompt: string, sessionId?: string) =>

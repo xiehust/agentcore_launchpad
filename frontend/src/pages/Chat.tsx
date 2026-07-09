@@ -2,7 +2,7 @@ import type { CSSProperties } from "react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { Btn, Chip, Panel, ViewHead } from "../components";
+import { Btn, Chip, ConfirmDialog, Panel, ViewHead } from "../components";
 import type { AgentInfo } from "../lib/api";
 import { api } from "../lib/api";
 
@@ -222,6 +222,12 @@ export function Chat() {
       method: "POST",
     });
     void loadKeys();
+  };
+
+  const [confirmKeyDisable, setConfirmKeyDisable] = useState<KeyInfo | null>(null);
+  const requestToggleKey = (key: KeyInfo) => {
+    if (key.enabled) setConfirmKeyDisable(key);
+    else void toggleKey(key);
   };
 
   const agent = agents.find((a) => a.id === agentId);
@@ -459,7 +465,7 @@ export function Chat() {
                     type="button"
                     className={`selchip${key.enabled ? " on" : ""}`}
                     style={{ cursor: "pointer" }}
-                    onClick={() => void toggleKey(key)}
+                    onClick={() => requestToggleKey(key)}
                   >
                     {key.enabled ? t("chatPage.keyEnabled") : t("chatPage.keyDisabled")}
                   </button>
@@ -469,6 +475,18 @@ export function Chat() {
           </Panel>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmKeyDisable !== null}
+        title={t("chatPage.confirmDisableKey.title")}
+        body={t("chatPage.confirmDisableKey.body", { name: confirmKeyDisable?.name ?? "" })}
+        confirmLabel={t("chatPage.keyDisabled")}
+        onConfirm={() => {
+          if (confirmKeyDisable) void toggleKey(confirmKeyDisable);
+          setConfirmKeyDisable(null);
+        }}
+        onCancel={() => setConfirmKeyDisable(null)}
+      />
     </section>
   );
 }

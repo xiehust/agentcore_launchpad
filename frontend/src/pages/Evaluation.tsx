@@ -1,8 +1,8 @@
 import type { CSSProperties } from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { Btn, Chip, Panel, ViewHead } from "../components";
+import { Btn, Chip, ConfirmDialog, Panel, useToast, ViewHead } from "../components";
 import type { AgentInfo } from "../lib/api";
 import { api } from "../lib/api";
 
@@ -59,6 +59,7 @@ function ExperimentPanel({
   const { t } = useTranslation();
   const exp = experiments[0] ?? null;
   const [challengerId, setChallengerId] = useState("");
+  const [confirmCleanup, setConfirmCleanup] = useState(false);
   const verdict = exp?.artifacts.verdict;
   const canary = exp?.artifacts.canary;
   const canaryWeights = canary?.after_weights ?? canary?.weights;
@@ -199,7 +200,7 @@ function ExperimentPanel({
                   <Btn disabled={busy} onClick={() => void onAction(exp.id, "ramp")}>
                     {t("expPage.ramp")} ▸
                   </Btn>
-                  <Btn disabled={busy} onClick={() => void onAction(exp.id, "cleanup")}>
+                  <Btn disabled={busy} onClick={() => setConfirmCleanup(true)}>
                     {t("expPage.cleanup")}
                   </Btn>
                 </div>
@@ -238,6 +239,17 @@ function ExperimentPanel({
                 .join("\n")}
             </div>
           )}
+          <ConfirmDialog
+            open={confirmCleanup}
+            title={t("expPage.confirmCleanup.title")}
+            body={t("expPage.confirmCleanup.body")}
+            confirmLabel={t("expPage.cleanup")}
+            onConfirm={() => {
+              setConfirmCleanup(false);
+              void onAction(exp.id, "cleanup");
+            }}
+            onCancel={() => setConfirmCleanup(false)}
+          />
         </>
       )}
     </Panel>
@@ -280,6 +292,7 @@ interface ExperimentInfo {
 
 export function Evaluation() {
   const { t } = useTranslation();
+  const toast = useToast();
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [evaluators, setEvaluators] = useState<EvaluatorInfo[]>([]);
@@ -293,6 +306,7 @@ export function Evaluation() {
   const [experiments, setExperiments] = useState<ExperimentInfo[]>([]);
   const [expBusy, setExpBusy] = useState(false);
 
+  const failedSeen = useRef<Set<string> | null>(null);
   const refresh = useCallback(async () => {
     try {
       const [runsRes, queueRes] = await Promise.all([
@@ -301,6 +315,15 @@ export function Evaluation() {
       ]);
       if (runsRes.ok) {
         const body = (await runsRes.json()) as { runs: RunInfo[] };
+        const firstLoad = failedSeen.current === null;
+        const seen = (failedSeen.current ??= new Set());
+        body.runs.forEach((run) => {
+          if (run.status !== "failed" || seen.has(run.id)) return;
+          seen.add(run.id);
+          if (!firstLoad) {
+            toast(t("evalPage.runFailedToast", { agent: run.agent_name, msg: run.error ?? "" }));
+          }
+        });
         setRuns(body.runs);
         setSelectedRun(
           (prev) => body.runs.find((r) => r.id === prev?.id) ?? body.runs[0] ?? null,
@@ -314,7 +337,7 @@ export function Evaluation() {
     } catch {
       /* backend offline */
     }
-  }, []);
+  }, [t, toast]);
 
   useEffect(() => {
     api
@@ -581,12 +604,18 @@ export function Evaluation() {
           onAction={async (expId, action, challengerId) => {
             setExpBusy(true);
             try {
-              await fetch(`/api/experiments/${expId}/action`, {
+              const res = await fetch(`/api/experiments/${expId}/action`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ action, challenger_agent_id: challengerId }),
               });
+              if (!res.ok) {
+                const env = (await res.json().catch(() => ({}))) as { message?: string };
+                toast(t("common.actionFailed", { msg: env.message ?? `HTTP ${res.status}` }));
+              }
               void refresh();
+            } catch (err) {
+              toast(t("common.actionFailed", { msg: String(err) }));
             } finally {
               setExpBusy(false);
             }

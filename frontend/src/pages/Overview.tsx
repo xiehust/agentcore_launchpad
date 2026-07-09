@@ -5,7 +5,7 @@ import { Link } from "react-router-dom";
 
 import { Chip, DataTable, Panel, StatTile, ViewHead } from "../components";
 import type { ChipTone } from "../components";
-import type { AgentInfo } from "../lib/api";
+import type { AgentInfo, OverviewInfo } from "../lib/api";
 import { api } from "../lib/api";
 
 const SERVICES = [
@@ -25,8 +25,8 @@ const METHOD_CHIP: Record<string, { tone: ChipTone; icon: string; label: string 
   studio: { tone: "aqua", icon: "⬡", label: "STUDIO" },
 };
 
-function useAgents(intervalMs = 5000): AgentInfo[] {
-  const [agents, setAgents] = useState<AgentInfo[]>([]);
+function useAgents(intervalMs = 5000): AgentInfo[] | null {
+  const [agents, setAgents] = useState<AgentInfo[] | null>(null);
   useEffect(() => {
     let alive = true;
     const load = () =>
@@ -36,7 +36,7 @@ function useAgents(intervalMs = 5000): AgentInfo[] {
           if (alive) setAgents(res.agents);
         })
         .catch(() => {
-          /* backend offline — feed stays empty */
+          if (alive) setAgents((prev) => prev ?? []); // backend offline — empty state
         });
     load();
     const timer = setInterval(load, intervalMs);
@@ -46,6 +46,29 @@ function useAgents(intervalMs = 5000): AgentInfo[] {
     };
   }, [intervalMs]);
   return agents;
+}
+
+function useOverview(intervalMs = 30000): OverviewInfo | null {
+  const [info, setInfo] = useState<OverviewInfo | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      api
+        .getOverview()
+        .then((res) => {
+          if (alive) setInfo(res);
+        })
+        .catch(() => {
+          /* backend offline — tiles keep last values */
+        });
+    load();
+    const timer = setInterval(load, intervalMs);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [intervalMs]);
+  return info;
 }
 
 function ageOf(iso: string | null, now: number): string {
@@ -72,9 +95,13 @@ function stageSummary(agent: AgentInfo): string {
 
 export function Overview() {
   const { t } = useTranslation();
-  const agents = useAgents();
+  const agentsState = useAgents();
+  const feedLoading = agentsState === null;
+  const agents = agentsState ?? [];
+  const info = useOverview();
   const now = Date.now();
   const active = agents.filter((a) => a.status === "active").length;
+  const assets = info?.registry_assets;
 
   return (
     <section>
@@ -97,20 +124,34 @@ export function Overview() {
         />
         <StatTile
           label={t("overview.tiles.activeSessions")}
-          value="0"
-          foot={t("overview.tiles.none")}
+          value={info ? String(info.active_sessions) : "—"}
+          foot={t("overview.tiles.last24h")}
           style={{ "--i": 1 } as CSSProperties}
         />
         <StatTile
           label={t("overview.tiles.registryAssets")}
-          value="0"
-          foot={t("overview.tiles.breakdownEmpty")}
+          value={assets ? String(assets.total) : "—"}
+          foot={
+            assets && assets.total > 0
+              ? t("overview.tiles.breakdown", {
+                  agents: assets.agents,
+                  tools: assets.tools,
+                  skills: assets.skills,
+                })
+              : t("overview.tiles.breakdownEmpty")
+          }
           style={{ "--i": 2 } as CSSProperties}
         />
         <StatTile
           label={t("overview.tiles.evalPassRate")}
-          value="—"
-          foot={t("overview.tiles.noRuns")}
+          value={
+            info?.eval_pass_rate != null ? `${Math.round(info.eval_pass_rate * 100)}%` : "—"
+          }
+          foot={
+            info && info.eval_runs > 0
+              ? t("overview.tiles.runCount", { count: info.eval_runs })
+              : t("overview.tiles.noRuns")
+          }
           style={{ "--i": 3 } as CSSProperties}
         />
       </div>
@@ -134,9 +175,15 @@ export function Overview() {
             ]}
             isEmpty={agents.length === 0}
             empty={
-              <Link to="/create" style={{ color: "var(--ink-3)" }}>
-                {t("overview.feed.empty")}
-              </Link>
+              feedLoading ? (
+                <span className="loading-line" style={{ padding: 0 }}>
+                  {t("common.loading")}
+                </span>
+              ) : (
+                <Link to="/create" style={{ color: "var(--ink-3)" }}>
+                  {t("overview.feed.empty")}
+                </Link>
+              )
             }
           >
             {agents.map((agent) => {
@@ -182,17 +229,23 @@ export function Overview() {
           style={{ "--i": 5 } as CSSProperties}
         >
           <div className="health">
-            {SERVICES.map((svc) => (
-              <div className="row" key={svc}>
-                <span className={`led ${svc === "runtime" && active > 0 ? "g" : "off"}`}></span>
-                <span className="nm">{t(`overview.health.${svc}`)}</span>
-                <span className="st">
-                  {svc === "runtime" && active > 0
-                    ? t("overview.health.activeCount", { count: active })
-                    : t("overview.health.pending")}
-                </span>
-              </div>
-            ))}
+            {SERVICES.map((svc) => {
+              const ready = svc === "runtime" ? active > 0 : Boolean(info?.services[svc]);
+              const detail = svc === "runtime" ? "" : (info?.service_detail[svc] ?? "");
+              return (
+                <div className="row" key={svc}>
+                  <span className={`led ${ready ? "g" : "off"}`}></span>
+                  <span className="nm">{t(`overview.health.${svc}`)}</span>
+                  <span className="st">
+                    {svc === "runtime" && active > 0
+                      ? t("overview.health.activeCount", { count: active })
+                      : ready
+                        ? `${t("overview.health.ready")}${detail ? ` · ${detail}` : ""}`
+                        : t("overview.health.pending")}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </Panel>
       </div>

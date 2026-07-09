@@ -9,6 +9,11 @@ export default [
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
+    // node-side evidence tooling (playwright screenshot runs), not app code
+    files: ["scripts/**/*.mjs"],
+    languageOptions: { ecmaVersion: 2022, globals: { ...globals.node, ...globals.browser } },
+  },
+  {
     files: ["**/*.{ts,tsx}"],
     languageOptions: {
       ecmaVersion: 2022,

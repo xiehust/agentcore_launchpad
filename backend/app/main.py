@@ -18,6 +18,7 @@ from app.routers.agents import router as agents_router
 from app.routers.apikeys import router as apikeys_router
 from app.routers.chat import router as chat_router
 from app.routers.governance import router as governance_router
+from app.routers.overview import router as overview_router
 from app.routers.public_api import router as public_router
 from app.routers.registry import router as registry_router
 from app.routers.tools import router as tools_router
@@ -50,6 +51,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     )
     register_error_handlers(app)
     init_db()
+    app.include_router(overview_router)
     app.include_router(agents_router)
     app.include_router(tools_router)
     app.include_router(registry_router)

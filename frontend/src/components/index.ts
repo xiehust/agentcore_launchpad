@@ -1,5 +1,8 @@
 export { Btn } from "./Btn";
 export { Chip, type ChipTone } from "./Chip";
+export { ConfirmDialog } from "./ConfirmDialog";
+export { ToastProvider } from "./Toast";
+export { useToast } from "./toast-context";
 export { DataTable, type Column } from "./DataTable";
 export { Kicker } from "./Kicker";
 export { Panel } from "./Panel";

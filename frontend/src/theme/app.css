@@ -87,7 +87,7 @@ main{padding:26px 28px 60px;max-width:1460px}
 .chip i{font-style:normal;font-size:9px;line-height:1}
 .chip.good{color:var(--good);border-color:rgba(12,163,12,.4)}
 .chip.warn{color:var(--warn);border-color:rgba(250,178,25,.35)}
-.chip.crit{color:var(--crit);border-color:rgba(208,59,59,.45)}
+.chip.crit{color:var(--crit-text);border-color:rgba(208,59,59,.45)}
 .chip.muted{color:var(--ink-3)}
 .chip.amber{color:var(--amber);border-color:rgba(255,176,0,.4)}
 .chip.blue{color:var(--s1);border-color:rgba(57,135,229,.4)}
@@ -186,11 +186,11 @@ td.pri{color:var(--ink);font-weight:600}
 .pstage .node{width:30px;height:30px;margin:0 auto 10px;border:2px solid var(--line-2);border-radius:50%;display:grid;place-items:center;font-family:var(--mono);font-size:11px;background:var(--panel);position:relative;z-index:1;color:var(--ink-3)}
 .pstage.done .node{border-color:var(--good);color:var(--good)}
 .pstage.now .node{border-color:var(--amber);color:var(--amber);box-shadow:0 0 0 4px var(--amber-soft);animation:pulse 1.6s infinite}
-.pstage.fail .node{border-color:var(--crit);color:var(--crit)}
+.pstage.fail .node{border-color:var(--crit);color:var(--crit-text)}
 .pstage .pn{font-size:11px;font-weight:700;letter-spacing:.1em}
 .pstage .pt{font-family:var(--mono);font-size:9.5px;color:var(--ink-3);margin-top:3px}
 .pstage.now .pn{color:var(--amber)}
-.pstage.fail .pn{color:var(--crit)}
+.pstage.fail .pn{color:var(--crit-text)}
 
 /* ================= registry ================= */
 .tabs{display:flex;gap:0;border-bottom:1px solid var(--line);margin-bottom:0}
@@ -272,8 +272,27 @@ td.pri{color:var(--ink);font-weight:600}
 .dlog .who{color:var(--s1)}
 .dlog .res{color:var(--ink-2);flex:1}
 
+/* ================= toasts & confirm ================= */
+.toasts{position:fixed;right:18px;bottom:18px;display:flex;flex-direction:column;gap:8px;z-index:60;max-width:420px}
+.toast{display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--line-2);border-left:3px solid var(--ink-3);padding:10px 12px;font-family:var(--mono);font-size:11px;color:var(--ink-2);box-shadow:0 12px 40px -12px rgba(0,0,0,.6);animation:toast-in .18s ease-out}
+.toast.crit{border-left-color:var(--crit)} .toast.crit .toast-icon{color:var(--crit-text)}
+.toast.warn{border-left-color:var(--serious)} .toast.warn .toast-icon{color:var(--serious)}
+.toast.good{border-left-color:var(--good)} .toast.good .toast-icon{color:var(--good)}
+.toast-x{margin-left:auto;background:none;border:0;color:var(--ink-3);cursor:pointer;font-size:10px;padding:2px}
+.toast-x:hover{color:var(--ink)}
+@keyframes toast-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.confirm-backdrop{position:fixed;inset:0;background:rgba(10,12,11,.72);display:grid;place-items:center;z-index:70}
+.confirm-box{background:var(--panel);border:1px solid var(--amber);max-width:440px;padding:20px 22px;box-shadow:0 24px 80px -24px rgba(0,0,0,.8)}
+.confirm-title{font-family:var(--mono);font-size:11px;letter-spacing:.14em;color:var(--amber);margin-bottom:10px}
+.confirm-body{font-size:13px;color:var(--ink-2);line-height:1.6;margin-bottom:16px}
+.confirm-actions{display:flex;justify-content:flex-end;gap:8px}
+
+/* ================= keyboard focus ================= */
+a:focus-visible,button:focus-visible,.btn:focus-visible,.selchip:focus-visible,.method:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+
 /* ================= misc ================= */
 .empty{padding:26px 16px;text-align:center;font-family:var(--mono);font-size:11px;color:var(--ink-3);letter-spacing:.08em}
+.loading-line{padding:26px 16px;text-align:center;font-family:var(--mono);font-size:11px;color:var(--ink-3);letter-spacing:.12em;animation:pulse 1.4s ease-in-out infinite}
 footer{margin-top:34px;display:flex;gap:14px;align-items:center;font-family:var(--mono);font-size:9.5px;color:var(--ink-3);letter-spacing:.1em}
 footer .sep{color:var(--line-2)}
 @media(max-width:1180px){.tiles{grid-template-columns:repeat(2,1fr)}.grid-2,.reg-grid,.chat-grid,.eval-grid,.gov-grid,.cfg-grid{grid-template-columns:1fr}.methods{grid-template-columns:1fr}}

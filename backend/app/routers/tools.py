@@ -119,11 +119,47 @@ class BrowserDemoRequest(BaseModel):
     url: str = Field(default="https://example.com", max_length=2000)
 
 
+_BLOCKED_HOSTS = ("localhost", "metadata.google.internal")
+
+
+def _validate_demo_url(url: str) -> None:
+    """The demo browser runs in AgentCore's cloud sandbox (not our VPC), but
+    still refuse non-web schemes and internal/metadata targets — resolve the
+    host and judge the ACTUAL IPs so decimal/hex/octal/IPv6 encodings and DNS
+    names for private ranges can't slip through (defense in depth)."""
+    import ipaddress
+    import socket
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    blocked = (
+        parsed.scheme not in ("http", "https")
+        or not host
+        or host in _BLOCKED_HOSTS
+        or host.endswith(".internal")
+    )
+    if not blocked:
+        try:
+            infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+            addresses = [ipaddress.ip_address(info[4][0]) for info in infos]
+        except (OSError, ValueError):
+            addresses = []  # unresolvable — let the sandbox browser fail it
+        blocked = any(
+            ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+            or ip.is_multicast or ip.is_unspecified
+            for ip in addresses
+        )
+    if blocked:
+        raise AppError("tools.url_blocked", f"url not allowed for the browser demo: {url}")
+
+
 @router.post("/demos/browser")
 def demo_browser(req: BrowserDemoRequest) -> dict[str, Any]:
     from bedrock_agentcore.tools import BrowserClient
     from playwright.sync_api import sync_playwright
 
+    _validate_demo_url(req.url)
     settings = get_settings()
     client = BrowserClient(region=settings.region)
     started = time.monotonic()
