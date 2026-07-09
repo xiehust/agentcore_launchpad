@@ -59,6 +59,31 @@ class Deployment(Base):
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
+class ChatSession(Base):
+    __tablename__ = "chat_sessions"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"), index=True)
+    session_id: Mapped[str] = mapped_column(String(80), index=True)
+    actor_id: Mapped[str] = mapped_column(String(64), default="river")
+    turns: Mapped[int] = mapped_column(default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    last_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+
+class ApiKey(Base):
+    __tablename__ = "api_keys"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    name: Mapped[str] = mapped_column(String(64))
+    prefix: Mapped[str] = mapped_column(String(16))  # display only, e.g. lp_live_ab12
+    key_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # sha256
+    enabled: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class Job(Base):
     __tablename__ = "jobs"
 

@@ -195,7 +195,8 @@
     "title": "对话演练场",
     "meta": "与公开 API 共用同一后端",
     "placeholderTitle": "演练场",
-    "placeholderBody": "带会话记忆、工具卡片与链路追踪的流式对话将在第 8 阶段上线。"
+    "placeholderBody": "带会话记忆、工具卡片与链路追踪的流式对话将在第 8 阶段上线。",
+    "metaLive": "与公开 /v1 API 共用后端 · SSE 流式"
   },
   "evaluation": {
     "kicker": "// 质量遥测",
@@ -240,5 +241,28 @@
     "validation.invalid_request": "请求校验失败",
     "http.404": "资源不存在",
     "http.500": "服务器内部错误"
+  },
+  "chatPage": {
+    "noAgents": "暂无运行中的 Agent — 请先部署",
+    "memoryOn": "记忆开启",
+    "newSession": "新会话",
+    "emptyThread": "选择 Agent 并打个招呼 — 回复实时流式呈现",
+    "placeholder": "发消息给 {{name}}……",
+    "send": "发送",
+    "toolCalled": "已调用工具",
+    "memorySaved": "memory.create_event — 本轮已存入短期记忆",
+    "traceTitle": "链路追踪",
+    "tracePhase9": "第 9 阶段",
+    "tracePlaceholder": "端到端链路追踪将随可观测性上线(第 9 阶段)",
+    "memoryTitle": "会话记忆",
+    "shortTermEvents": "短期事件",
+    "longTermRecords": "长期记录",
+    "apiTitle": "等价 API 调用",
+    "keysTitle": "API 密钥",
+    "newKey": "新建密钥",
+    "keyOnce": "立即复制 — 仅显示一次",
+    "noKeys": "暂无密钥",
+    "keyEnabled": "已启用 ✓",
+    "keyDisabled": "已停用"
   }
 }

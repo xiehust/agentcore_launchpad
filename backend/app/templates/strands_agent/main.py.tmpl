@@ -13,12 +13,59 @@ Template lineage: adapted from agentcore_eva_opt lab4 deploy pattern
 
 import ast
 import operator
+import os
 from datetime import UTC, datetime
 from typing import Any
 
+import boto3
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from bedrock_agentcore.runtime.context import BedrockAgentCoreContext
 from strands import Agent, tool
+
+# Shared AgentCore Memory (short-term events + long-term strategies), injected
+# by the platform at deploy time. All memory calls are best-effort — a memory
+# outage must never break the agent.
+MEMORY_ID = os.environ.get("LAUNCHPAD_MEMORY_ID", "")
+
+
+def _memory_client():
+    return boto3.client("bedrock-agentcore", region_name=os.environ.get("AWS_REGION", "us-west-2"))
+
+
+def recall_context(actor_id: str, query: str) -> str:
+    if not MEMORY_ID:
+        return ""
+    lines: list[str] = []
+    try:
+        client = _memory_client()
+        for namespace in (f"/preferences/{actor_id}", f"/facts/{actor_id}"):
+            records = client.retrieve_memory_records(
+                memoryId=MEMORY_ID,
+                namespace=namespace,
+                searchCriteria={"searchQuery": query[:900] or "user context", "topK": 3},
+            ).get("memoryRecordSummaries", [])
+            lines += [r.get("content", {}).get("text", "") for r in records]
+    except Exception:
+        return ""
+    return "\n".join(x for x in lines if x)
+
+
+def remember_turn(actor_id: str, session_id: str, prompt: str, answer: str) -> None:
+    if not MEMORY_ID:
+        return
+    try:
+        _memory_client().create_event(
+            memoryId=MEMORY_ID,
+            actorId=actor_id,
+            sessionId=session_id,
+            eventTimestamp=datetime.now(UTC),
+            payload=[
+                {"conversational": {"role": "USER", "content": {"text": prompt[:9000]}}},
+                {"conversational": {"role": "ASSISTANT", "content": {"text": answer[:9000]}}},
+            ],
+        )
+    except Exception:
+        pass
 
 AGENT_NAME = "__LAUNCHPAD_AGENT_NAME__"
 MODEL_ID = "__LAUNCHPAD_MODEL_ID__"
@@ -101,8 +148,15 @@ def invoke(payload: dict[str, Any], context: Any = None) -> dict[str, Any]:
     prompt = str(payload.get("prompt", "")).strip()
     if not prompt:
         return {"error": "payload must include a non-empty 'prompt'"}
+    actor_id = str(payload.get("actor_id", "default"))
+    session_id = str(getattr(context, "session_id", "") or payload.get("session_id", "") or "adhoc")
+
     agent = build_agent()
+    known = recall_context(actor_id, prompt)
+    if known:
+        agent.system_prompt = f"{resolve_system_prompt()}\n\nKnown user context:\n{known}"
     result = agent(prompt)
+    remember_turn(actor_id, session_id, prompt, str(result))
     return {"result": str(result)}
 
 

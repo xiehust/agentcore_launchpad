@@ -134,6 +134,11 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             ctx.log(f"resuming — runtime {runtime_id} already created, polling status")
         else:
             spec = AgentSpec(**row.spec)
+            environment = dict(spec.env)
+            if (spec.memory.short_term or spec.memory.long_term) and settings.resources.get(
+                "memory_id"
+            ):
+                environment.setdefault("LAUNCHPAD_MEMORY_ID", settings.resources["memory_id"])
             created = rt.create_code_runtime(
                 client,
                 runtime_name=sanitize_runtime_name(row.name),
@@ -143,7 +148,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 or f"agents/{row.name}/deployment_package.zip",
                 role_arn=ctx.scratch.get("execution_role_arn")
                 or settings.resources.get("execution_role_arn", ""),
-                environment=spec.env or None,
+                environment=environment or None,
             )
             runtime_id = created["agentRuntimeId"]
             row.resource_id = runtime_id

@@ -195,7 +195,8 @@
     "title": "Chat Playground",
     "meta": "SAME BACKEND AS PUBLIC API",
     "placeholderTitle": "PLAYGROUND",
-    "placeholderBody": "Streaming chat with session memory, tool cards and trace rail arrives in phase 8."
+    "placeholderBody": "Streaming chat with session memory, tool cards and trace rail arrives in phase 8.",
+    "metaLive": "SAME BACKEND AS PUBLIC /v1 API · SSE STREAMING"
   },
   "evaluation": {
     "kicker": "// QUALITY TELEMETRY",
@@ -240,5 +241,28 @@
     "validation.invalid_request": "Request validation failed",
     "http.404": "Resource not found",
     "http.500": "Internal server error"
+  },
+  "chatPage": {
+    "noAgents": "no active agents — deploy one first",
+    "memoryOn": "MEMORY ON",
+    "newSession": "NEW SESSION",
+    "emptyThread": "SELECT AN AGENT AND SAY HELLO — REPLIES STREAM LIVE",
+    "placeholder": "Message {{name}}…",
+    "send": "SEND",
+    "toolCalled": "TOOL CALLED",
+    "memorySaved": "memory.create_event — turn saved to short-term",
+    "traceTitle": "TRACE",
+    "tracePhase9": "phase 9",
+    "tracePlaceholder": "END-TO-END TRACE RAIL ARRIVES WITH OBSERVABILITY (PHASE 9)",
+    "memoryTitle": "SESSION MEMORY",
+    "shortTermEvents": "Short-term events",
+    "longTermRecords": "Long-term records",
+    "apiTitle": "API EQUIVALENT",
+    "keysTitle": "API KEYS",
+    "newKey": "NEW KEY",
+    "keyOnce": "copy now — shown once",
+    "noKeys": "NO KEYS YET",
+    "keyEnabled": "enabled ✓",
+    "keyDisabled": "disabled"
   }
 }

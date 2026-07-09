@@ -1,6 +1,7 @@
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 
 import { Shell } from "./layout/Shell";
+import { Chat } from "./pages/Chat";
 import { CreateAgent } from "./pages/CreateAgent";
 import { Governance } from "./pages/Governance";
 import { Overview } from "./pages/Overview";
@@ -15,7 +16,7 @@ export default function App() {
           <Route index element={<Overview />} />
           <Route path="create" element={<CreateAgent />} />
           <Route path="registry" element={<Registry />} />
-          <Route path="chat" element={<PlaceholderPage ns="chat" phase={8} />} />
+          <Route path="chat" element={<Chat />} />
           <Route path="evaluation" element={<PlaceholderPage ns="evaluation" phase={10} />} />
           <Route path="governance" element={<Governance />} />
         </Route>
