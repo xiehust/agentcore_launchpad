@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useSearchParams } from "react-router-dom";
 
 import { Btn, Chip, Panel, ViewHead } from "../components";
 import type { DeploymentInfo, JobInfo, StageInfo } from "../lib/api";
@@ -21,14 +22,20 @@ type Method = "harness" | "zip_runtime" | "container";
 
 export function CreateAgent() {
   const { t } = useTranslation();
-  const [step, setStep] = useState<Step>(1);
+  const [params] = useSearchParams();
+  const prefillGateway = params.get("gateway");
+  const prefillSkill = params.get("skill");
+  const [step, setStep] = useState<Step>(prefillGateway || prefillSkill ? 2 : 1);
   const [method, setMethod] = useState<Method>("harness");
+  const [skills, setSkills] = useState<string[]>(prefillSkill ? [prefillSkill] : []);
   const [name, setName] = useState("");
   const [modelId, setModelId] = useState(DEFAULT_MODEL);
   const [systemPrompt, setSystemPrompt] = useState("");
   const [tools, setTools] = useState<string[]>([]);
   const [gatewayTargets, setGatewayTargets] = useState<string[]>([]);
-  const [selectedGateway, setSelectedGateway] = useState<string[]>([]);
+  const [selectedGateway, setSelectedGateway] = useState<string[]>(
+    prefillGateway ? [prefillGateway] : [],
+  );
   const [longTerm, setLongTerm] = useState(true);
   const [mcpServers, setMcpServers] = useState("");
 
@@ -88,6 +95,7 @@ export function CreateAgent() {
               ]
             : [],
         memory: { short_term: true, long_term: longTerm },
+        ...(method === "harness" && skills.length ? { skills } : {}),
         ...(method === "container" && mcpServers.trim()
           ? { env: { LAUNCHPAD_MCP_SERVERS: mcpServers.trim() } }
           : {}),
@@ -302,6 +310,24 @@ export function CreateAgent() {
                   onChange={(e) => setMcpServers(e.target.value)}
                   placeholder='{"docs": {"command": "uvx", "args": ["mcp-server-docs"]}}'
                 />
+              </div>
+            )}
+            {method === "harness" && skills.length > 0 && (
+              <div className="field">
+                <label>{t("create.configure.skills")}</label>
+                <div className="selchips">
+                  {skills.map((skill) => (
+                    <button
+                      key={skill}
+                      type="button"
+                      className="selchip on"
+                      style={{ cursor: "pointer" }}
+                      onClick={() => setSkills((prev) => prev.filter((s) => s !== skill))}
+                    >
+                      {skill} · registry ✕
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
             <div className="field">

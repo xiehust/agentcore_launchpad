@@ -4,7 +4,7 @@
     package   → pip install (ARM64 wheels) → zip → S3 artifacts bucket
     provision → reuse the shared execution role
     deploy    → CreateAgentRuntime + poll READY (5–15 min tolerated)
-    register  → placeholder until phase 7
+    register  → create/refresh the A2A registry record (auto-submit)
 
 Package/deploy internals adapted from agentcore_eva_opt backend/app/deployer.py
 (github.com/xiehust/agentcore_eva_opt); reworked to use the shared CDK bucket
@@ -164,7 +164,9 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
 
 
 def _stage_register(ctx: StageContext, agent: Agent) -> StageResult:
-    return StageResult(skipped=True, detail="registry auto-registration arrives in phase 7")
+    from app.deployer.registration import register_stage
+
+    return register_stage(ctx, agent)
 
 
 STAGES = {

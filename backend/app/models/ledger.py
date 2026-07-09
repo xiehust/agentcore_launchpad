@@ -35,6 +35,7 @@ class Agent(Base):
     spec: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     resource_id: Mapped[str | None] = mapped_column(String(128), default=None)
     arn: Mapped[str | None] = mapped_column(String(256), default=None)
+    registry_record_id: Mapped[str | None] = mapped_column(String(64), default=None)
     version: Mapped[str | None] = mapped_column(String(16), default=None)
     owner: Mapped[str] = mapped_column(String(64), default="river")
     error: Mapped[str | None] = mapped_column(Text, default=None)

@@ -6,7 +6,7 @@
                 into the job log) → ECR image
     provision → reuse the shared execution role
     deploy    → CreateAgentRuntime(containerConfiguration) + poll READY
-    register  → placeholder until phase 7
+    register  → create/refresh the A2A registry record (auto-submit)
 """
 
 import shutil
@@ -128,7 +128,9 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
 
 
 def _stage_register(ctx: StageContext, agent: Agent) -> StageResult:
-    return StageResult(skipped=True, detail="registry auto-registration arrives in phase 7")
+    from app.deployer.registration import register_stage
+
+    return register_stage(ctx, agent)
 
 
 STAGES = {

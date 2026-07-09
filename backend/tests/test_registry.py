@@ -1,0 +1,126 @@
+"""Registry payload builders, upsert/update wrappers, status transitions, search."""
+
+import json
+from unittest.mock import MagicMock
+
+from app.services.agentcore import registry as reg
+
+RID = "launchpad-registry-x"
+
+
+def test_a2a_card_and_descriptors():
+    card = reg.build_a2a_card(
+        name="hr-assistant", description="HR agent", arn="arn:x", version="2", method="harness"
+    )
+    assert card["name"] == "hr-assistant" and card["version"] == "2"
+    desc = reg.build_a2a_descriptors(card)
+    inline = json.loads(desc["a2a"]["agentCard"]["inlineContent"])
+    assert inline["url"] == "arn:x"
+    assert desc["a2a"]["agentCard"]["schemaVersion"] == reg.A2A_SCHEMA_VERSION
+
+
+def test_mcp_descriptors_server_json():
+    desc = reg.build_mcp_descriptors(
+        target="hr-database",
+        description="d",
+        gateway_url="https://gw/mcp",
+        tools=[{"name": "get_employee", "description": "x", "inputSchema": {}}],
+    )
+    server = json.loads(desc["mcp"]["server"]["inlineContent"])
+    assert server["name"] == "io.launchpad/hr-database"
+    assert server["remotes"] == [{"type": "streamable-http", "url": "https://gw/mcp"}]
+    assert desc["mcp"]["server"]["schemaVersion"] == "2025-07-09"
+    tools = json.loads(desc["mcp"]["tools"]["inlineContent"])
+    assert tools["tools"][0]["name"] == "get_employee"
+
+
+def test_skills_descriptors():
+    desc = reg.build_skills_descriptors(
+        skill_md="---\nname: x\n---\n# X", definition={"name": "x", "path": "s3://b/skills/x/"}
+    )
+    assert desc["agentSkills"]["skillDefinition"]["schemaVersion"] == "0.1.0"
+    assert "# X" in desc["agentSkills"]["skillMd"]["inlineContent"]
+
+
+def test_wrap_descriptors_for_update_nesting():
+    create_style = reg.build_mcp_descriptors(
+        target="t", description="d", gateway_url="u", tools=[]
+    )
+    wrapped = reg.wrap_descriptors_for_update(create_style)
+    mcp = wrapped["optionalValue"]["mcp"]["optionalValue"]
+    assert "optionalValue" in mcp["server"]
+    assert "optionalValue" in mcp["tools"]
+    a2a_wrapped = reg.wrap_descriptors_for_update({"a2a": {"agentCard": {"x": 1}}})
+    assert a2a_wrapped["optionalValue"]["a2a"] == {"optionalValue": {"agentCard": {"x": 1}}}
+
+
+def test_upsert_creates_and_derives_record_id():
+    client = MagicMock()
+    client.list_registry_records.return_value = {"registryRecords": []}
+    client.create_registry_record.return_value = {
+        "recordArn": f"arn:aws:bedrock-agentcore:us-west-2:1:registry/{RID}/record/abc123",
+        "status": "CREATING",
+    }
+    record, created = reg.upsert_record(
+        client, RID, name="x", description="d", descriptor_type="MCP", descriptors={"mcp": {}}
+    )
+    assert created is True and record["recordId"] == "abc123"
+
+
+def test_upsert_updates_with_wrappers():
+    client = MagicMock()
+    client.list_registry_records.return_value = {
+        "registryRecords": [{"name": "x", "recordId": "abc123"}]
+    }
+    client.update_registry_record.return_value = {"recordId": "abc123", "status": "DRAFT"}
+    _, created = reg.upsert_record(
+        client, RID, name="x", description="d", descriptor_type="MCP",
+        descriptors={"mcp": {"server": {"schemaVersion": "v", "inlineContent": "{}"}}},
+    )
+    assert created is False
+    kwargs = client.update_registry_record.call_args.kwargs
+    assert kwargs["description"] == {"optionalValue": "d"}
+    assert "optionalValue" in kwargs["descriptors"]
+
+
+def test_status_transitions():
+    client = MagicMock()
+    reg.submit_record(client, RID, "r1")
+    client.submit_registry_record_for_approval.assert_called_once_with(
+        registryId=RID, recordId="r1"
+    )
+    reg.approve_record(client, RID, "r1")
+    assert client.update_registry_record_status.call_args.kwargs["status"] == "APPROVED"
+    reg.disable_record(client, RID, "r1")
+    assert client.update_registry_record_status.call_args.kwargs["status"] == "DEPRECATED"
+
+
+def test_wait_record_settled():
+    client = MagicMock()
+    client.get_registry_record.side_effect = [
+        {"status": "CREATING"},
+        {"status": "DRAFT"},
+    ]
+    record = reg.wait_record_settled(client, RID, "r1", sleeper=lambda _: None)
+    assert record["status"] == "DRAFT"
+
+
+def test_search_caps_max_results():
+    client = MagicMock()
+    client.search_registry_records.return_value = {"registryRecords": [{"name": "a"}]}
+    out = reg.search_records(client, [RID], "expense")
+    assert out == [{"name": "a"}]
+    assert client.search_registry_records.call_args.kwargs["maxResults"] <= 20
+
+
+def test_harness_skills_round_trip():
+    """spec.skills paths land as skills[{path}] in CreateHarness params."""
+    from app.deployer.harness import build_create_params
+    from app.schemas.agent import AgentSpec
+
+    spec = AgentSpec(
+        name="skill-agent", method="harness", system_prompt="x",
+        skills=["s3://bkt/skills/expense-report-writer/"],
+    )
+    params = build_create_params(spec, "arn:role", None)
+    assert params["skills"] == [{"path": "s3://bkt/skills/expense-report-writer/"}]

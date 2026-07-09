@@ -38,3 +38,18 @@ def get_db() -> Generator[Session, None, None]:
 
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
+    _migrate(engine)
+
+
+def _migrate(bind) -> None:
+    """Additive column migrations for the local SQLite ledger (no Alembic)."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(bind)
+    if "agents" in inspector.get_table_names():
+        existing = {c["name"] for c in inspector.get_columns("agents")}
+        if "registry_record_id" not in existing:
+            with bind.begin() as conn:
+                conn.execute(
+                    text("ALTER TABLE agents ADD COLUMN registry_record_id VARCHAR(64)")
+                )

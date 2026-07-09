@@ -1,0 +1,182 @@
+"""Platform-level registry orchestration.
+
+The ledger stays the operational source of truth; the registry is the catalog.
+Sync direction is platform → registry, and ledger rows record their
+registryRecordId.
+"""
+
+from typing import Any
+
+import boto3
+import yaml
+
+from app.core.config import REPO_ROOT, get_settings
+from app.models.ledger import Agent
+from app.services import mcp_client
+from app.services.agentcore import registry as reg
+from app.services.agentcore.client import control_client, data_client
+
+SKILLS_DIR = REPO_ROOT / "samples" / "skills"
+SKILL_NAME = "expense-report-writer"
+
+
+def _registry_id() -> str:
+    registry_id = get_settings().resources.get("registry_id")
+    if not registry_id:
+        raise RuntimeError("registry_id missing from config — run scripts/bootstrap.py")
+    return registry_id
+
+
+def register_agent_record(agent: Agent, auto_submit: bool = True) -> dict[str, Any]:
+    """Create/refresh the A2A record for a deployed agent; auto-submit new records."""
+    client = control_client()
+    registry_id = _registry_id()
+    spec = agent.spec or {}
+    card = reg.build_a2a_card(
+        name=agent.name,
+        description=(spec.get("system_prompt") or "")[:180] or f"Launchpad agent {agent.name}",
+        arn=agent.arn or "",
+        version=agent.version or "1",
+        method=agent.method,
+    )
+    record, created = reg.upsert_record(
+        client,
+        registry_id,
+        name=agent.name,
+        description=f"Launchpad agent · method {agent.method}",
+        descriptor_type="A2A",
+        descriptors=reg.build_a2a_descriptors(card),
+    )
+    record_id = record["recordId"]
+    if created and auto_submit:
+        reg.wait_record_settled(client, registry_id, record_id)
+        reg.submit_record(client, registry_id, record_id)
+    return {"record_id": record_id, "created": created}
+
+
+def upload_skill_bundle(skill_name: str = SKILL_NAME) -> dict[str, Any]:
+    """Upload the sample skill bundle to S3; return definition metadata."""
+    settings = get_settings()
+    bucket = settings.resources.get("artifacts_bucket")
+    if not bucket:
+        raise RuntimeError("artifacts_bucket missing — run scripts/bootstrap.py")
+    skill_dir = SKILLS_DIR / skill_name
+    s3 = boto3.client("s3", region_name=settings.region)
+    files: list[str] = []
+    for path in sorted(skill_dir.rglob("*")):
+        if path.is_file():
+            rel = path.relative_to(skill_dir)
+            s3.upload_file(str(path), bucket, f"skills/{skill_name}/{rel}")
+            files.append(str(rel))
+    skill_md = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+    meta = _parse_frontmatter(skill_md)
+    return {
+        "skill_md": skill_md,
+        "definition": {
+            "name": skill_name,
+            "description": meta.get("description", ""),
+            "version": meta.get("version", "1.0.0"),
+            "path": f"s3://{bucket}/skills/{skill_name}/",
+            "files": files,
+        },
+    }
+
+
+def _parse_frontmatter(markdown: str) -> dict[str, Any]:
+    if not markdown.startswith("---"):
+        return {}
+    try:
+        _, frontmatter, _ = markdown.split("---", 2)
+        return yaml.safe_load(frontmatter) or {}
+    except ValueError:
+        return {}
+
+
+def ensure_default_records() -> list[dict[str, Any]]:
+    """Register the gateway targets (MCP) + sample skill bundle (AGENT_SKILLS)."""
+    client = control_client()
+    registry_id = _registry_id()
+    settings = get_settings()
+    results: list[dict[str, Any]] = []
+
+    gateway_url = settings.resources.get("gateway_url", "")
+    tools = mcp_client.tools_list()
+    by_target: dict[str, list[dict[str, Any]]] = {}
+    for tool in tools:
+        if "___" in tool["name"]:
+            target, short = tool["name"].split("___", 1)
+            by_target.setdefault(target, []).append(
+                {
+                    "name": short,
+                    "description": tool.get("description", ""),
+                    "inputSchema": tool.get("inputSchema", {}),
+                }
+            )
+    for target, target_tools in sorted(by_target.items()):
+        description = f"Gateway target {target} · {len(target_tools)} MCP tool(s)"
+        record, created = reg.upsert_record(
+            client,
+            registry_id,
+            name=target,
+            description=description,
+            descriptor_type="MCP",
+            descriptors=reg.build_mcp_descriptors(
+                target=target,
+                description=description,
+                gateway_url=gateway_url,
+                tools=target_tools,
+            ),
+        )
+        if created:
+            reg.wait_record_settled(client, registry_id, record["recordId"])
+            reg.submit_record(client, registry_id, record["recordId"])
+        results.append({"name": target, "type": "MCP", "record_id": record["recordId"],
+                        "created": created})
+
+    bundle = upload_skill_bundle()
+    record, created = reg.upsert_record(
+        client,
+        registry_id,
+        name=SKILL_NAME,
+        description=bundle["definition"]["description"][:200],
+        descriptor_type="AGENT_SKILLS",
+        descriptors=reg.build_skills_descriptors(
+            skill_md=bundle["skill_md"], definition=bundle["definition"]
+        ),
+    )
+    if created:
+        reg.wait_record_settled(client, registry_id, record["recordId"])
+        reg.submit_record(client, registry_id, record["recordId"])
+    results.append({"name": SKILL_NAME, "type": "AGENT_SKILLS",
+                    "record_id": record["recordId"], "created": created})
+    return results
+
+
+def skill_attach_path(skill_name: str = SKILL_NAME) -> str:
+    """The skills[{path}] value a harness spec uses to attach the bundle."""
+    bucket = get_settings().resources.get("artifacts_bucket", "")
+    return f"s3://{bucket}/skills/{skill_name}/"
+
+
+def console_list(descriptor_type: str | None = None, status: str | None = None) -> list[dict]:
+    return reg.list_records(control_client(), _registry_id(), descriptor_type, status)
+
+
+def console_get(record_id: str) -> dict[str, Any]:
+    return reg.get_record(control_client(), _registry_id(), record_id)
+
+
+def console_search(query: str) -> list[dict[str, Any]]:
+    return reg.search_records(data_client(), [_registry_id()], query)
+
+
+def console_action(record_id: str, action: str) -> dict[str, Any]:
+    client = control_client()
+    registry_id = _registry_id()
+    if action == "submit":
+        return reg.submit_record(client, registry_id, record_id)
+    if action in ("approve", "publish"):
+        return reg.approve_record(client, registry_id, record_id)
+    if action == "disable":
+        return reg.disable_record(client, registry_id, record_id)
+    raise ValueError(f"unknown action '{action}'")

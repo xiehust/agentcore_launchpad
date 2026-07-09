@@ -124,7 +124,8 @@
       "templateTools": "TOOLS — STRANDS TEMPLATE",
       "titleContainer": "CONFIGURE — CLAUDE AGENT SDK · CONTAINER",
       "sdkTools": "CAPABILITIES — CLAUDE SDK",
-      "mcpServers": "MCP SERVERS · JSON (OPTIONAL)"
+      "mcpServers": "MCP SERVERS · JSON (OPTIONAL)",
+      "skills": "SKILLS — FROM REGISTRY"
     },
     "launchPanel": {
       "title": "LAUNCH PLAN",
@@ -154,7 +155,40 @@
     "title": "Registry",
     "meta": "AGENTCORE REGISTRY · SYNC PENDING",
     "placeholderTitle": "ASSET CONSOLE",
-    "placeholderBody": "Agents (A2A), MCP tools and Skills catalogs wired to the real AgentCore Registry arrive in phase 7."
+    "placeholderBody": "Agents (A2A), MCP tools and Skills catalogs wired to the real AgentCore Registry arrive in phase 7.",
+    "metaLive": "AGENTCORE REGISTRY · launchpad-registry · SYNC ON",
+    "searchPlaceholder": "Search records…",
+    "searchResults": "SEARCH RESULTS",
+    "empty": "NO RECORDS — DEPLOY AN AGENT OR RUN SYNC-DEFAULTS",
+    "tabs": {
+      "agents": "AGENTS · A2A",
+      "tools": "MCP TOOLS",
+      "skills": "SKILLS"
+    },
+    "states": {
+      "draft": "DRAFT",
+      "submitted": "SUBMITTED",
+      "published": "PUBLISHED",
+      "rejected": "REJECTED",
+      "disabled": "DISABLED"
+    },
+    "cols": {
+      "name": "NAME",
+      "type": "SOURCE",
+      "version": "VERSION",
+      "state": "STATE"
+    },
+    "drawer": {
+      "type": "Descriptor type",
+      "version": "Version",
+      "recordId": "Record id",
+      "updated": "Updated",
+      "descriptor": "DESCRIPTOR",
+      "useInNewAgent": "USE IN NEW AGENT",
+      "submit": "SUBMIT",
+      "approve": "APPROVE · PUBLISH",
+      "disable": "DISABLE"
+    }
   },
   "chat": {
     "kicker": "// LIVE CHANNEL",

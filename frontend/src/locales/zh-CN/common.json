@@ -124,7 +124,8 @@
       "templateTools": "工具 — STRANDS 模板",
       "titleContainer": "配置 — CLAUDE AGENT SDK · 容器",
       "sdkTools": "能力 — CLAUDE SDK",
-      "mcpServers": "MCP 服务器 · JSON(可选)"
+      "mcpServers": "MCP 服务器 · JSON(可选)",
+      "skills": "技能 — 来自注册中心"
     },
     "launchPanel": {
       "title": "发射计划",
@@ -154,7 +155,40 @@
     "title": "注册中心",
     "meta": "AGENTCORE REGISTRY · 同步待接入",
     "placeholderTitle": "资产控制台",
-    "placeholderBody": "对接真实 AgentCore Registry 的 Agent(A2A)、MCP 工具与技能目录将在第 7 阶段上线。"
+    "placeholderBody": "对接真实 AgentCore Registry 的 Agent(A2A)、MCP 工具与技能目录将在第 7 阶段上线。",
+    "metaLive": "AGENTCORE REGISTRY · launchpad-registry · 同步开启",
+    "searchPlaceholder": "搜索记录……",
+    "searchResults": "搜索结果",
+    "empty": "暂无记录 — 部署 Agent 或执行默认同步",
+    "tabs": {
+      "agents": "AGENT · A2A",
+      "tools": "MCP 工具",
+      "skills": "技能"
+    },
+    "states": {
+      "draft": "草稿",
+      "submitted": "已提交",
+      "published": "已发布",
+      "rejected": "已驳回",
+      "disabled": "已停用"
+    },
+    "cols": {
+      "name": "名称",
+      "type": "来源",
+      "version": "版本",
+      "state": "状态"
+    },
+    "drawer": {
+      "type": "描述符类型",
+      "version": "版本",
+      "recordId": "记录 ID",
+      "updated": "更新时间",
+      "descriptor": "描述符",
+      "useInNewAgent": "在新 AGENT 中使用",
+      "submit": "提交",
+      "approve": "批准 · 发布",
+      "disable": "停用"
+    }
   },
   "chat": {
     "kicker": "// 实时频道",

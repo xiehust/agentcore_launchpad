@@ -5,7 +5,7 @@ Stage mapping:
     package   → skipped (no artifact for a managed harness)
     provision → reuse the shared execution role provisioned by CDK
     deploy    → CreateHarness + poll READY (idempotent on resume)
-    register  → placeholder until phase 7
+    register  → create/refresh the A2A registry record (auto-submit)
 """
 
 from typing import Any
@@ -153,7 +153,9 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
 
 
 def _stage_register(ctx: StageContext, agent: Agent) -> StageResult:
-    return StageResult(skipped=True, detail="registry auto-registration arrives in phase 7")
+    from app.deployer.registration import register_stage
+
+    return register_stage(ctx, agent)
 
 
 STAGES = {
