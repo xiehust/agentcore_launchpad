@@ -12,6 +12,7 @@ from app.core.config import get_settings
 from app.core.db import init_db
 from app.core.errors import register_error_handlers
 from app.deployer.pipeline import resume_pending_jobs
+from app.evaluation.routers import router as evaluation_router
 from app.routers.agents import router as agents_router
 from app.routers.apikeys import router as apikeys_router
 from app.routers.chat import router as chat_router
@@ -53,6 +54,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(registry_router)
     app.include_router(chat_router)
     app.include_router(governance_router)
+    app.include_router(evaluation_router)
     app.include_router(apikeys_router)
     app.include_router(public_router)
     if resume_jobs:

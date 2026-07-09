@@ -1,0 +1,5 @@
+{"prompt": "What is 12*9? Use the calculator tool and answer with just the number.", "expected": "108"}
+{"prompt": "What is 45+55? Use the calculator tool and answer with just the number.", "expected": "100"}
+{"prompt": "What is 144/12? Use the calculator tool and answer with just the number.", "expected": "12"}
+{"prompt": "What is the current UTC year? Use the time tool and answer with just the year.", "expected": "2026"}
+{"prompt": "What is 7*8-6? Use the calculator tool and answer with just the number.", "expected": "50"}

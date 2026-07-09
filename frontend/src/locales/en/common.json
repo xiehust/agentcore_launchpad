@@ -154,8 +154,6 @@
     "kicker": "// DISCOVERY LAYER",
     "title": "Registry",
     "meta": "AGENTCORE REGISTRY · SYNC PENDING",
-    "placeholderTitle": "ASSET CONSOLE",
-    "placeholderBody": "Agents (A2A), MCP tools and Skills catalogs wired to the real AgentCore Registry arrive in phase 7.",
     "metaLive": "AGENTCORE REGISTRY · launchpad-registry · SYNC ON",
     "searchPlaceholder": "Search records…",
     "searchResults": "SEARCH RESULTS",
@@ -194,23 +192,17 @@
     "kicker": "// LIVE CHANNEL",
     "title": "Chat Playground",
     "meta": "SAME BACKEND AS PUBLIC API",
-    "placeholderTitle": "PLAYGROUND",
-    "placeholderBody": "Streaming chat with session memory, tool cards and trace rail arrives in phase 8.",
     "metaLive": "SAME BACKEND AS PUBLIC /v1 API · SSE STREAMING"
   },
   "evaluation": {
     "kicker": "// QUALITY TELEMETRY",
     "title": "Evaluation & Optimization",
-    "meta": "BATCH + ONLINE · LLM-AS-A-JUDGE",
-    "placeholderTitle": "EVALUATION CONSOLE",
-    "placeholderBody": "Batch/online runs, evaluator scores, insights failure triage and A/B experiments arrive in phases 10–11."
+    "meta": "BATCH + ONLINE · LLM-AS-A-JUDGE"
   },
   "governance": {
     "kicker": "// CONTROL PLANE",
     "title": "Governance",
     "meta": "GATEWAY · MCP TOOLS · BUILTIN DEMOS",
-    "placeholderTitle": "POLICY & OBSERVABILITY",
-    "placeholderBody": "Gateway targets, Cedar policies and the live decision log arrive in phase 9.",
     "tools": {
       "title": "TOOL CATALOG — GATEWAY TARGETS + BUILTINS",
       "offline": "gateway not bootstrapped",
@@ -282,5 +274,46 @@
     "keyDisabled": "disabled",
     "traceLoad": "LOAD TRACE",
     "traceEmpty": "NO SPANS YET — TRACES LAND IN ~1 MIN, RELOAD"
+  },
+  "evalPage": {
+    "metaLive": "BATCH + INSIGHTS · LLM-AS-A-JUDGE · 1 BATCH / ACCOUNT — QUEUE MANAGED",
+    "acctLock": "BATCH RUNNING · acct lock",
+    "queueIdle": "QUEUE IDLE",
+    "runs": {
+      "title": "RUNS",
+      "sub": "batch evaluation history",
+      "run": "RUN",
+      "agent": "AGENT",
+      "dataset": "DATASET",
+      "evaluators": "EVALUATORS",
+      "score": "SCORE",
+      "status": "STATUS",
+      "empty": "NO RUNS YET — START ONE ON THE RIGHT"
+    },
+    "status": {
+      "completed": "COMPLETE",
+      "failed": "FAILED",
+      "queued": "QUEUED · acct lock"
+    },
+    "newRun": {
+      "title": "NEW RUN",
+      "sub": "runtime-backed agents (harness excluded)",
+      "agent": "AGENT",
+      "noAgents": "no eligible active agents",
+      "dataset": "DATASET",
+      "evaluators": "EVALUATORS — 13 BUILTIN",
+      "start": "NEW RUN",
+      "startInsights": "INSIGHTS ON SELECTED RUN"
+    },
+    "scores": {
+      "title": "EVALUATOR SCORES",
+      "note": "13 built-in evaluators + custom LLM-judge supported.",
+      "empty": "SELECT A COMPLETED RUN TO SEE SCORES"
+    },
+    "insights": {
+      "title": "INSIGHTS — FAILURE TRIAGE",
+      "sub": "failure analysis · user intents",
+      "empty": "RUN INSIGHTS ON A COMPLETED RUN'S SESSIONS"
+    }
   }
 }

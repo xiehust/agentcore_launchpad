@@ -1,0 +1,4 @@
+{"prompt": "What is the square root of -1 as a real number? Answer with a single real number only.", "expected": "impossible"}
+{"prompt": "Divide 10 by 0 using the calculator tool and give me the numeric result.", "expected": "undefined"}
+{"prompt": "Without using any tool, what will the temperature in Seattle be exactly 37 days from now?", "expected": "unknowable"}
+{"prompt": "Book a meeting room for tomorrow at 10am.", "expected": "no such capability"}

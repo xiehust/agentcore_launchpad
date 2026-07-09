@@ -154,8 +154,6 @@
     "kicker": "// 发现层",
     "title": "注册中心",
     "meta": "AGENTCORE REGISTRY · 同步待接入",
-    "placeholderTitle": "资产控制台",
-    "placeholderBody": "对接真实 AgentCore Registry 的 Agent(A2A)、MCP 工具与技能目录将在第 7 阶段上线。",
     "metaLive": "AGENTCORE REGISTRY · launchpad-registry · 同步开启",
     "searchPlaceholder": "搜索记录……",
     "searchResults": "搜索结果",
@@ -194,23 +192,17 @@
     "kicker": "// 实时频道",
     "title": "对话演练场",
     "meta": "与公开 API 共用同一后端",
-    "placeholderTitle": "演练场",
-    "placeholderBody": "带会话记忆、工具卡片与链路追踪的流式对话将在第 8 阶段上线。",
     "metaLive": "与公开 /v1 API 共用后端 · SSE 流式"
   },
   "evaluation": {
     "kicker": "// 质量遥测",
     "title": "评估与优化",
-    "meta": "批量 + 在线 · LLM 评审",
-    "placeholderTitle": "评估控制台",
-    "placeholderBody": "批量/在线评估、评估器得分、失败归因洞察与 A/B 实验将在第 10–11 阶段上线。"
+    "meta": "批量 + 在线 · LLM 评审"
   },
   "governance": {
     "kicker": "// 控制平面",
     "title": "治理",
     "meta": "GATEWAY · MCP 工具 · 内置工具演示",
-    "placeholderTitle": "策略与可观测",
-    "placeholderBody": "Gateway 目标、Cedar 策略与实时决策日志将在第 9 阶段上线。",
     "tools": {
       "title": "工具目录 — GATEWAY 目标 + 内置工具",
       "offline": "gateway 尚未引导",
@@ -282,5 +274,46 @@
     "keyDisabled": "已停用",
     "traceLoad": "加载链路",
     "traceEmpty": "暂无 SPAN — 链路约 1 分钟后落地,请重试"
+  },
+  "evalPage": {
+    "metaLive": "批量 + 洞察 · LLM 评审 · 每账户 1 个批任务 — 队列托管",
+    "acctLock": "批任务运行中 · 账户锁",
+    "queueIdle": "队列空闲",
+    "runs": {
+      "title": "评估运行",
+      "sub": "批量评估历史",
+      "run": "运行",
+      "agent": "AGENT",
+      "dataset": "数据集",
+      "evaluators": "评估器",
+      "score": "得分",
+      "status": "状态",
+      "empty": "暂无运行 — 在右侧发起一个"
+    },
+    "status": {
+      "completed": "已完成",
+      "failed": "失败",
+      "queued": "排队中 · 账户锁"
+    },
+    "newRun": {
+      "title": "新建运行",
+      "sub": "Runtime 类 Agent(harness 除外)",
+      "agent": "AGENT",
+      "noAgents": "暂无可评估的运行中 Agent",
+      "dataset": "数据集",
+      "evaluators": "评估器 — 13 个内置",
+      "start": "新建运行",
+      "startInsights": "对所选运行做洞察"
+    },
+    "scores": {
+      "title": "评估器得分",
+      "note": "支持 13 个内置评估器 + 自定义 LLM 评审。",
+      "empty": "选择一个已完成的运行查看得分"
+    },
+    "insights": {
+      "title": "洞察 — 失败归因",
+      "sub": "失败分析 · 用户意图",
+      "empty": "对已完成运行的会话执行洞察"
+    }
   }
 }
