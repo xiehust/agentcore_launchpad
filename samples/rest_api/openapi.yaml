@@ -1,0 +1,55 @@
+openapi: 3.0.3
+info:
+  title: office-facts
+  description: Tiny office facts API — sample REST→MCP conversion source.
+  version: "1.0"
+servers:
+  - url: https://REPLACED_AT_BOOTSTRAP.execute-api.us-west-2.amazonaws.com/prod
+paths:
+  /facts:
+    get:
+      operationId: list_office_topics
+      summary: List the office topics that have facts available.
+      responses:
+        "200":
+          description: Topic list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  topics:
+                    type: array
+                    items: { type: string }
+      security:
+        - api_key: []
+  /facts/{topic}:
+    get:
+      operationId: get_office_fact
+      summary: Get the office fact for a topic (address, wifi, holidays, gym, cafeteria).
+      parameters:
+        - name: topic
+          in: path
+          required: true
+          schema: { type: string }
+          description: Topic name, e.g. wifi
+      responses:
+        "200":
+          description: The fact
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  topic: { type: string }
+                  fact: { type: string }
+        "404":
+          description: Unknown topic
+      security:
+        - api_key: []
+components:
+  securitySchemes:
+    api_key:
+      type: apiKey
+      name: x-api-key
+      in: header

@@ -5,11 +5,16 @@ boto3 fast path and tracked in the ledger; only account-shared resources
 live here.
 """
 
+from pathlib import Path
+
 from aws_cdk import (
     CfnOutput,
     Duration,
     RemovalPolicy,
     Stack,
+)
+from aws_cdk import (
+    aws_apigateway as apigw,
 )
 from aws_cdk import (
     aws_codebuild as codebuild,
@@ -24,9 +29,14 @@ from aws_cdk import (
     aws_iam as iam,
 )
 from aws_cdk import (
+    aws_lambda as lambda_,
+)
+from aws_cdk import (
     aws_s3 as s3,
 )
 from constructs import Construct
+
+SAMPLES_DIR = Path(__file__).resolve().parents[2] / "samples"
 
 DEMO_USERS = [
     {"username": "river", "email": "river@launchpad.local", "group": "platform-admin"},
@@ -98,6 +108,31 @@ class LaunchpadBaseStack(Stack):
             auth_flows=cognito.AuthFlow(user_password=True, user_srp=True),
             id_token_validity=Duration.hours(8),
             access_token_validity=Duration.hours(8),
+        )
+        pool.add_domain(
+            "Domain",
+            cognito_domain=cognito.CognitoDomainOptions(
+                domain_prefix=f"launchpad-{self.account}"
+            ),
+        )
+        invoke_scope = cognito.ResourceServerScope(
+            scope_name="invoke", scope_description="Invoke launchpad gateway tools"
+        )
+        resource_server = pool.add_resource_server(
+            "GatewayResourceServer",
+            identifier="launchpad-gw",
+            scopes=[invoke_scope],
+        )
+        m2m_client = pool.add_client(
+            "AgentM2M",
+            user_pool_client_name="launchpad-agent-m2m",
+            generate_secret=True,
+            auth_flows=cognito.AuthFlow(user_password=False, user_srp=False),
+            o_auth=cognito.OAuthSettings(
+                flows=cognito.OAuthFlows(client_credentials=True),
+                scopes=[cognito.OAuthScope.resource_server(resource_server, invoke_scope)],
+            ),
+            access_token_validity=Duration.hours(1),
         )
 
         for role_name in ("platform-admin", "hr-analyst"):
@@ -203,6 +238,15 @@ class LaunchpadBaseStack(Stack):
         )
         exec_role.add_to_policy(
             iam.PolicyStatement(
+                sid="IdentityVaultSecrets",
+                actions=["secretsmanager:GetSecretValue"],
+                resources=[
+                    f"arn:aws:secretsmanager:{self.region}:{self.account}:secret:bedrock-agentcore-identity!*"
+                ],
+            )
+        )
+        exec_role.add_to_policy(
+            iam.PolicyStatement(
                 sid="Telemetry",
                 actions=[
                     "logs:CreateLogGroup",
@@ -220,7 +264,97 @@ class LaunchpadBaseStack(Stack):
             )
         )
 
+        # ---- samples: hr-database Lambda (→ MCP tools via Gateway) ----
+        hr_lambda = lambda_.Function(
+            self,
+            "HrDatabase",
+            function_name="launchpad-hr-database",
+            runtime=lambda_.Runtime.PYTHON_3_12,
+            architecture=lambda_.Architecture.ARM_64,
+            handler="handler.lambda_handler",
+            code=lambda_.Code.from_asset(str(SAMPLES_DIR / "hr_database_lambda")),
+            timeout=Duration.seconds(15),
+            description="Launchpad sample: HR database exposed as MCP tools",
+        )
+
+        # ---- samples: office-facts REST API (→ MCP via OpenAPI target) ----
+        facts_lambda = lambda_.Function(
+            self,
+            "OfficeFacts",
+            function_name="launchpad-office-facts",
+            runtime=lambda_.Runtime.PYTHON_3_12,
+            architecture=lambda_.Architecture.ARM_64,
+            handler="handler.lambda_handler",
+            code=lambda_.Code.from_asset(str(SAMPLES_DIR / "rest_api")),
+            timeout=Duration.seconds(10),
+            description="Launchpad sample: office-facts REST backend",
+        )
+        facts_api = apigw.LambdaRestApi(
+            self,
+            "OfficeFactsApi",
+            rest_api_name="launchpad-office-facts",
+            handler=facts_lambda,
+            proxy=False,
+            deploy_options=apigw.StageOptions(stage_name="prod"),
+        )
+        facts = facts_api.root.add_resource("facts")
+        facts.add_method("GET", api_key_required=True)
+        topic = facts.add_resource("{topic}")
+        topic.add_method("GET", api_key_required=True)
+        api_key = facts_api.add_api_key("OfficeFactsKey", api_key_name="launchpad-office-facts")
+        plan = facts_api.add_usage_plan(
+            "OfficeFactsPlan",
+            name="launchpad-office-facts",
+            throttle=apigw.ThrottleSettings(rate_limit=10, burst_limit=20),
+        )
+        plan.add_api_key(api_key)
+        plan.add_api_stage(stage=facts_api.deployment_stage)
+
+        # ---- gateway service role (assumed by AgentCore Gateway) ----
+        gateway_role = iam.Role(
+            self,
+            "GatewayRole",
+            role_name="launchpad-gateway-role",
+            assumed_by=iam.ServicePrincipal(
+                "bedrock-agentcore.amazonaws.com",
+                conditions={"StringEquals": {"aws:SourceAccount": self.account}},
+            ),
+            description="Assumed by AgentCore Gateway to reach targets + identity vault",
+        )
+        hr_lambda.grant_invoke(gateway_role)
+        gateway_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="InvokeRestTargets",
+                actions=["execute-api:Invoke"],
+                resources=[facts_api.arn_for_execute_api()],
+            )
+        )
+        gateway_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="IdentityVault",
+                actions=[
+                    "bedrock-agentcore:GetResourceApiKey",
+                    "bedrock-agentcore:GetResourceOauth2Token",
+                    "bedrock-agentcore:GetWorkloadAccessToken",
+                ],
+                resources=["*"],
+            )
+        )
+        gateway_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="IdentitySecrets",
+                actions=["secretsmanager:GetSecretValue"],
+                resources=[
+                    f"arn:aws:secretsmanager:{self.region}:{self.account}:secret:bedrock-agentcore-identity!*"
+                ],
+            )
+        )
+
         # ---- outputs consumed by backend bootstrap ----
+        CfnOutput(self, "HrLambdaArn", value=hr_lambda.function_arn)
+        CfnOutput(self, "OfficeFactsApiUrl", value=facts_api.url)
+        CfnOutput(self, "OfficeFactsApiKeyId", value=api_key.key_id)
+        CfnOutput(self, "GatewayRoleArn", value=gateway_role.role_arn)
         CfnOutput(self, "ArtifactsBucketName", value=artifacts.bucket_name)
         CfnOutput(self, "EcrRepoName", value=repo.repository_name)
         CfnOutput(self, "EcrRepoUri", value=repo.repository_uri)
@@ -228,4 +362,5 @@ class LaunchpadBaseStack(Stack):
         CfnOutput(self, "CodeBuildRoleArn", value=build_project.role.role_arn)
         CfnOutput(self, "UserPoolId", value=pool.user_pool_id)
         CfnOutput(self, "UserPoolClientId", value=client.user_pool_client_id)
+        CfnOutput(self, "M2MClientId", value=m2m_client.user_pool_client_id)
         CfnOutput(self, "AgentExecutionRoleArn", value=exec_role.role_arn)

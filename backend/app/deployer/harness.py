@@ -21,10 +21,21 @@ BUILTIN_TOOL_TYPES = {
     "code-interpreter": "agentcore_code_interpreter",
     "browser": "agentcore_browser",
 }
+GATEWAY_SCOPE = "launchpad-gw/invoke"
 
 
-def build_create_params(spec: AgentSpec, execution_role_arn: str, memory_arn: str | None) -> dict:
-    """AgentSpec → CreateHarness kwargs. Harness names disallow hyphens."""
+def build_create_params(
+    spec: AgentSpec,
+    execution_role_arn: str,
+    memory_arn: str | None,
+    gateway: dict[str, str] | None = None,
+) -> dict:
+    """AgentSpec → CreateHarness kwargs. Harness names disallow hyphens.
+
+    ``gateway`` carries {arn, oauth_provider_arn} — any spec tool of type
+    "gateway" attaches the shared gateway with CLIENT_CREDENTIALS outbound auth
+    (the harness fetches Cognito M2M tokens itself via AgentCore Identity).
+    """
     params: dict[str, Any] = {
         "harnessName": spec.name.replace("-", "_"),
         "executionRoleArn": execution_role_arn,
@@ -37,7 +48,25 @@ def build_create_params(spec: AgentSpec, execution_role_arn: str, memory_arn: st
     for tool in spec.tools:
         if tool.type == "builtin" and tool.name in BUILTIN_TOOL_TYPES:
             tools.append({"type": BUILTIN_TOOL_TYPES[tool.name], "name": tool.name})
-        # gateway/mcp tool mapping lands in phase 6
+    if gateway and any(t.type == "gateway" for t in spec.tools):
+        tools.append(
+            {
+                "type": "agentcore_gateway",
+                "name": "launchpad_gw",
+                "config": {
+                    "agentCoreGateway": {
+                        "gatewayArn": gateway["arn"],
+                        "outboundAuth": {
+                            "oauth": {
+                                "providerArn": gateway["oauth_provider_arn"],
+                                "grantType": "CLIENT_CREDENTIALS",
+                                "scopes": [GATEWAY_SCOPE],
+                            }
+                        },
+                    }
+                },
+            }
+        )
     if tools:
         params["tools"] = tools
     if spec.skills:
@@ -49,12 +78,23 @@ def build_create_params(spec: AgentSpec, execution_role_arn: str, memory_arn: st
     return params
 
 
+def _gateway_config(resources: dict[str, Any]) -> dict[str, str] | None:
+    if resources.get("gateway_arn") and resources.get("oauth_provider_arn"):
+        return {
+            "arn": resources["gateway_arn"],
+            "oauth_provider_arn": resources["oauth_provider_arn"],
+        }
+    return None
+
+
 def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
     settings = get_settings()
     spec = AgentSpec(**agent.spec)
     role_arn = settings.resources.get("execution_role_arn", "")
     memory_arn = settings.resources.get("memory_arn")
-    params = build_create_params(spec, role_arn, memory_arn)
+    params = build_create_params(
+        spec, role_arn, memory_arn, gateway=_gateway_config(settings.resources)
+    )
     ctx.scratch["create_params"] = params
     ctx.log(f"harness request generated for {params['harnessName']} · model {spec.model_id}")
     return StageResult(detail=f"harnessName: {params['harnessName']}")
@@ -92,6 +132,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                     spec,
                     settings.resources.get("execution_role_arn", ""),
                     settings.resources.get("memory_arn"),
+                    gateway=_gateway_config(settings.resources),
                 )
             harness = hc.create_harness(client, params)
             harness_id = harness["harnessId"]

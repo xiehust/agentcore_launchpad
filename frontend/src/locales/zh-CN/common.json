@@ -115,7 +115,7 @@
       "systemPrompt": "系统提示词",
       "systemPromptPlaceholder": "你是一名乐于助人的助手……",
       "tools": "工具 — 内置",
-      "gatewayToolsSoon": "+ gateway 工具 · 第 6 阶段",
+      "gatewayToolsSoon": "+ gateway 工具 · 请选择 harness 方式",
       "memory": "记忆",
       "memoryShort": "短期 · 会话",
       "memoryLong": "长期 · 用户偏好",
@@ -173,9 +173,25 @@
   "governance": {
     "kicker": "// 控制平面",
     "title": "治理",
-    "meta": "GATEWAY · CEDAR 策略 · 决策日志",
+    "meta": "GATEWAY · MCP 工具 · 内置工具演示",
     "placeholderTitle": "策略与可观测",
-    "placeholderBody": "Gateway 目标、Cedar 策略与实时决策日志将在第 9 阶段上线。"
+    "placeholderBody": "Gateway 目标、Cedar 策略与实时决策日志将在第 9 阶段上线。",
+    "tools": {
+      "title": "工具目录 — GATEWAY 目标 + 内置工具",
+      "offline": "gateway 尚未引导",
+      "name": "工具",
+      "source": "来源",
+      "auth": "鉴权",
+      "empty": "暂无工具 — 运行 scripts/bootstrap.py 以创建 GATEWAY",
+      "ready": "就绪",
+      "description": "描述",
+      "schema": "输入 SCHEMA"
+    },
+    "demos": {
+      "ciTitle": "内置 — 代码解释器",
+      "brTitle": "内置 — 浏览器工具",
+      "run": "运行"
+    }
   },
   "common": {
     "comingSoon": "即将上线",

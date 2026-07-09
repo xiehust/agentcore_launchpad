@@ -13,6 +13,7 @@ from app.core.db import init_db
 from app.core.errors import register_error_handlers
 from app.deployer.pipeline import resume_pending_jobs
 from app.routers.agents import router as agents_router
+from app.routers.tools import router as tools_router
 
 
 def create_app(resume_jobs: bool = False) -> FastAPI:
@@ -29,6 +30,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     register_error_handlers(app)
     init_db()
     app.include_router(agents_router)
+    app.include_router(tools_router)
     if resume_jobs:
         resumed = resume_pending_jobs()
         if resumed:

@@ -27,8 +27,26 @@ export function CreateAgent() {
   const [modelId, setModelId] = useState(DEFAULT_MODEL);
   const [systemPrompt, setSystemPrompt] = useState("");
   const [tools, setTools] = useState<string[]>([]);
+  const [gatewayTargets, setGatewayTargets] = useState<string[]>([]);
+  const [selectedGateway, setSelectedGateway] = useState<string[]>([]);
   const [longTerm, setLongTerm] = useState(true);
   const [mcpServers, setMcpServers] = useState("");
+
+  useEffect(() => {
+    fetch("/api/tools")
+      .then((res) => (res.ok ? res.json() : { tools: [] }))
+      .then((d: { tools: { source: string; target?: string }[] }) => {
+        const targets = [
+          ...new Set(
+            d.tools.filter((x) => x.source === "gateway" && x.target).map((x) => x.target!),
+          ),
+        ];
+        setGatewayTargets(targets);
+      })
+      .catch(() => {
+        /* gateway not bootstrapped — chips stay hidden */
+      });
+  }, []);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [launch, setLaunch] = useState<LaunchState | null>(null);
   const [deployment, setDeployment] = useState<DeploymentInfo | null>(null);
@@ -62,7 +80,13 @@ export function CreateAgent() {
         method,
         model_id: modelId,
         system_prompt: systemPrompt,
-        tools: method === "harness" ? tools.map((n) => ({ type: "builtin", name: n })) : [],
+        tools:
+          method === "harness"
+            ? [
+                ...tools.map((n) => ({ type: "builtin", name: n })),
+                ...selectedGateway.map((n) => ({ type: "gateway", name: n })),
+              ]
+            : [],
         memory: { short_term: true, long_term: longTerm },
         ...(method === "container" && mcpServers.trim()
           ? { env: { LAUNCHPAD_MCP_SERVERS: mcpServers.trim() } }
@@ -219,17 +243,36 @@ export function CreateAgent() {
               </label>
               <div className="selchips">
                 {method === "harness" ? (
-                  BUILTIN_TOOLS.map((tool) => (
-                    <button
-                      key={tool}
-                      type="button"
-                      className={`selchip${tools.includes(tool) ? " on" : ""}`}
-                      style={{ cursor: "pointer" }}
-                      onClick={() => toggleTool(tool)}
-                    >
-                      {tool} · builtin {tools.includes(tool) ? "✓" : "+"}
-                    </button>
-                  ))
+                  <>
+                    {BUILTIN_TOOLS.map((tool) => (
+                      <button
+                        key={tool}
+                        type="button"
+                        className={`selchip${tools.includes(tool) ? " on" : ""}`}
+                        style={{ cursor: "pointer" }}
+                        onClick={() => toggleTool(tool)}
+                      >
+                        {tool} · builtin {tools.includes(tool) ? "✓" : "+"}
+                      </button>
+                    ))}
+                    {gatewayTargets.map((target) => (
+                      <button
+                        key={target}
+                        type="button"
+                        className={`selchip${selectedGateway.includes(target) ? " on" : ""}`}
+                        style={{ cursor: "pointer" }}
+                        onClick={() =>
+                          setSelectedGateway((prev) =>
+                            prev.includes(target)
+                              ? prev.filter((x) => x !== target)
+                              : [...prev, target],
+                          )
+                        }
+                      >
+                        {target} · gateway {selectedGateway.includes(target) ? "✓" : "+"}
+                      </button>
+                    ))}
+                  </>
                 ) : method === "container" ? (
                   <>
                     <span className="selchip on">Task · subagents ✓</span>
@@ -241,9 +284,11 @@ export function CreateAgent() {
                     <span className="selchip on">current_utc_time · template ✓</span>
                   </>
                 )}
-                <span className="selchip" style={{ opacity: 0.5 }}>
-                  {t("create.configure.gatewayToolsSoon")}
-                </span>
+                {method !== "harness" && (
+                  <span className="selchip" style={{ opacity: 0.5 }}>
+                    {t("create.configure.gatewayToolsSoon")}
+                  </span>
+                )}
               </div>
             </div>
             {method === "container" && (

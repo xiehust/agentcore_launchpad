@@ -12,6 +12,7 @@ dependencies = [
     "boto3>=1.35",
     "bedrock-agentcore==1.17.*",
     "pip>=24",
+    "playwright>=1.40,<2",
 ]
 
 [dependency-groups]

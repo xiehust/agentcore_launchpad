@@ -214,7 +214,7 @@ def run_bootstrap(region: str | None = None) -> dict[str, Any]:
         cognito, outputs["UserPoolId"], existing_pw
     )
 
-    write_config(
+    config = write_config(
         {
             "account_id": account_id,
             "region": region,
@@ -230,15 +230,42 @@ def run_bootstrap(region: str | None = None) -> dict[str, Any]:
                 "registry_arn": registry["arn"],
                 "memory_id": memory["id"],
                 "memory_arn": memory["arn"],
+                # build-tools layer (phase 6+); absent on stacks predating it
+                "hr_lambda_arn": outputs.get("HrLambdaArn", ""),
+                "office_facts_api_url": outputs.get("OfficeFactsApiUrl", ""),
+                "office_facts_api_key_id": outputs.get("OfficeFactsApiKeyId", ""),
+                "gateway_role_arn": outputs.get("GatewayRoleArn", ""),
+                "m2m_client_id": outputs.get("M2MClientId", ""),
             },
             "demo_users": {"passwords": passwords},
         }
     )
+
+    gateway_summary = None
+    if outputs.get("GatewayRoleArn"):
+        from app.services.gateway_bootstrap import run_gateway_bootstrap
+
+        gateway_summary = run_gateway_bootstrap(
+            control, _client("apigateway", region), config, cognito_client=cognito
+        )
+        write_config(
+            {
+                "resources": {
+                    "gateway_id": gateway_summary["gateway"]["id"],
+                    "gateway_arn": gateway_summary["gateway"]["arn"],
+                    "gateway_url": gateway_summary["gateway"]["url"],
+                    "api_key_provider_arn": gateway_summary["api_key_provider"]["arn"],
+                    "oauth_provider_arn": gateway_summary["oauth_provider"]["arn"],
+                }
+            }
+        )
+
     return {
         "account_id": account_id,
         "region": region,
         "registry": {**registry, "created": registry_created},
         "memory": {**memory, "created": memory_created},
+        "gateway": gateway_summary,
         "demo_passwords_set": pw_changed,
         "stack_outputs": outputs,
     }

@@ -69,6 +69,16 @@ def main() -> int:
         ("demo passwords", "set (see config/launchpad.yaml)"
          if summary["demo_passwords_set"] else "unchanged"),
     ]
+    if summary.get("gateway"):
+        gw = summary["gateway"]
+        rows += [
+            ("gateway", gw["gateway"]["url"]),
+            ("gateway state", "created" if gw["gateway"]["created"] else "reused"),
+            ("api-key provider", "created" if gw["api_key_provider"]["created"] else "reused"),
+        ] + [
+            (f"target {name}", ("created" if t["created"] else "reused") + f" · {t['id']}")
+            for name, t in gw["targets"].items()
+        ]
     width = max(len(k) for k, _ in rows)
     print("\n══ bootstrap summary ══")
     for key, value in rows:

@@ -115,7 +115,7 @@
       "systemPrompt": "SYSTEM PROMPT",
       "systemPromptPlaceholder": "You are a helpful assistant for…",
       "tools": "TOOLS — BUILTIN",
-      "gatewayToolsSoon": "+ gateway tools · phase 6",
+      "gatewayToolsSoon": "+ gateway tools · select harness method",
       "memory": "MEMORY",
       "memoryShort": "short-term · session",
       "memoryLong": "long-term · user preferences",
@@ -173,9 +173,25 @@
   "governance": {
     "kicker": "// CONTROL PLANE",
     "title": "Governance",
-    "meta": "GATEWAY · CEDAR POLICY · DECISION LOG",
+    "meta": "GATEWAY · MCP TOOLS · BUILTIN DEMOS",
     "placeholderTitle": "POLICY & OBSERVABILITY",
-    "placeholderBody": "Gateway targets, Cedar policies and the live decision log arrive in phase 9."
+    "placeholderBody": "Gateway targets, Cedar policies and the live decision log arrive in phase 9.",
+    "tools": {
+      "title": "TOOL CATALOG — GATEWAY TARGETS + BUILTINS",
+      "offline": "gateway not bootstrapped",
+      "name": "TOOL",
+      "source": "SOURCE",
+      "auth": "AUTH",
+      "empty": "NO TOOLS — RUN scripts/bootstrap.py TO PROVISION THE GATEWAY",
+      "ready": "READY",
+      "description": "DESCRIPTION",
+      "schema": "INPUT SCHEMA"
+    },
+    "demos": {
+      "ciTitle": "BUILTIN — CODE INTERPRETER",
+      "brTitle": "BUILTIN — BROWSER TOOL",
+      "run": "RUN"
+    }
   },
   "common": {
     "comingSoon": "COMING SOON",

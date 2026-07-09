@@ -1,0 +1,62 @@
+[
+  {
+    "name": "get_employee",
+    "description": "Look up an employee record by employee id (format EMP-NNNN). Returns name, department, role and vacation-day balances including days remaining this year.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "employee_id": {
+          "type": "string",
+          "description": "Employee id, e.g. EMP-1024"
+        }
+      },
+      "required": [
+        "employee_id"
+      ]
+    }
+  },
+  {
+    "name": "list_departments",
+    "description": "List all departments with their head and headcount.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "check_calendar",
+    "description": "Check the team calendar for conflicts in a date range (format YYYY-MM-DD..YYYY-MM-DD).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "range": {
+          "type": "string",
+          "description": "Date range, e.g. 2026-08-03..2026-08-07"
+        }
+      },
+      "required": [
+        "range"
+      ]
+    }
+  },
+  {
+    "name": "create_payout",
+    "description": "Create an expense payout for an employee (finance write action — policy gated).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "employee_id": {
+          "type": "string"
+        },
+        "amount": {
+          "type": "number",
+          "description": "Payout amount in USD"
+        }
+      },
+      "required": [
+        "employee_id",
+        "amount"
+      ]
+    }
+  }
+]
