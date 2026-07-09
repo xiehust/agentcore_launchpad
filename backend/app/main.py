@@ -5,6 +5,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+import app.deployer.container  # noqa: F401 — registers the container (Claude SDK) method
 import app.deployer.harness  # noqa: F401 — registers the harness deploy method
 import app.deployer.zip_runtime  # noqa: F401 — registers zip_runtime + studio methods
 from app.core.config import get_settings

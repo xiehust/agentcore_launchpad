@@ -17,7 +17,7 @@ interface LaunchState {
   jobId: string;
 }
 
-type Method = "harness" | "zip_runtime";
+type Method = "harness" | "zip_runtime" | "container";
 
 export function CreateAgent() {
   const { t } = useTranslation();
@@ -28,6 +28,7 @@ export function CreateAgent() {
   const [systemPrompt, setSystemPrompt] = useState("");
   const [tools, setTools] = useState<string[]>([]);
   const [longTerm, setLongTerm] = useState(true);
+  const [mcpServers, setMcpServers] = useState("");
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [launch, setLaunch] = useState<LaunchState | null>(null);
   const [deployment, setDeployment] = useState<DeploymentInfo | null>(null);
@@ -61,8 +62,11 @@ export function CreateAgent() {
         method,
         model_id: modelId,
         system_prompt: systemPrompt,
-        tools: tools.map((n) => ({ type: "builtin", name: n })),
+        tools: method === "harness" ? tools.map((n) => ({ type: "builtin", name: n })) : [],
         memory: { short_term: true, long_term: longTerm },
+        ...(method === "container" && mcpServers.trim()
+          ? { env: { LAUNCHPAD_MCP_SERVERS: mcpServers.trim() } }
+          : {}),
       });
       setLaunch({ agentId: res.agent.id, jobId: res.job_id });
       setAgentStatus("deploying");
@@ -114,14 +118,20 @@ export function CreateAgent() {
                 <span>{t("create.methods.harness.spec3")}</span>
               </div>
             </div>
-            <div className="method" style={{ opacity: 0.55, "--i": 1 } as CSSProperties}>
-              <div className="m-badge plain">{t("create.methods.claudeSdk.badge")}</div>
+            <div
+              className={`method${method === "container" ? " sel" : ""}`}
+              style={{ "--i": 1 } as CSSProperties}
+              onClick={() => setMethod("container")}
+              data-method="container"
+            >
+              <div className="m-badge">{t("create.methods.claudeSdk.badge")}</div>
               <div className="m-icon">▣</div>
               <h3>{t("create.methods.claudeSdk.title")}</h3>
               <p>{t("create.methods.claudeSdk.desc")}</p>
               <div className="m-specs">
                 <span>CodeBuild → ECR → Runtime</span>
                 <span>CLAUDE_CODE_USE_BEDROCK=1</span>
+                <span>{t("create.methods.claudeSdk.spec3")}</span>
               </div>
             </div>
             <div
@@ -153,11 +163,13 @@ export function CreateAgent() {
         <div className="cfg-grid">
           <Panel
             brk
-            title={
+            title={t(
               method === "harness"
-                ? t("create.configure.title")
-                : t("create.configure.titleZip")
-            }
+                ? "create.configure.title"
+                : method === "container"
+                  ? "create.configure.titleContainer"
+                  : "create.configure.titleZip",
+            )}
             sub={
               name
                 ? method === "harness"
@@ -201,7 +213,9 @@ export function CreateAgent() {
               <label>
                 {method === "harness"
                   ? t("create.configure.tools")
-                  : t("create.configure.templateTools")}
+                  : method === "container"
+                    ? t("create.configure.sdkTools")
+                    : t("create.configure.templateTools")}
               </label>
               <div className="selchips">
                 {method === "harness" ? (
@@ -216,6 +230,11 @@ export function CreateAgent() {
                       {tool} · builtin {tools.includes(tool) ? "✓" : "+"}
                     </button>
                   ))
+                ) : method === "container" ? (
+                  <>
+                    <span className="selchip on">Task · subagents ✓</span>
+                    <span className="selchip on">fact-checker · .claude/agents ✓</span>
+                  </>
                 ) : (
                   <>
                     <span className="selchip on">calculator · template ✓</span>
@@ -227,6 +246,19 @@ export function CreateAgent() {
                 </span>
               </div>
             </div>
+            {method === "container" && (
+              <div className="field">
+                <label htmlFor="agent-mcp">{t("create.configure.mcpServers")}</label>
+                <textarea
+                  id="agent-mcp"
+                  className="input mono"
+                  style={{ minHeight: 56, resize: "vertical" }}
+                  value={mcpServers}
+                  onChange={(e) => setMcpServers(e.target.value)}
+                  placeholder='{"docs": {"command": "uvx", "args": ["mcp-server-docs"]}}'
+                />
+              </div>
+            )}
             <div className="field">
               <label>{t("create.configure.memory")}</label>
               <div className="selchips">

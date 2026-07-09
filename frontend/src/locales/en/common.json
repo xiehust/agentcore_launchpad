@@ -95,9 +95,10 @@
         "spec3": "deploy ≈ 30s"
       },
       "claudeSdk": {
-        "badge": "CONTAINER · PHASE 5",
+        "badge": "CONTAINER · ~6 MIN",
         "title": "Claude Agent SDK",
-        "desc": "Full agentic loop with subagents, hooks and MCP servers. Packaged as an ARM64 container via CodeBuild, models via Bedrock."
+        "desc": "Full agentic loop with subagents, hooks and MCP servers. Packaged as an ARM64 container via CodeBuild, models via Bedrock.",
+        "spec3": "subagents via .claude/agents"
       },
       "studio": {
         "badge": "ZIP PATH LIVE · CANVAS PHASE 12",
@@ -120,7 +121,10 @@
       "memoryLong": "long-term · user preferences",
       "note": "Config-bundle contract baked in. Generated agents read system prompt & tool descriptions via get_config_bundle() with defaults as fallback — required for A/B experiments in the Evaluation layer. OTEL (ADOT) instrumentation is added automatically.",
       "titleZip": "CONFIGURE — STRANDS · ZIP FAST PATH",
-      "templateTools": "TOOLS — STRANDS TEMPLATE"
+      "templateTools": "TOOLS — STRANDS TEMPLATE",
+      "titleContainer": "CONFIGURE — CLAUDE AGENT SDK · CONTAINER",
+      "sdkTools": "CAPABILITIES — CLAUDE SDK",
+      "mcpServers": "MCP SERVERS · JSON (OPTIONAL)"
     },
     "launchPanel": {
       "title": "LAUNCH PLAN",

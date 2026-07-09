@@ -44,7 +44,7 @@ def test_duplicate_name_conflict(client):
 
 
 def test_unsupported_method_rejected(client):
-    res = client.post("/api/agents", json={**SPEC, "method": "container"})
+    res = client.post("/api/agents", json={**SPEC, "method": "studio"})
     assert res.status_code == 400
     assert res.json()["code"] == "agent.method_not_available"
 

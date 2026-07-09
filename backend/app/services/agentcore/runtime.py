@@ -40,6 +40,28 @@ def create_code_runtime(
     return client.create_agent_runtime(**params)
 
 
+def create_container_runtime(
+    client: Any,
+    *,
+    runtime_name: str,
+    container_uri: str,
+    role_arn: str,
+    environment: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """CreateAgentRuntime from an ECR image (Claude SDK container path)."""
+    params: dict[str, Any] = {
+        "agentRuntimeName": runtime_name,
+        "agentRuntimeArtifact": {
+            "containerConfiguration": {"containerUri": container_uri}
+        },
+        "networkConfiguration": {"networkMode": "PUBLIC"},
+        "roleArn": role_arn,
+    }
+    if environment:
+        params["environmentVariables"] = dict(environment)
+    return client.create_agent_runtime(**params)
+
+
 def get_runtime(client: Any, runtime_id: str) -> dict[str, Any]:
     return client.get_agent_runtime(agentRuntimeId=runtime_id)
 

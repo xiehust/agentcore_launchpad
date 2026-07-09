@@ -1,8 +1,8 @@
-# --- session / tool artifacts ---
-.claude/
-.codegraph/
-.supergoal/
-.mcp.json
+# --- session / tool artifacts (repo root only) ---
+/.claude/
+/.codegraph/
+/.supergoal/
+/.mcp.json
 
 # --- python ---
 __pycache__/

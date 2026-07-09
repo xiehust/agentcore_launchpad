@@ -95,9 +95,10 @@
         "spec3": "部署约 30 秒"
       },
       "claudeSdk": {
-        "badge": "容器 · 第 5 阶段",
+        "badge": "容器 · 约 6 分钟",
         "title": "Claude Agent SDK",
-        "desc": "具备子 Agent、Hooks 与 MCP 服务器的完整智能体循环。经 CodeBuild 打包为 ARM64 容器,模型走 Bedrock。"
+        "desc": "具备子 Agent、Hooks 与 MCP 服务器的完整智能体循环。经 CodeBuild 打包为 ARM64 容器,模型走 Bedrock。",
+        "spec3": "经 .claude/agents 支持子 Agent"
       },
       "studio": {
         "badge": "ZIP 通道已上线 · 画布第 12 阶段",
@@ -120,7 +121,10 @@
       "memoryLong": "长期 · 用户偏好",
       "note": "已内置 Config-bundle 契约。生成的 Agent 通过 get_config_bundle() 读取系统提示词与工具描述并以默认值兜底 — 这是评估层 A/B 实验的前提。OTEL(ADOT)埋点自动注入。",
       "titleZip": "配置 — STRANDS · ZIP 快速通道",
-      "templateTools": "工具 — STRANDS 模板"
+      "templateTools": "工具 — STRANDS 模板",
+      "titleContainer": "配置 — CLAUDE AGENT SDK · 容器",
+      "sdkTools": "能力 — CLAUDE SDK",
+      "mcpServers": "MCP 服务器 · JSON(可选)"
     },
     "launchPanel": {
       "title": "发射计划",

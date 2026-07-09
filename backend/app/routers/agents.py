@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.errors import AppError, NotFoundError
+from app.deployer import container as container_method
 from app.deployer import harness as harness_method
 from app.deployer import zip_runtime as zip_method
 from app.deployer.pipeline import create_deployment, start_deploy_async
@@ -19,7 +20,7 @@ from app.services.invoke import invoke_agent_text
 
 router = APIRouter(prefix="/api", tags=["agents"])
 
-SUPPORTED_METHODS = {"harness", "zip_runtime"}  # container → phase 5, studio → phase 12
+SUPPORTED_METHODS = {"harness", "zip_runtime", "container"}  # studio → phase 12
 
 
 def _agent_out(agent: Agent, deployment: Deployment | None = None) -> dict[str, Any]:
@@ -149,6 +150,8 @@ def delete_agent(agent_id: str, db: Session = Depends(get_db)) -> dict[str, Any]
         harness_method.delete_agent_resources(agent)
     elif agent.method in ("zip_runtime", "studio"):
         zip_method.delete_agent_resources(agent)
+    elif agent.method == "container":
+        container_method.delete_agent_resources(agent)
     agent.status = "deleted"
     agent.updated_at = datetime.now(UTC)
     db.commit()
