@@ -31,3 +31,4 @@ config/launchpad.yaml
 .env
 .env.*
 cdk.out/
+vendor-src/

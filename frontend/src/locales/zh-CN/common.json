@@ -29,16 +29,23 @@
     "payments": "支付功能延后至第二阶段",
     "palette": "配色已验证 · 深色 #141816"
   },
+  "status": {
+    "active": "运行中",
+    "deploying": "部署中",
+    "failed": "失败",
+    "deleted": "已删除"
+  },
   "overview": {
     "kicker": "// 任务控制中心",
     "title": "总览",
-    "meta": "本地控制平面 · 实时数据将在后续阶段接入",
+    "meta": "统一流水线 · 实时台账",
     "tiles": {
       "deployedAgents": "已部署 AGENT",
       "activeSessions": "活跃会话",
       "registryAssets": "注册资产",
       "evalPassRate": "评估通过率",
       "none": "暂无",
+      "inFlight": "{{count}} 个进行中",
       "breakdownEmpty": "0 个 Agent · 0 个工具 · 0 个技能",
       "noRuns": "暂无评估运行"
     },
@@ -46,6 +53,7 @@
       "title": "服务健康",
       "sub": "控制平面",
       "pending": "等待引导 · 第 2+ 阶段",
+      "activeCount": "运行中 · {{count}} 个 Agent",
       "runtime": "Runtime",
       "gateway": "Gateway",
       "memory": "Memory",
@@ -70,8 +78,69 @@
     "kicker": "// 自助发射台",
     "title": "创建 Agent",
     "meta": "统一流水线 — 生成 → 打包 → 供给 → 部署 → 注册",
-    "placeholderTitle": "创建向导",
-    "placeholderBody": "三种创建方式(托管 Harness、Claude Agent SDK、Strands Studio)与统一发布流水线将在第 3–5 阶段上线。"
+    "next": "下一步",
+    "back": "返回",
+    "launch": "启动 AGENT",
+    "steps": {
+      "1": "01 · 选择方式",
+      "2": "02 · 配置",
+      "3": "03 · 发射"
+    },
+    "methods": {
+      "harness": {
+        "badge": "推荐 · 免构建",
+        "title": "托管 Harness",
+        "desc": "声明式 Agent — 模型、提示词、工具、技能、记忆。无需编排代码与容器,数秒内上线。",
+        "spec2": "工具:gateway / mcp / 浏览器 / 代码解释器",
+        "spec3": "部署约 30 秒"
+      },
+      "claudeSdk": {
+        "badge": "容器 · 第 5 阶段",
+        "title": "Claude Agent SDK",
+        "desc": "具备子 Agent、Hooks 与 MCP 服务器的完整智能体循环。经 CodeBuild 打包为 ARM64 容器,模型走 Bedrock。"
+      },
+      "studio": {
+        "badge": "可视化编排 · 第 12 阶段",
+        "title": "Strands Studio",
+        "desc": "拖拽式画布,支持单体、层级、图与蜂群拓扑。自动生成 Strands 代码,经 zip 快速通道部署。",
+        "spec2": "多 Agent 拓扑"
+      }
+    },
+    "configure": {
+      "title": "配置 — 托管 HARNESS",
+      "name": "AGENT 名称",
+      "model": "模型 · BEDROCK",
+      "systemPrompt": "系统提示词",
+      "systemPromptPlaceholder": "你是一名乐于助人的助手……",
+      "tools": "工具 — 内置",
+      "gatewayToolsSoon": "+ gateway 工具 · 第 6 阶段",
+      "memory": "记忆",
+      "memoryShort": "短期 · 会话",
+      "memoryLong": "长期 · 用户偏好",
+      "note": "已内置 Config-bundle 契约。生成的 Agent 通过 get_config_bundle() 读取系统提示词与工具描述并以默认值兜底 — 这是评估层 A/B 实验的前提。OTEL(ADOT)埋点自动注入。"
+    },
+    "launchPanel": {
+      "title": "发射计划",
+      "sub": "boto3 快速通道",
+      "sharedInfra": "共享基础设施",
+      "agentResources": "Agent 资源",
+      "agentResourcesV": "boto3 快速通道 · 台账跟踪",
+      "onSuccess": "成功后",
+      "onSuccessV": "自动注册 → Registry(第 7 阶段)"
+    },
+    "sequence": {
+      "title": "发射序列",
+      "logTitle": "任务日志",
+      "waiting": "等待任务事件……",
+      "newAgent": "再建一个"
+    },
+    "stages": {
+      "generate": "生成",
+      "package": "打包",
+      "provision": "供给",
+      "deploy": "部署",
+      "register": "注册"
+    }
   },
   "registry": {
     "kicker": "// 发现层",
@@ -105,13 +174,14 @@
     "comingSoon": "即将上线",
     "phaseTag": "规划中 · 第 {{phase}} 阶段"
   },
-  "errors": {
-    "http": {
-      "404": "资源不存在",
-      "500": "服务器内部错误"
-    },
-    "validation": {
-      "invalid_request": "请求校验失败"
-    }
+  "apiErrors": {
+    "agent.name_exists": "同名 Agent 已存在",
+    "agent.method_not_available": "该创建方式将在后续阶段开放",
+    "agent.not_active": "Agent 尚未处于运行状态",
+    "agent.not_found": "未找到该 Agent",
+    "job.not_found": "未找到该任务",
+    "validation.invalid_request": "请求校验失败",
+    "http.404": "资源不存在",
+    "http.500": "服务器内部错误"
   }
 }

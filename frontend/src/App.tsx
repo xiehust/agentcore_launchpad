@@ -1,6 +1,7 @@
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 
 import { Shell } from "./layout/Shell";
+import { CreateAgent } from "./pages/CreateAgent";
 import { Overview } from "./pages/Overview";
 import { PlaceholderPage } from "./pages/Placeholder";
 
@@ -10,7 +11,7 @@ export default function App() {
       <Routes>
         <Route element={<Shell />}>
           <Route index element={<Overview />} />
-          <Route path="create" element={<PlaceholderPage ns="create" phase={3} />} />
+          <Route path="create" element={<CreateAgent />} />
           <Route path="registry" element={<PlaceholderPage ns="registry" phase={7} />} />
           <Route path="chat" element={<PlaceholderPage ns="chat" phase={8} />} />
           <Route path="evaluation" element={<PlaceholderPage ns="evaluation" phase={10} />} />

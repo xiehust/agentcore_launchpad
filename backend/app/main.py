@@ -1,14 +1,19 @@
 """FastAPI application factory."""
 
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+import app.deployer.harness  # noqa: F401 — registers the harness deploy method
 from app.core.config import get_settings
 from app.core.db import init_db
 from app.core.errors import register_error_handlers
+from app.deployer.pipeline import resume_pending_jobs
+from app.routers.agents import router as agents_router
 
 
-def create_app() -> FastAPI:
+def create_app(resume_jobs: bool = False) -> FastAPI:
     settings = get_settings()
     app = FastAPI(title=settings.app_name, version=settings.version)
 
@@ -21,6 +26,13 @@ def create_app() -> FastAPI:
     )
     register_error_handlers(app)
     init_db()
+    app.include_router(agents_router)
+    if resume_jobs:
+        resumed = resume_pending_jobs()
+        if resumed:
+            logging.getLogger("launchpad").info(
+                "resumed %d interrupted deploy job(s)", len(resumed)
+            )
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
@@ -33,4 +45,4 @@ def create_app() -> FastAPI:
     return app
 
 
-app = create_app()
+app = create_app(resume_jobs=True)

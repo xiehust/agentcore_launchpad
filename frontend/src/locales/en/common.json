@@ -29,16 +29,23 @@
     "payments": "PAYMENTS DEFERRED TO PHASE 02",
     "palette": "PALETTE VALIDATED · DARK #141816"
   },
+  "status": {
+    "active": "ACTIVE",
+    "deploying": "DEPLOYING",
+    "failed": "FAILED",
+    "deleted": "DELETED"
+  },
   "overview": {
     "kicker": "// MISSION CONTROL",
     "title": "Overview",
-    "meta": "LOCAL CONTROL PLANE · LIVE DATA ARRIVES IN LATER PHASES",
+    "meta": "UNIFIED PIPELINE · LIVE LEDGER",
     "tiles": {
       "deployedAgents": "DEPLOYED AGENTS",
       "activeSessions": "ACTIVE SESSIONS",
       "registryAssets": "REGISTRY ASSETS",
       "evalPassRate": "EVAL PASS RATE",
       "none": "none yet",
+      "inFlight": "{{count}} in flight",
       "breakdownEmpty": "0 agents · 0 tools · 0 skills",
       "noRuns": "no runs yet"
     },
@@ -46,6 +53,7 @@
       "title": "SERVICE HEALTH",
       "sub": "control plane",
       "pending": "AWAITING BOOTSTRAP · PHASE 2+",
+      "activeCount": "ACTIVE · {{count}} agent(s)",
       "runtime": "Runtime",
       "gateway": "Gateway",
       "memory": "Memory",
@@ -70,8 +78,69 @@
     "kicker": "// SELF-SERVICE LAUNCH",
     "title": "Create Agent",
     "meta": "UNIFIED PIPELINE — GENERATE → PACKAGE → PROVISION → DEPLOY → REGISTER",
-    "placeholderTitle": "CREATE WIZARD",
-    "placeholderBody": "The three creation methods (Managed Harness, Claude Agent SDK, Strands Studio) and the unified launch pipeline arrive in phases 3–5."
+    "next": "NEXT",
+    "back": "BACK",
+    "launch": "LAUNCH AGENT",
+    "steps": {
+      "1": "01 · METHOD",
+      "2": "02 · CONFIGURE",
+      "3": "03 · LAUNCH"
+    },
+    "methods": {
+      "harness": {
+        "badge": "RECOMMENDED · NO BUILD",
+        "title": "Managed Harness",
+        "desc": "Declarative agent — model, prompt, tools, skills, memory. No orchestration code, no container. Runs in seconds.",
+        "spec2": "tools: gateway / mcp / browser / code-interpreter",
+        "spec3": "deploy ≈ 30s"
+      },
+      "claudeSdk": {
+        "badge": "CONTAINER · PHASE 5",
+        "title": "Claude Agent SDK",
+        "desc": "Full agentic loop with subagents, hooks and MCP servers. Packaged as an ARM64 container via CodeBuild, models via Bedrock."
+      },
+      "studio": {
+        "badge": "VISUAL EDITOR · PHASE 12",
+        "title": "Strands Studio",
+        "desc": "Drag-and-drop canvas for single, hierarchical, graph and swarm topologies. Generates Strands code, deploys via zip fast path.",
+        "spec2": "multi-agent topologies"
+      }
+    },
+    "configure": {
+      "title": "CONFIGURE — MANAGED HARNESS",
+      "name": "AGENT NAME",
+      "model": "MODEL · BEDROCK",
+      "systemPrompt": "SYSTEM PROMPT",
+      "systemPromptPlaceholder": "You are a helpful assistant for…",
+      "tools": "TOOLS — BUILTIN",
+      "gatewayToolsSoon": "+ gateway tools · phase 6",
+      "memory": "MEMORY",
+      "memoryShort": "short-term · session",
+      "memoryLong": "long-term · user preferences",
+      "note": "Config-bundle contract baked in. Generated agents read system prompt & tool descriptions via get_config_bundle() with defaults as fallback — required for A/B experiments in the Evaluation layer. OTEL (ADOT) instrumentation is added automatically."
+    },
+    "launchPanel": {
+      "title": "LAUNCH PLAN",
+      "sub": "boto3 fast path",
+      "sharedInfra": "Shared infra",
+      "agentResources": "Agent resources",
+      "agentResourcesV": "boto3 fast path · tracked in ledger",
+      "onSuccess": "On success",
+      "onSuccessV": "auto-register → Registry (phase 7)"
+    },
+    "sequence": {
+      "title": "LAUNCH SEQUENCE",
+      "logTitle": "JOB LOG",
+      "waiting": "waiting for job events…",
+      "newAgent": "CREATE ANOTHER"
+    },
+    "stages": {
+      "generate": "GENERATE",
+      "package": "PACKAGE",
+      "provision": "PROVISION",
+      "deploy": "DEPLOY",
+      "register": "REGISTER"
+    }
   },
   "registry": {
     "kicker": "// DISCOVERY LAYER",
@@ -105,13 +174,14 @@
     "comingSoon": "COMING SOON",
     "phaseTag": "PLANNED · PHASE {{phase}}"
   },
-  "errors": {
-    "http": {
-      "404": "Resource not found",
-      "500": "Internal server error"
-    },
-    "validation": {
-      "invalid_request": "Request validation failed"
-    }
+  "apiErrors": {
+    "agent.name_exists": "An agent with this name already exists",
+    "agent.method_not_available": "This creation method ships in a later phase",
+    "agent.not_active": "The agent is not active yet",
+    "agent.not_found": "Agent not found",
+    "job.not_found": "Job not found",
+    "validation.invalid_request": "Request validation failed",
+    "http.404": "Resource not found",
+    "http.500": "Internal server error"
   }
 }
