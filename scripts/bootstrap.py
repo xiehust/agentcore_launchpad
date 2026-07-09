@@ -69,6 +69,18 @@ def main() -> int:
         ("demo passwords", "set (see config/launchpad.yaml)"
          if summary["demo_passwords_set"] else "unchanged"),
     ]
+    if summary.get("policy"):
+        pol = summary["policy"]
+        rows += [
+            ("tx search", f"enabled={pol['transaction_search']['enabled']}"),
+            ("policy engine", ("created" if pol["policy_engine"]["created"] else "reused")
+             + f" · {pol['policy_engine']['id']}"),
+            ("gateway policy", "attached · ENFORCE" if pol["gateway_attached"]
+             else "already attached"),
+        ] + [
+            (f"policy {p['name'][:20]}", "created" if p["created"] else "reused")
+            for p in pol["policies"]
+        ]
     if summary.get("gateway"):
         gw = summary["gateway"]
         rows += [

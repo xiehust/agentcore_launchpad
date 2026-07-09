@@ -18,6 +18,28 @@ interface MemorySummary {
   records: { namespace: string; text: string }[];
 }
 
+interface TraceSpan {
+  name: string;
+  category: "model" | "tool" | "memory" | "policy" | "runtime" | "other";
+  start_ms: number;
+  duration_ms: number | null;
+}
+
+interface TraceInfo {
+  span_count: number;
+  spans: TraceSpan[];
+  cloudwatch_url: string;
+}
+
+const SPAN_COLOR: Record<string, string> = {
+  model: "var(--s1)",
+  tool: "var(--s2)",
+  memory: "var(--s3)",
+  policy: "var(--s5)",
+  runtime: "#69736C",
+  other: "#3A453F",
+};
+
 interface KeyInfo {
   id: string;
   name: string;
@@ -57,6 +79,8 @@ export function Chat() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [memory, setMemory] = useState<MemorySummary | null>(null);
+  const [trace, setTrace] = useState<TraceInfo | null>(null);
+  const [traceBusy, setTraceBusy] = useState(false);
   const [keys, setKeys] = useState<KeyInfo[]>([]);
   const [newKey, setNewKey] = useState<KeyInfo | null>(null);
   const threadRef = useRef<HTMLDivElement>(null);
@@ -166,6 +190,18 @@ export function Chat() {
     setSessionId(null);
     setMessages([]);
     setMemory(null);
+    setTrace(null);
+  };
+
+  const loadTrace = async () => {
+    if (!sessionId) return;
+    setTraceBusy(true);
+    try {
+      const res = await fetch(`/api/traces/${sessionId}`);
+      if (res.ok) setTrace((await res.json()) as TraceInfo);
+    } finally {
+      setTraceBusy(false);
+    }
   };
 
   const createKey = async () => {
@@ -300,8 +336,73 @@ export function Chat() {
         </Panel>
 
         <div>
-          <Panel title={t("chatPage.traceTitle")} sub={t("chatPage.tracePhase9")} style={{ "--i": 1 } as CSSProperties}>
-            <div className="empty">{t("chatPage.tracePlaceholder")}</div>
+          <Panel
+            title={t("chatPage.traceTitle")}
+            sub={sessionId ? `${sessionId.slice(0, 12)}…` : "aws/spans"}
+            end={
+              <>
+                {trace && (
+                  <a
+                    href={trace.cloudwatch_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="chip muted"
+                    style={{ textDecoration: "none" }}
+                  >
+                    CLOUDWATCH ↗
+                  </a>
+                )}
+                <Btn disabled={!sessionId || traceBusy} onClick={() => void loadTrace()}>
+                  {traceBusy ? "…" : `⟳ ${t("chatPage.traceLoad")}`}
+                </Btn>
+              </>
+            }
+            pad={false}
+            style={{ "--i": 1 } as CSSProperties}
+          >
+            {trace && trace.span_count > 0 ? (
+              <>
+                <div className="tl" data-testid="trace-rows">
+                  {(() => {
+                    const spans = trace.spans.slice(0, 12);
+                    const total = Math.max(
+                      ...spans.map((s) => (s.start_ms ?? 0) + (s.duration_ms ?? 0)),
+                      1,
+                    );
+                    return spans.map((span, i) => (
+                      <div className="trow" key={i}>
+                        <span className="tn">{span.name}</span>
+                        <div className="track">
+                          <div
+                            className="span"
+                            style={{
+                              left: `${((span.start_ms ?? 0) / total) * 100}%`,
+                              width: `${Math.max(((span.duration_ms ?? 0) / total) * 100, 0.8)}%`,
+                              background: SPAN_COLOR[span.category] ?? SPAN_COLOR.other,
+                            }}
+                          />
+                        </div>
+                        <span className="ms">{Math.round(span.duration_ms ?? 0)}ms</span>
+                      </div>
+                    ));
+                  })()}
+                </div>
+                <div className="pbody" style={{ paddingTop: 4, borderTop: "1px solid var(--grid)" }}>
+                  <div className="legend" style={{ flexWrap: "wrap", gap: 8 }}>
+                    {(["model", "tool", "memory", "policy"] as const).map((cat) => (
+                      <span className="li" key={cat}>
+                        <span className="sw" style={{ background: SPAN_COLOR[cat] }} />
+                        {cat}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="empty">
+                {sessionId ? t("chatPage.traceEmpty") : t("chatPage.tracePlaceholder")}
+              </div>
+            )}
           </Panel>
           <div style={{ height: 14 }} />
           <Panel title={t("chatPage.memoryTitle")} style={{ "--i": 2 } as CSSProperties}>

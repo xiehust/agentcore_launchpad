@@ -260,12 +260,29 @@ def run_bootstrap(region: str | None = None) -> dict[str, Any]:
             }
         )
 
+    policy_summary = None
+    if gateway_summary is not None:
+        from app.services.policy_bootstrap import run_policy_bootstrap
+
+        policy_summary = run_policy_bootstrap(
+            control, _client("xray", region), load_config()
+        )
+        write_config(
+            {
+                "resources": {
+                    "policy_engine_id": policy_summary["policy_engine"]["id"],
+                    "policy_engine_arn": policy_summary["policy_engine"]["arn"],
+                }
+            }
+        )
+
     return {
         "account_id": account_id,
         "region": region,
         "registry": {**registry, "created": registry_created},
         "memory": {**memory, "created": memory_created},
         "gateway": gateway_summary,
+        "policy": policy_summary,
         "demo_passwords_set": pw_changed,
         "stack_outputs": outputs,
     }

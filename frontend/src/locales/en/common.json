@@ -226,6 +226,22 @@
       "ciTitle": "BUILTIN — CODE INTERPRETER",
       "brTitle": "BUILTIN — BROWSER TOOL",
       "run": "RUN"
+    },
+    "policy": {
+      "sub": "tool access by role · policy engine",
+      "enforced": "ENFORCED",
+      "loading": "loading policies…",
+      "testAnalyst": "TEST · payout as hr-analyst",
+      "testAdmin": "TEST · payout as platform-admin",
+      "generate": "GENERATE FROM TEXT"
+    },
+    "policyGen": {
+      "unavailable": "generation unavailable"
+    },
+    "decisions": {
+      "title": "DECISION LOG",
+      "sub": "policy evaluations · live",
+      "empty": "NO DECISIONS YET — RUN A POLICY TEST"
     }
   },
   "common": {
@@ -263,6 +279,8 @@
     "keyOnce": "copy now — shown once",
     "noKeys": "NO KEYS YET",
     "keyEnabled": "enabled ✓",
-    "keyDisabled": "disabled"
+    "keyDisabled": "disabled",
+    "traceLoad": "LOAD TRACE",
+    "traceEmpty": "NO SPANS YET — TRACES LAND IN ~1 MIN, RELOAD"
   }
 }

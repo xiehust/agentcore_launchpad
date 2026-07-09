@@ -342,6 +342,24 @@ class LaunchpadBaseStack(Stack):
         )
         gateway_role.add_to_policy(
             iam.PolicyStatement(
+                sid="PolicyEngineEvaluation",
+                actions=[
+                    "bedrock-agentcore:GetPolicyEngine",
+                    "bedrock-agentcore:GetPolicy",
+                    "bedrock-agentcore:ListPolicies",
+                    "bedrock-agentcore:ListPolicySummaries",
+                    "bedrock-agentcore:AuthorizeAction",
+                    "bedrock-agentcore:PartiallyAuthorizeActions",
+                    "bedrock-agentcore:BatchAuthorizeActions",
+                ],
+                resources=[
+                    f"arn:aws:bedrock-agentcore:{self.region}:{self.account}:policy-engine/*",
+                    f"arn:aws:bedrock-agentcore:{self.region}:{self.account}:gateway/*",
+                ],
+            )
+        )
+        gateway_role.add_to_policy(
+            iam.PolicyStatement(
                 sid="IdentitySecrets",
                 actions=["secretsmanager:GetSecretValue"],
                 resources=[

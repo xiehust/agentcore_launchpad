@@ -226,6 +226,22 @@
       "ciTitle": "内置 — 代码解释器",
       "brTitle": "内置 — 浏览器工具",
       "run": "运行"
+    },
+    "policy": {
+      "sub": "按角色控制工具访问 · 策略引擎",
+      "enforced": "强制执行",
+      "loading": "正在加载策略……",
+      "testAnalyst": "测试 · 以 hr-analyst 发起支付",
+      "testAdmin": "测试 · 以 platform-admin 发起支付",
+      "generate": "由自然语言生成"
+    },
+    "policyGen": {
+      "unavailable": "生成不可用"
+    },
+    "decisions": {
+      "title": "决策日志",
+      "sub": "策略评估 · 实时",
+      "empty": "暂无决策 — 先运行一次策略测试"
     }
   },
   "common": {
@@ -263,6 +279,8 @@
     "keyOnce": "立即复制 — 仅显示一次",
     "noKeys": "暂无密钥",
     "keyEnabled": "已启用 ✓",
-    "keyDisabled": "已停用"
+    "keyDisabled": "已停用",
+    "traceLoad": "加载链路",
+    "traceEmpty": "暂无 SPAN — 链路约 1 分钟后落地,请重试"
   }
 }

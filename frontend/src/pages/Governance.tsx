@@ -19,6 +19,19 @@ async function fetchTools(): Promise<{ tools: ToolInfo[]; gateway_url: string | 
   return res.json();
 }
 
+interface PolicyInfo {
+  engine: { id: string; name: string; status: string; attached_mode: string | null; attached: boolean };
+  policies: { id: string; name: string; status: string; statement: string }[];
+}
+
+interface Decision {
+  at: string | null;
+  principal: string;
+  tool: string;
+  outcome: "ALLOW" | "DENY";
+  reason: string;
+}
+
 export function Governance() {
   const { t } = useTranslation();
   const [tools, setTools] = useState<ToolInfo[]>([]);
@@ -28,6 +41,17 @@ export function Governance() {
   const [ciBusy, setCiBusy] = useState(false);
   const [brOut, setBrOut] = useState<string>("");
   const [brBusy, setBrBusy] = useState(false);
+  const [policyInfo, setPolicyInfo] = useState<PolicyInfo | null>(null);
+  const [decisions, setDecisions] = useState<Decision[]>([]);
+  const [testBusy, setTestBusy] = useState(false);
+  const [genOut, setGenOut] = useState<string>("");
+
+  const loadDecisions = () => {
+    fetch("/api/governance/decisions")
+      .then((res) => (res.ok ? res.json() : { decisions: [] }))
+      .then((d: { decisions: Decision[] }) => setDecisions(d.decisions))
+      .catch(() => {});
+  };
 
   useEffect(() => {
     fetchTools()
@@ -39,7 +63,67 @@ export function Governance() {
       .catch(() => {
         /* backend offline — catalog stays empty */
       });
+    fetch("/api/governance/policies")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((d: PolicyInfo | null) => d && setPolicyInfo(d))
+      .catch(() => {});
+    loadDecisions();
   }, []);
+
+  const runPolicyTest = async (username: "river" | "demo") => {
+    setTestBusy(true);
+    try {
+      await fetch("/api/governance/policy-test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username,
+          tool: "hr-database___create_payout",
+          arguments: { employee_id: "EMP-1024", amount: 42 },
+        }),
+      });
+      loadDecisions();
+    } finally {
+      setTestBusy(false);
+    }
+  };
+
+  const runGeneration = async () => {
+    setGenOut("…");
+    const res = await fetch("/api/governance/policy-generation", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text: "Allow only users in the platform-admin group to call the check_calendar tool on weekdays.",
+        name: `launchpad_gen_${Date.now() % 100000}`,
+      }),
+    });
+    const body = (await res.json()) as {
+      available: boolean;
+      generation_id?: string;
+      status?: string;
+      error?: string;
+    };
+    if (!body.available) {
+      setGenOut(`${t("governance.policyGen.unavailable")}: ${body.error ?? ""}`);
+      return;
+    }
+    setGenOut(`generation ${body.generation_id} · ${body.status}`);
+    for (let i = 0; i < 20; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 6000));
+      const poll = await fetch(`/api/governance/policy-generation/${body.generation_id}`);
+      if (!poll.ok) continue;
+      const detail = (await poll.json()) as { status: string; assets: { statement: string }[] };
+      setGenOut(`generation ${body.generation_id} · ${detail.status}`);
+      if (detail.status === "GENERATED") {
+        setGenOut(
+          `✓ GENERATED\n${detail.assets.map((a) => a.statement).join("\n---\n").slice(0, 900)}`,
+        );
+        return;
+      }
+      if (detail.status.includes("FAILED")) return;
+    }
+  };
 
   const runCodeDemo = async () => {
     setCiBusy(true);
@@ -175,6 +259,66 @@ export function Governance() {
               </div>
             </>
           )}
+        </Panel>
+      </div>
+
+      <div className="gov-grid">
+        <Panel
+          title={`CEDAR — ${policyInfo?.engine.name ?? "launchpad_pe"}`}
+          sub={t("governance.policy.sub")}
+          end={
+            policyInfo?.engine.attached ? (
+              <Chip tone="amber" icon="◆">
+                {policyInfo.engine.attached_mode === "ENFORCE"
+                  ? t("governance.policy.enforced")
+                  : "LOG_ONLY"}
+              </Chip>
+            ) : (
+              <Chip tone="muted" icon="○">—</Chip>
+            )
+          }
+          style={{ "--i": 4 } as CSSProperties}
+        >
+          <div className="code" style={{ maxHeight: 240, overflowY: "auto" }}>
+            {policyInfo?.policies.map((p) => `// ${p.name} · ${p.status}\n${p.statement}`).join("\n\n") ??
+              t("governance.policy.loading")}
+          </div>
+          <div style={{ display: "flex", gap: 9, marginTop: 12, flexWrap: "wrap" }}>
+            <Btn disabled={testBusy} onClick={() => void runPolicyTest("demo")}>
+              {t("governance.policy.testAnalyst")}
+            </Btn>
+            <Btn disabled={testBusy} onClick={() => void runPolicyTest("river")}>
+              {t("governance.policy.testAdmin")}
+            </Btn>
+            <Btn onClick={() => void runGeneration()}>{t("governance.policy.generate")}</Btn>
+          </div>
+          {genOut && (
+            <div className="code" style={{ marginTop: 10, maxHeight: 160, overflowY: "auto" }}>
+              {genOut}
+            </div>
+          )}
+        </Panel>
+
+        <Panel
+          className="dlog"
+          title={t("governance.decisions.title")}
+          sub={t("governance.decisions.sub")}
+          pad={false}
+          style={{ "--i": 5 } as CSSProperties}
+        >
+          {decisions.length === 0 && <div className="empty">{t("governance.decisions.empty")}</div>}
+          {decisions.slice(0, 8).map((d, i) => (
+            <div className="row" key={i}>
+              <span className="t">{d.at?.slice(11, 19)}</span>
+              <span className="who">{d.principal}</span>
+              <span className="res">{d.tool.replace("hr-database___", "hr-database.")}</span>
+              {d.outcome === "ALLOW" ? (
+                <Chip tone="good" icon="✓">ALLOW</Chip>
+              ) : (
+                <Chip tone="crit" icon="✕">DENY</Chip>
+              )}
+            </div>
+          ))}
         </Panel>
       </div>
 

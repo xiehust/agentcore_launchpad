@@ -84,6 +84,17 @@ class ApiKey(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class PolicyDecision(Base):
+    __tablename__ = "policy_decisions"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    principal: Mapped[str] = mapped_column(String(96))  # e.g. demo@hr-analyst
+    tool: Mapped[str] = mapped_column(String(128))
+    outcome: Mapped[str] = mapped_column(String(8))  # ALLOW | DENY
+    reason: Mapped[str | None] = mapped_column(Text, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class Job(Base):
     __tablename__ = "jobs"
 
