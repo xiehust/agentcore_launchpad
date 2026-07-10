@@ -356,7 +356,7 @@
       "evaluators": "EVALUATORS",
       "score": "SCORE",
       "status": "STATUS",
-      "empty": "NO RUNS YET — START ONE ON THE RIGHT"
+      "empty": "NO RUNS YET — PRESS + NEW RUN"
     },
     "status": {
       "completed": "COMPLETE",
@@ -370,8 +370,21 @@
       "noAgents": "no eligible active agents",
       "dataset": "DATASET",
       "evaluators": "EVALUATORS — 13 BUILTIN",
-      "start": "NEW RUN",
-      "startInsights": "INSIGHTS ON SELECTED RUN"
+      "mode": "MODE",
+      "modeEvaluators": "EVALUATORS · scored run",
+      "modeInsights": "INSIGHTS · failure triage",
+      "insightsHint": "Insights invokes the dataset against the agent, then clusters the resulting sessions into failure categories and user intents. Clustering needs at least 3 sessions — pick a dataset with 3+ items.",
+      "submit": "START RUN",
+      "submitted": "Run submitted — it appears in the list as it progresses.",
+      "how": {
+        "title": "HOW A RUN WORKS",
+        "sub": "one batch per account · queue managed",
+        "s1": "INVOKING — one runtime session per dataset item",
+        "s2": "WAITING — traces land in CloudWatch (aws/spans)",
+        "s3": "EVALUATING — StartBatchEvaluation scoped to those sessions",
+        "s4": "COMPLETED — per-evaluator scores or insight trees",
+        "note": "Runtime-backed agents only (zip / studio / container) — harness agents expose no span service name, so batch evaluation excludes them."
+      }
     },
     "scores": {
       "title": "EVALUATOR SCORES",
@@ -381,9 +394,12 @@
     "insights": {
       "title": "INSIGHTS — FAILURE TRIAGE",
       "sub": "failure analysis · user intents",
-      "empty": "RUN INSIGHTS ON A COMPLETED RUN'S SESSIONS"
+      "empty": "RUN INSIGHTS ON A COMPLETED RUN'S SESSIONS",
+      "runOnSessions": "INSIGHTS · THESE SESSIONS",
+      "needSessions": "needs ≥3 sessions (clustering minimum)"
     },
-    "runFailedToast": "Eval run failed — {{agent}}: {{msg}}"
+    "runFailedToast": "Eval run failed — {{agent}}: {{msg}}",
+    "backToRuns": "RUNS"
   },
   "expPage": {
     "title": "EXPERIMENTS",

@@ -356,7 +356,7 @@
       "evaluators": "评估器",
       "score": "得分",
       "status": "状态",
-      "empty": "暂无运行 — 在右侧发起一个"
+      "empty": "还没有运行——点击 + 新建运行"
     },
     "status": {
       "completed": "已完成",
@@ -370,8 +370,21 @@
       "noAgents": "暂无可评估的运行中 Agent",
       "dataset": "数据集",
       "evaluators": "评估器 — 13 个内置",
-      "start": "新建运行",
-      "startInsights": "对所选运行做洞察"
+      "mode": "模式",
+      "modeEvaluators": "评估器 · 打分运行",
+      "modeInsights": "洞察 · 失败归因",
+      "insightsHint": "洞察模式会用数据集调用 Agent，然后把产生的会话聚类为失败类别与用户意图。聚类至少需要 3 个会话——请选择含 3 条以上的数据集。",
+      "submit": "启动运行",
+      "submitted": "运行已提交——进度会实时出现在列表中。",
+      "how": {
+        "title": "运行是如何执行的",
+        "sub": "每账户同时一个批次 · 队列管理",
+        "s1": "INVOKING——数据集每条对应一个 runtime 会话",
+        "s2": "WAITING——追踪落入 CloudWatch（aws/spans）",
+        "s3": "EVALUATING——StartBatchEvaluation 精确圈定这些会话",
+        "s4": "COMPLETED——各评估器均分或洞察树",
+        "note": "仅支持 runtime 型 Agent（zip / studio / container）——harness Agent 不暴露 span 服务名，批量评估无法圈定。"
+      }
     },
     "scores": {
       "title": "评估器得分",
@@ -381,9 +394,12 @@
     "insights": {
       "title": "洞察 — 失败归因",
       "sub": "失败分析 · 用户意图",
-      "empty": "对已完成运行的会话执行洞察"
+      "empty": "对已完成运行的会话执行洞察",
+      "runOnSessions": "洞察 · 这些会话",
+      "needSessions": "至少需要 3 个会话（聚类下限）"
     },
-    "runFailedToast": "评估运行失败 — {{agent}}:{{msg}}"
+    "runFailedToast": "评估运行失败 — {{agent}}:{{msg}}",
+    "backToRuns": "运行列表"
   },
   "expPage": {
     "title": "实验",

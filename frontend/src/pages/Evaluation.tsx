@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useSearchParams } from "react-router-dom";
 
 import { Btn, Chip, ConfirmDialog, Panel, useToast, ViewHead } from "../components";
 import type { AgentInfo } from "../lib/api";
@@ -26,6 +27,7 @@ interface Score {
 
 interface RunInfo {
   id: string;
+  agent_id: string;
   agent_name: string;
   dataset_name: string | null;
   mode: string;
@@ -293,6 +295,10 @@ interface ExperimentInfo {
 export function Evaluation() {
   const { t } = useTranslation();
   const toast = useToast();
+  // "?view=new" renders the New Run sub-page instead of the dashboard —
+  // linkable, and the browser back button returns to the runs list.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const creating = searchParams.get("view") === "new";
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [evaluators, setEvaluators] = useState<EvaluatorInfo[]>([]);
@@ -301,6 +307,7 @@ export function Evaluation() {
   const [queueLocked, setQueueLocked] = useState(false);
   const [agentId, setAgentId] = useState("");
   const [datasetId, setDatasetId] = useState("");
+  const [mode, setMode] = useState<"evaluators" | "insights">("evaluators");
   const [chosenEvaluators, setChosenEvaluators] = useState<string[]>(DEFAULT_EVALUATORS);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [experiments, setExperiments] = useState<ExperimentInfo[]>([]);
@@ -366,17 +373,11 @@ export function Evaluation() {
     return () => clearInterval(timer);
   }, [refresh]);
 
-  const startRun = async (mode: "evaluators" | "insights") => {
+  const startRun = async () => {
     setSubmitError(null);
     const payload =
       mode === "insights"
-        ? {
-            agent_id: agentId,
-            mode,
-            session_ids: selectedRun?.session_ids?.length ? selectedRun.session_ids : undefined,
-            dataset_id: selectedRun?.session_ids?.length ? undefined : datasetId,
-            wait_seconds: selectedRun?.session_ids?.length ? 0 : 120,
-          }
+        ? { agent_id: agentId, mode, dataset_id: datasetId, wait_seconds: 120 }
         : {
             agent_id: agentId,
             dataset_id: datasetId,
@@ -394,6 +395,30 @@ export function Evaluation() {
       setSubmitError(body.message ?? `http ${res.status}`);
       return;
     }
+    toast(t("evalPage.newRun.submitted"));
+    setSearchParams({}, { replace: true }); // back to the runs list
+    void refresh();
+  };
+
+  // Contextual re-run from the dashboard: insights over the sessions a
+  // completed run already produced (no re-invoke, so wait_seconds 0).
+  const startInsightsOnRun = async (run: RunInfo) => {
+    const res = await fetch("/api/eval/runs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        agent_id: run.agent_id,
+        mode: "insights",
+        session_ids: run.session_ids,
+        wait_seconds: 0,
+      }),
+    });
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({}))) as { message?: string };
+      toast(t("common.actionFailed", { msg: body.message ?? `HTTP ${res.status}` }));
+      return;
+    }
+    toast(t("evalPage.newRun.submitted"));
     void refresh();
   };
 
@@ -413,6 +438,155 @@ export function Evaluation() {
     return mean.toFixed(2);
   };
 
+  // ── New Run sub-page (?view=new) ──────────────────────────────────────────
+  if (creating) {
+    return (
+      <section>
+        <ViewHead
+          kicker={t("evaluation.kicker")}
+          title={t("evalPage.newRun.title")}
+          meta={t("evalPage.newRun.sub")}
+        />
+        <div style={{ marginBottom: 14 }}>
+          <Btn onClick={() => setSearchParams({}, { replace: true })}>
+            ◂ {t("evalPage.backToRuns")}
+          </Btn>
+        </div>
+        <div className="eval-grid">
+          <Panel
+            brk
+            title={t("evalPage.newRun.title")}
+            sub={t("evalPage.newRun.sub")}
+            style={{ "--i": 0 } as CSSProperties}
+          >
+            <div className="field">
+              <label>{t("evalPage.newRun.mode")}</label>
+              <div className="selchips">
+                <button
+                  type="button"
+                  className={`selchip${mode === "evaluators" ? " on" : ""}`}
+                  style={{ cursor: "pointer" }}
+                  onClick={() => setMode("evaluators")}
+                >
+                  {t("evalPage.newRun.modeEvaluators")}
+                </button>
+                <button
+                  type="button"
+                  className={`selchip${mode === "insights" ? " on" : ""}`}
+                  style={{ cursor: "pointer" }}
+                  onClick={() => setMode("insights")}
+                >
+                  {t("evalPage.newRun.modeInsights")}
+                </button>
+              </div>
+            </div>
+            <div className="field">
+              <label>{t("evalPage.newRun.agent")}</label>
+              <select
+                className="input"
+                value={agentId}
+                onChange={(e) => setAgentId(e.target.value)}
+              >
+                {agents.length === 0 && (
+                  <option value="">{t("evalPage.newRun.noAgents")}</option>
+                )}
+                {agents.map((a) => (
+                  <option key={a.id} value={a.id} style={{ background: "#141816" }}>
+                    {a.name} · {a.method}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
+              <label>{t("evalPage.newRun.dataset")}</label>
+              <select
+                className="input"
+                value={datasetId}
+                onChange={(e) => setDatasetId(e.target.value)}
+              >
+                {datasets.map((d) => (
+                  <option key={d.id} value={d.id} style={{ background: "#141816" }}>
+                    {d.name} · {d.item_count} ({d.locale})
+                  </option>
+                ))}
+              </select>
+            </div>
+            {mode === "evaluators" ? (
+              <div className="field">
+                <label>{t("evalPage.newRun.evaluators")}</label>
+                <div className="selchips" style={{ maxHeight: 140, overflowY: "auto" }}>
+                  {evaluators
+                    .filter((e) => e.source === "builtin")
+                    .map((e) => (
+                      <button
+                        key={e.id}
+                        type="button"
+                        className={`selchip${chosenEvaluators.includes(e.id) ? " on" : ""}`}
+                        style={{ cursor: "pointer" }}
+                        onClick={() =>
+                          setChosenEvaluators((prev) =>
+                            prev.includes(e.id)
+                              ? prev.filter((x) => x !== e.id)
+                              : [...prev, e.id],
+                          )
+                        }
+                      >
+                        {e.id.replace("Builtin.", "")}
+                      </button>
+                    ))}
+                </div>
+              </div>
+            ) : (
+              <div className="note" style={{ marginBottom: 10 }}>
+                <span className="i">[i]</span>
+                <span>{t("evalPage.newRun.insightsHint")}</span>
+              </div>
+            )}
+            {submitError && (
+              <div className="note" style={{ borderColor: "var(--crit)", marginBottom: 10 }}>
+                <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
+                <span>{submitError}</span>
+              </div>
+            )}
+            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+              <Btn
+                primary
+                disabled={
+                  !agentId ||
+                  !datasetId ||
+                  (mode === "evaluators" && chosenEvaluators.length === 0)
+                }
+                onClick={() => void startRun()}
+              >
+                ▸ {t("evalPage.newRun.submit")}
+              </Btn>
+            </div>
+          </Panel>
+
+          <Panel
+            title={t("evalPage.newRun.how.title")}
+            sub={t("evalPage.newRun.how.sub")}
+            style={{ "--i": 1 } as CSSProperties}
+          >
+            {(["s1", "s2", "s3", "s4"] as const).map((step, i) => (
+              <div className="kv" key={step}>
+                <span className="k mono">{`0${i + 1}`}</span>
+                <span className="v" style={{ textAlign: "left", flex: 1, marginLeft: 12 }}>
+                  {t(`evalPage.newRun.how.${step}`)}
+                </span>
+              </div>
+            ))}
+            <div className="note" style={{ marginTop: 10 }}>
+              <span className="i">[i]</span>
+              <span>{t("evalPage.newRun.how.note")}</span>
+            </div>
+          </Panel>
+        </div>
+      </section>
+    );
+  }
+
+  // ── Dashboard: runs list + selected-run results + experiment ─────────────
   return (
     <section>
       <ViewHead
@@ -421,160 +595,86 @@ export function Evaluation() {
         meta={t("evalPage.metaLive")}
       />
 
-      <div className="eval-grid">
-        <Panel
-          brk
-          title={t("evalPage.runs.title")}
-          sub={t("evalPage.runs.sub")}
-          end={
-            queueLocked ? (
+      <Panel
+        brk
+        title={t("evalPage.runs.title")}
+        sub={t("evalPage.runs.sub")}
+        end={
+          <>
+            {queueLocked ? (
               <Chip tone="warn" icon="◐">{t("evalPage.acctLock")}</Chip>
             ) : (
               <Chip tone="good" icon="●">{t("evalPage.queueIdle")}</Chip>
-            )
-          }
-          pad={false}
-          style={{ "--i": 0 } as CSSProperties}
-        >
-          <table>
-            <thead>
-              <tr>
-                <th>{t("evalPage.runs.run")}</th>
-                <th>{t("evalPage.runs.agent")}</th>
-                <th>{t("evalPage.runs.dataset")}</th>
-                <th>{t("evalPage.runs.evaluators")}</th>
-                <th>{t("evalPage.runs.score")}</th>
-                <th>{t("evalPage.runs.status")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {runs.map((run) => (
-                <tr
-                  key={run.id}
-                  onClick={() => setSelectedRun(run)}
-                  style={{
-                    cursor: "pointer",
-                    background:
-                      selectedRun?.id === run.id ? "rgba(255,176,0,.045)" : undefined,
-                  }}
-                >
-                  <td className="mono">run-{run.id.slice(0, 6)}</td>
-                  <td className="pri">{run.agent_name}</td>
-                  <td className="mono dim">
-                    {run.mode === "insights"
-                      ? `insights · ${run.session_ids.length}`
-                      : run.dataset_name ?? "—"}
-                  </td>
-                  <td className="mono dim">
-                    {run.mode === "insights" ? "3" : run.evaluators.length}
-                  </td>
-                  <td
-                    className="mono"
-                    style={{ color: run.scores.length ? "var(--good)" : "var(--ink-3)" }}
-                  >
-                    {average(run)}
-                  </td>
-                  <td>{statusChip(run)}</td>
-                </tr>
-              ))}
-              {runs.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="dim mono" style={{ textAlign: "center" }}>
-                    {t("evalPage.runs.empty")}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </Panel>
-
-        <Panel
-          title={t("evalPage.newRun.title")}
-          sub={t("evalPage.newRun.sub")}
-          style={{ "--i": 1 } as CSSProperties}
-        >
-          <div className="field">
-            <label>{t("evalPage.newRun.agent")}</label>
-            <select
-              className="input"
-              value={agentId}
-              onChange={(e) => setAgentId(e.target.value)}
-            >
-              {agents.length === 0 && <option value="">{t("evalPage.newRun.noAgents")}</option>}
-              {agents.map((a) => (
-                <option key={a.id} value={a.id} style={{ background: "#141816" }}>
-                  {a.name} · {a.method}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="field">
-            <label>{t("evalPage.newRun.dataset")}</label>
-            <select
-              className="input"
-              value={datasetId}
-              onChange={(e) => setDatasetId(e.target.value)}
-            >
-              {datasets.map((d) => (
-                <option key={d.id} value={d.id} style={{ background: "#141816" }}>
-                  {d.name} · {d.item_count} ({d.locale})
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="field">
-            <label>{t("evalPage.newRun.evaluators")}</label>
-            <div className="selchips" style={{ maxHeight: 120, overflowY: "auto" }}>
-              {evaluators
-                .filter((e) => e.source === "builtin")
-                .map((e) => (
-                  <button
-                    key={e.id}
-                    type="button"
-                    className={`selchip${chosenEvaluators.includes(e.id) ? " on" : ""}`}
-                    style={{ cursor: "pointer" }}
-                    onClick={() =>
-                      setChosenEvaluators((prev) =>
-                        prev.includes(e.id)
-                          ? prev.filter((x) => x !== e.id)
-                          : [...prev, e.id],
-                      )
-                    }
-                  >
-                    {e.id.replace("Builtin.", "")}
-                  </button>
-                ))}
-            </div>
-          </div>
-          {submitError && (
-            <div className="note" style={{ borderColor: "var(--crit)", marginBottom: 10 }}>
-              <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
-              <span>{submitError}</span>
-            </div>
-          )}
-          <div style={{ display: "flex", gap: 9 }}>
+            )}
             <Btn
               primary
-              disabled={!agentId || !datasetId || chosenEvaluators.length === 0}
-              onClick={() => void startRun("evaluators")}
+              onClick={() => setSearchParams({ view: "new" })}
+              data-testid="new-run-btn"
             >
-              ▸ {t("evalPage.newRun.start")}
+              + {t("evalPage.newRun.title")}
             </Btn>
-            <Btn
-              disabled={!agentId || !selectedRun?.session_ids?.length}
-              onClick={() => void startRun("insights")}
-            >
-              {t("evalPage.newRun.startInsights")}
-            </Btn>
-          </div>
-        </Panel>
-      </div>
+          </>
+        }
+        pad={false}
+        style={{ "--i": 0, marginBottom: 14 } as CSSProperties}
+      >
+        <table>
+          <thead>
+            <tr>
+              <th>{t("evalPage.runs.run")}</th>
+              <th>{t("evalPage.runs.agent")}</th>
+              <th>{t("evalPage.runs.dataset")}</th>
+              <th>{t("evalPage.runs.evaluators")}</th>
+              <th>{t("evalPage.runs.score")}</th>
+              <th>{t("evalPage.runs.status")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {runs.map((run) => (
+              <tr
+                key={run.id}
+                onClick={() => setSelectedRun(run)}
+                style={{
+                  cursor: "pointer",
+                  background:
+                    selectedRun?.id === run.id ? "rgba(255,176,0,.045)" : undefined,
+                }}
+              >
+                <td className="mono">run-{run.id.slice(0, 6)}</td>
+                <td className="pri">{run.agent_name}</td>
+                <td className="mono dim">
+                  {run.mode === "insights"
+                    ? `insights · ${run.session_ids.length}`
+                    : run.dataset_name ?? "—"}
+                </td>
+                <td className="mono dim">
+                  {run.mode === "insights" ? "3" : run.evaluators.length}
+                </td>
+                <td
+                  className="mono"
+                  style={{ color: run.scores.length ? "var(--good)" : "var(--ink-3)" }}
+                >
+                  {average(run)}
+                </td>
+                <td>{statusChip(run)}</td>
+              </tr>
+            ))}
+            {runs.length === 0 && (
+              <tr>
+                <td colSpan={6} className="dim mono" style={{ textAlign: "center" }}>
+                  {t("evalPage.runs.empty")}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </Panel>
 
       <div className="eval-grid">
         <Panel
           title={t("evalPage.scores.title")}
           sub={selectedRun ? `run-${selectedRun.id.slice(0, 6)} · ${selectedRun.agent_name}` : "—"}
-          style={{ "--i": 2 } as CSSProperties}
+          style={{ "--i": 1 } as CSSProperties}
         >
           {selectedRun?.scores.length ? (
             <>
@@ -597,50 +697,25 @@ export function Evaluation() {
           )}
         </Panel>
 
-        <ExperimentPanel
-          experiments={experiments}
-          agents={agents}
-          busy={expBusy}
-          onAction={async (expId, action, challengerId) => {
-            setExpBusy(true);
-            try {
-              const res = await fetch(`/api/experiments/${expId}/action`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ action, challenger_agent_id: challengerId }),
-              });
-              if (!res.ok) {
-                const env = (await res.json().catch(() => ({}))) as { message?: string };
-                toast(t("common.actionFailed", { msg: env.message ?? `HTTP ${res.status}` }));
-              }
-              void refresh();
-            } catch (err) {
-              toast(t("common.actionFailed", { msg: String(err) }));
-            } finally {
-              setExpBusy(false);
-            }
-          }}
-          onStart={async (agentIdForExp) => {
-            setExpBusy(true);
-            try {
-              await fetch("/api/experiments", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ agent_id: agentIdForExp }),
-              });
-              void refresh();
-            } finally {
-              setExpBusy(false);
-            }
-          }}
-        />
-      </div>
-
-      <div className="eval-grid">
         <Panel
           title={t("evalPage.insights.title")}
           sub={t("evalPage.insights.sub")}
-          style={{ "--i": 4 } as CSSProperties}
+          end={
+            selectedRun && (
+              <Btn
+                disabled={(selectedRun.session_ids?.length ?? 0) < 3}
+                title={
+                  (selectedRun.session_ids?.length ?? 0) < 3
+                    ? t("evalPage.insights.needSessions")
+                    : undefined
+                }
+                onClick={() => void startInsightsOnRun(selectedRun)}
+              >
+                ↻ {t("evalPage.insights.runOnSessions")}
+              </Btn>
+            )
+          }
+          style={{ "--i": 2 } as CSSProperties}
         >
           {selectedRun?.insights?.failures?.length ? (
             selectedRun.insights.failures.slice(0, 4).map((f, i) => (
@@ -672,6 +747,44 @@ export function Evaluation() {
           )}
         </Panel>
       </div>
+
+      <ExperimentPanel
+        experiments={experiments}
+        agents={agents}
+        busy={expBusy}
+        onAction={async (expId, action, challengerId) => {
+          setExpBusy(true);
+          try {
+            const res = await fetch(`/api/experiments/${expId}/action`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ action, challenger_agent_id: challengerId }),
+            });
+            if (!res.ok) {
+              const env = (await res.json().catch(() => ({}))) as { message?: string };
+              toast(t("common.actionFailed", { msg: env.message ?? `HTTP ${res.status}` }));
+            }
+            void refresh();
+          } catch (err) {
+            toast(t("common.actionFailed", { msg: String(err) }));
+          } finally {
+            setExpBusy(false);
+          }
+        }}
+        onStart={async (agentIdForExp) => {
+          setExpBusy(true);
+          try {
+            await fetch("/api/experiments", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ agent_id: agentIdForExp }),
+            });
+            void refresh();
+          } finally {
+            setExpBusy(false);
+          }
+        }}
+      />
     </section>
   );
 }
