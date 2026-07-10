@@ -1,10 +1,11 @@
 import type { CSSProperties } from "react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Chip, DataTable, Panel } from "../../components";
 import type { ObsTraceRow, ObsTraces } from "../../lib/api";
 import { fmtClock, fmtCost, fmtDuration, fmtInt, shortId } from "./format";
+import { DEFAULT_PAGE_SIZE, Pager } from "./Pager";
 
 const TIMEOUT_MS = 30_000;
 
@@ -41,6 +42,12 @@ export function TracesTab({ data, onOpenSession, onOpenTrace }: TracesTabProps) 
   const [status, setStatus] = useState<"all" | "ok" | "error">("all");
   const [query, setQuery] = useState("");
   const [showSystem, setShowSystem] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+
+  useEffect(() => {
+    setPage(1); // filters change the result set — restart from page 1
+  }, [agent, status, query, showSystem, data]);
 
   const agents = useMemo(
     () => [...new Set(data.traces.map((r) => r.agent))].sort(),
@@ -65,6 +72,8 @@ export function TracesTab({ data, onOpenSession, onOpenTrace }: TracesTabProps) 
     }
     return true;
   });
+  const currentPage = Math.min(page, Math.max(1, Math.ceil(rows.length / pageSize)));
+  const pageRows = rows.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   return (
     <Panel brk pad={false} style={{ "--i": 0 } as CSSProperties}>
@@ -130,7 +139,7 @@ export function TracesTab({ data, onOpenSession, onOpenTrace }: TracesTabProps) 
         isEmpty={rows.length === 0}
         empty={data.traces.length === 0 ? t("obs.traces.empty") : t("obs.traces.noMatch")}
       >
-        {rows.map((r) => (
+        {pageRows.map((r) => (
           <tr
             key={r.trace_id}
             className="rowlink"
@@ -179,6 +188,16 @@ export function TracesTab({ data, onOpenSession, onOpenTrace }: TracesTabProps) 
           </tr>
         ))}
       </DataTable>
+      <Pager
+        total={rows.length}
+        page={currentPage}
+        size={pageSize}
+        onPage={setPage}
+        onSize={(s) => {
+          setPageSize(s);
+          setPage(1);
+        }}
+      />
     </Panel>
   );
 }

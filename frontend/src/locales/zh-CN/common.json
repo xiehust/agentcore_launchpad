@@ -439,7 +439,11 @@
         "first": "开始",
         "last": "最近",
         "errors": "错误"
-      }
+      },
+      "errorsOnly": "仅含错误",
+      "searchPlaceholder": "⌕ 按 session.id 筛选…",
+      "scanned": "{{count}} 个会话 · 扫描范围 {{range}}",
+      "noMatch": "没有符合当前筛选条件的会话"
     },
     "categories": {
       "llm": "LLM",
@@ -494,6 +498,14 @@
       "tracesSub": "{{count}} · 最新在前",
       "noTraces": "该时间范围内此会话无追踪",
       "back": "‹ 会话"
+    },
+    "pager": {
+      "total": "共 {{count}} 条",
+      "prev": "上一页",
+      "next": "下一页",
+      "page": "第 {{page}} / {{pages}} 页",
+      "perPage": "每页 {{size}}",
+      "sizeLabel": "每页行数"
     }
   },
   "common": {

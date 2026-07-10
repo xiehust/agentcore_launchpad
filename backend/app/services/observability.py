@@ -31,8 +31,10 @@ from app.services import memory
 SPANS_LOG_GROUP = "aws/spans"
 RANGE_HOURS = {"1h": 1, "6h": 6, "24h": 24, "7d": 168}
 BIN_BY_RANGE = {"1h": "5m", "6h": "15m", "24h": "1h", "7d": "6h"}
-TRACE_LIMIT = 100
-SESSION_LIMIT = 100
+# List caps: the UI paginates client-side (50/100/200 per page), so fetch a
+# deeper window per Logs Insights query; row counts this size are cheap.
+TRACE_LIMIT = 500
+SESSION_LIMIT = 500
 SPANS_PER_TRACE = 500
 CACHE_TTL_SECONDS = 60.0
 QUERY_DEADLINE_SECONDS = 55

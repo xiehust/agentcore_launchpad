@@ -313,6 +313,9 @@ tr.rowlink{cursor:pointer}
 .sid:hover{text-decoration:underline}
 .rowact{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;color:var(--amber);border:1px solid var(--line-2);background:transparent;padding:3px 8px;cursor:pointer;white-space:nowrap}
 .rowact:hover{border-color:var(--amber);background:var(--amber-soft)}
+.pagerbar{display:flex;gap:9px;align-items:center;padding:10px 16px;border-top:1px solid var(--line)}
+.pagerbar .spacer{flex:1}
+.pagerbar .fsel:disabled{opacity:.35;cursor:default}
 .filters{display:flex;gap:9px;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap}
 .filters .fsel{font-family:var(--mono);font-size:10.5px;padding:6px 11px;border:1px solid var(--line-2);color:var(--ink-2);background:#0E1210;cursor:pointer}
 .filters .fsel.on-ok{color:var(--good);border-color:rgba(12,163,12,.4)}

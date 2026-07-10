@@ -1,9 +1,11 @@
 import type { CSSProperties } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Chip, DataTable, Panel, useToast } from "../../components";
 import type { ObsSessions } from "../../lib/api";
 import { fmtClockShort, fmtCost, fmtInt, shortId } from "./format";
+import { DEFAULT_PAGE_SIZE, Pager } from "./Pager";
 
 interface SessionsTabProps {
   data: ObsSessions;
@@ -14,6 +16,30 @@ interface SessionsTabProps {
 export function SessionsTab({ data, selected, onSelect }: SessionsTabProps) {
   const { t } = useTranslation();
   const toast = useToast();
+  const [agent, setAgent] = useState("all");
+  const [errorsOnly, setErrorsOnly] = useState(false);
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+
+  useEffect(() => {
+    setPage(1); // filters change the result set — restart from page 1
+  }, [agent, errorsOnly, query, data]);
+
+  const agents = useMemo(
+    () => [...new Set(data.sessions.map((r) => r.agent))].sort(),
+    [data.sessions],
+  );
+  const rows = data.sessions.filter((r) => {
+    if (agent !== "all" && r.agent !== agent) return false;
+    if (errorsOnly && r.errors === 0) return false;
+    if (query && !r.session_id.toLowerCase().includes(query.trim().toLowerCase())) {
+      return false;
+    }
+    return true;
+  });
+  const currentPage = Math.min(page, Math.max(1, Math.ceil(rows.length / pageSize)));
+  const pageRows = rows.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   const copyId = (id: string) => {
     try {
@@ -29,6 +55,36 @@ export function SessionsTab({ data, selected, onSelect }: SessionsTabProps) {
 
   return (
     <Panel brk pad={false} style={{ "--i": 0 } as CSSProperties}>
+      <div className="filters">
+        <select
+          className="fsel"
+          value={agent}
+          onChange={(e) => setAgent(e.target.value)}
+          aria-label={t("obs.traces.agentFilter")}
+        >
+          <option value="all">{t("obs.traces.agentAll")}</option>
+          {agents.map((a) => (
+            <option key={a} value={a}>
+              {a}
+            </option>
+          ))}
+        </select>
+        <button
+          className={`fsel${errorsOnly ? " on-err" : ""}`}
+          onClick={() => setErrorsOnly(!errorsOnly)}
+        >
+          ✕ {t("obs.sessions.errorsOnly")}
+        </button>
+        <input
+          className="fsearch"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={t("obs.sessions.searchPlaceholder")}
+        />
+        <Chip tone="muted">
+          {t("obs.sessions.scanned", { count: rows.length, range: data.range.toUpperCase() })}
+        </Chip>
+      </div>
       <DataTable
         columns={[
           { key: "session", label: t("obs.sessions.cols.session") },
@@ -40,10 +96,10 @@ export function SessionsTab({ data, selected, onSelect }: SessionsTabProps) {
           { key: "last", label: t("obs.sessions.cols.last") },
           { key: "errors", label: t("obs.sessions.cols.errors") },
         ]}
-        isEmpty={data.sessions.length === 0}
-        empty={t("obs.sessions.empty")}
+        isEmpty={rows.length === 0}
+        empty={data.sessions.length === 0 ? t("obs.sessions.empty") : t("obs.sessions.noMatch")}
       >
-        {data.sessions.map((r) => (
+        {pageRows.map((r) => (
           <tr
             key={r.session_id}
             className={`rowlink${selected === r.session_id ? " sel" : ""}`}
@@ -89,6 +145,16 @@ export function SessionsTab({ data, selected, onSelect }: SessionsTabProps) {
           </tr>
         ))}
       </DataTable>
+      <Pager
+        total={rows.length}
+        page={currentPage}
+        size={pageSize}
+        onPage={setPage}
+        onSize={(s) => {
+          setPageSize(s);
+          setPage(1);
+        }}
+      />
     </Panel>
   );
 }

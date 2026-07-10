@@ -439,7 +439,11 @@
         "first": "FIRST",
         "last": "LAST",
         "errors": "ERRORS"
-      }
+      },
+      "errorsOnly": "ERRORS ONLY",
+      "searchPlaceholder": "⌕ filter by session.id…",
+      "scanned": "{{count}} sessions · scanned {{range}}",
+      "noMatch": "NO SESSIONS MATCH THE ACTIVE FILTERS"
     },
     "categories": {
       "llm": "LLM",
@@ -494,6 +498,14 @@
       "tracesSub": "{{count}} · newest first",
       "noTraces": "NO TRACES IN RANGE FOR THIS SESSION",
       "back": "‹ SESSIONS"
+    },
+    "pager": {
+      "total": "{{count}} rows",
+      "prev": "PREV",
+      "next": "NEXT",
+      "page": "PAGE {{page}} / {{pages}}",
+      "perPage": "{{size}} / PAGE",
+      "sizeLabel": "Rows per page"
     }
   },
   "common": {
