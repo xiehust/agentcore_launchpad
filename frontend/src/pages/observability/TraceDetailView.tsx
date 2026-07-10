@@ -207,16 +207,25 @@ export function TraceDetailView({ traceId, range, onBack, onOpenSession }: Trace
       return;
     }
     setInvalid(false);
+    // Guard against out-of-order responses when traceId changes while mounted
+    // (e.g. browser back/forward between two trace deep links).
+    let alive = true;
     api
       .obsTrace(traceId, range)
-      .then(setDetail)
+      .then((res) => {
+        if (alive) setDetail(res);
+      })
       .catch((err: unknown) => {
+        if (!alive) return;
         if (err instanceof ApiError && err.code === "validation.invalid_request") {
           setInvalid(true);
         } else {
           setError(err instanceof Error ? err.message : String(err));
         }
       });
+    return () => {
+      alive = false;
+    };
   }, [traceId, range]);
 
   const rows = useMemo(() => (detail ? flattenTree(detail.tree) : []), [detail]);

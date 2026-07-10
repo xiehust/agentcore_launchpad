@@ -113,6 +113,38 @@ public  /v1  ──┘        │
 公开 `/v1` 接口额外加了 `X-Api-Key` 鉴权(密钥以 sha256 哈希存储);分派之后的
 一切与控制台路径完全相同。
 
+## 可观测模块(控制台 05)
+
+`/observability` 是一个只读的遥测控制台,数据来自三个来源
+(`backend/app/services/observability.py`,接口位于 `/api/observability/*`):
+
+| 来源 | 用途 | 方式 |
+|---|---|---|
+| `aws/spans` 日志组(CloudWatch Transaction Search) | 追踪/会话列表、仪表盘计数 + p50/p95 + 分时序列、热门工具、Span 树 | Logs Insights `start_query`,每个视图一组有界查询 |
+| `bedrock-agentcore` 指标命名空间 | 各模型 TOKEN 用量卡片与图表 | `ListMetrics`(发现维度)→ `GetMetricData` 对 `gen_ai.client.token.usage` 求和 |
+| AgentCore Memory `ListEvents` | 会话对话转录 | 通过 ChatSession 台账联结(`session_id → actor_id`);解码 harness 消息信封,丢弃工具结果轮次 |
+
+每个视图都由 **60 秒 TTL 缓存**(按视图 + 时间范围)提供服务 —— Logs Insights
+按扫描量计费 —— `force=true`(⟳ 刷新按钮)可绕过缓存。时间范围为白名单
+(`1h/6h/24h/7d`);trace id(`^[0-9a-f]{32}$`)与 session id
+(`^[A-Za-z0-9_-]{8,128}$`)在路由层校验,并在查询构造器中**再次校验**后才会
+插入 Logs Insights 查询字符串。TOKEN 求和只统计终端 LLM 操作
+(`chat` / `text_completion` / `generate_content`),因为 agent 级
+`invoke_agent` Span 会重复其子 Span 的 `gen_ai.usage.*` 值。
+
+成本为**参考估算**:token 数 × `config/launchpad.yaml` 中的 `model_prices`
+(每百万 token 的美元价,按子串匹配 `gen_ai.request.model`;未知模型只显示
+token 数,成本为 `—`)。界面以 `≈ / EST` 标注。
+
+页签结构:**仪表盘**(5 个统计卡片 + 流量/延迟/TOKEN/工具图表)·
+**会话**(列表 → 含记忆转录与会话内追踪卡片的详情)·
+**追踪**(可筛选列表 → 瀑布甘特图 + Span 抽屉:含缓存读写的 token 用量、
+预估成本、工具 schema、原始属性)。交叉链接:深链
+`/observability?trace=<id>` / `?session=<id>`;Chat 的追踪面板可跳到当前
+会话详情(`在可观测中打开 ↗`),会话详情也可跳回(`在对话演练场打开 ↗`);
+`service.name` 通过台账映射为平台 Agent 名称(`resource_id` 基名匹配,
+回退为原始名称)。
+
 ## SQLite 台账与 job/event 模型
 
 廉价且本地的状态存放在 `data/launchpad.db` 的 SQLite 台账中

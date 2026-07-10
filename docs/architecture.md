@@ -117,6 +117,43 @@ public  /v1  ──┘        │
 The public `/v1` surface adds `X-Api-Key` auth (keys stored sha256-hashed);
 everything downstream of the dispatch is identical to the console path.
 
+## The Observability module (console 05)
+
+`/observability` is a read-only telemetry console over three data sources
+(`backend/app/services/observability.py`, endpoints under
+`/api/observability/*`):
+
+| Source | Used for | How |
+|---|---|---|
+| `aws/spans` log group (CloudWatch Transaction Search) | trace/session lists, dashboard counts + p50/p95 + hourly series, top tools, span trees | Logs Insights `start_query`, one bounded query set per view |
+| `bedrock-agentcore` metrics namespace | tokens-by-model tile + chart | `ListMetrics` (dimension discovery) → `GetMetricData` sums of `gen_ai.client.token.usage` |
+| AgentCore Memory `ListEvents` | session conversation transcript | ChatSession-ledger join (`session_id → actor_id`); harness message envelopes are decoded, tool-result turns dropped |
+
+Every view is served from a **60-second TTL cache** keyed by (view, range) —
+Logs Insights is billed per scan — with `force=true` (the ⟳ REFRESH button)
+bypassing it. Ranges are whitelisted (`1h/6h/24h/7d`); trace ids
+(`^[0-9a-f]{32}$`) and session ids (`^[A-Za-z0-9_-]{8,128}$`) are validated at
+the router **and** re-checked in the query builders before being interpolated
+into Logs Insights query strings. Token sums count only terminal LLM
+operations (`chat` / `text_completion` / `generate_content`) because
+agent-level `invoke_agent` spans repeat their children's `gen_ai.usage.*`
+values.
+
+Cost figures are **advisory estimates**: token counts × `model_prices` from
+`config/launchpad.yaml` (USD per 1M tokens, substring-matched against
+`gen_ai.request.model`; unknown models show token counts with a `—` cost). The
+UI labels them `≈ / EST`.
+
+Tab IA: **DASHBOARD** (5 stat tiles + traffic/latency/tokens/tools charts) ·
+**SESSIONS** (list → detail with memory transcript + traces-in-session cards) ·
+**TRACES** (filterable list → waterfall Gantt with span drawer: token usage
+incl. cache read/write, est cost, tool schema, raw attributes). Cross-links:
+deep links `/observability?trace=<id>` / `?session=<id>`; the Chat trace rail
+links to the current session's detail (`OPEN IN OBSERVABILITY ↗`) and session
+detail links back (`OPEN IN CHAT ↗`); `service.name` values are mapped to
+platform agent names via the ledger (`resource_id` base-name match, raw name
+fallback).
+
 ## The SQLite ledger and job/event model
 
 State that is cheap and local lives in a SQLite ledger at `data/launchpad.db`

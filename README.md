@@ -124,7 +124,7 @@ Full API reference (sync + SSE streaming, Python): [docs/api.md](docs/api.md).
 | `backend/` | FastAPI backend — deploy pipeline, invoke chain, evaluation & optimization, SQLite ledger |
 | `backend/app/routers/` | Console `/api` + public `/v1` endpoints |
 | `backend/app/deployer/` | Unified pipeline + per-method stages (harness, zip_runtime, container, studio) |
-| `frontend/` | React console (Vite) — Overview, Create Agent, Registry, Chat, Governance, Evaluation |
+| `frontend/` | React console (Vite) — Overview, Create Agent, Registry, Chat, Observability, Evaluation, Governance |
 | `infra/` | AWS CDK app — the `launchpad-base` shared stack |
 | `apps/studio/` | Vendored Strands Studio sub-app (方式C), rewired to the platform pipeline |
 | `scripts/` | `bootstrap.py`, `teardown.py`, `dev.sh`, `verify.sh`, `i18n_check.py` |

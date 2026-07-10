@@ -10,8 +10,11 @@ import { fmtCost, fmtDuration, fmtInt, shortId } from "./format";
 
 export const SESSION_ID_RE = /^[A-Za-z0-9_-]{8,128}$/;
 
-/** Memory event timestamps arrive as python datetime strings — pull HH:MM:SS. */
+/** Event timestamps are UTC ISO from the backend — render in the browser tz
+ * (same as the trace cards); fall back to a raw HH:MM:SS extract. */
 function turnClock(at: string): string {
+  const d = new Date(at);
+  if (!Number.isNaN(d.getTime())) return d.toLocaleTimeString("en-GB", { hour12: false });
   const match = at.match(/\d{2}:\d{2}:\d{2}/);
   return match ? match[0] : "";
 }
@@ -37,16 +40,25 @@ export function SessionDetailView({ sessionId, range, onOpenTrace }: SessionDeta
       return;
     }
     setInvalid(false);
+    // The component stays mounted across sessionId/range changes, so a slow
+    // (cache-miss) response must not overwrite a faster later one.
+    let alive = true;
     api
       .obsSession(sessionId, range)
-      .then(setDetail)
+      .then((res) => {
+        if (alive) setDetail(res);
+      })
       .catch((err: unknown) => {
+        if (!alive) return;
         if (err instanceof ApiError && err.code === "validation.invalid_request") {
           setInvalid(true);
         } else {
           setError(err instanceof Error ? err.message : String(err));
         }
       });
+    return () => {
+      alive = false;
+    };
   }, [sessionId, range]);
 
   if (invalid) {

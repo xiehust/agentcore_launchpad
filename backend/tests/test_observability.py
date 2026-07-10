@@ -42,6 +42,21 @@ TREE_SPANS = [
 ]
 
 
+# Strands double-emission shape: wrapper + terminal chat spans, same tokens.
+_LLM_USAGE = {"gen_ai.operation.name": "chat",
+              "gen_ai.request.model": "global.anthropic.claude-sonnet-4-6",
+              "gen_ai.usage.input_tokens": 500, "gen_ai.usage.output_tokens": 50,
+              "gen_ai.usage.cache_read_input_tokens": 0,
+              "gen_ai.usage.cache_write_input_tokens": 0}
+DEDUP_SPANS = [
+    _span("root2", None, "POST /invocations", 0, 10, kind="SERVER"),
+    _span("wrap", "root2", "chat", 1, 9,
+          attrs={**_LLM_USAGE, "gen_ai.system": "strands-agents"}),
+    _span("term", "wrap", "chat global.anthropic.claude-sonnet-4-6", 1, 9,
+          attrs={**_LLM_USAGE, "gen_ai.system": "aws.bedrock"}),
+]
+
+
 @pytest.fixture(autouse=True)
 def fresh_cache():
     obs.reset_cache()
@@ -90,9 +105,46 @@ def test_categorize_span_contract():
          None, "agent"),
         ("execute_event_loop_cycle", {}, None, "agent"),
         ("something-else", {}, "CLIENT", "other"),
+        # strong signals beat substring needles (review finding #11)
+        ("execute_tool search_memory", {}, None, "tool"),
+        ("execute_tool mcp_lookup", {"gen_ai.tool.name": "mcp_lookup"}, None, "tool"),
+        ("chat agent helper", {"gen_ai.operation.name": "chat"}, None, "llm"),
     ]
     for name, attrs, kind, expected in cases:
         assert obs.categorize_span(name, attrs, kind) == expected, name
+
+
+def test_query_builders_reject_unvalidated_ids():
+    # Defense in depth: ids are interpolated into Logs Insights query strings,
+    # so the builders themselves refuse anything outside the id alphabets —
+    # even if a future caller skips the router validation.
+    from app.core.errors import AppError
+
+    with pytest.raises(AppError):
+        obs.q_trace_spans('deadbeef" | fields @message | filter "x')
+    with pytest.raises(AppError):
+        obs.q_trace_aggregates(session_id='x" or traceId like "')
+    with pytest.raises(AppError):
+        obs.q_trace_aggregates(session_id="short")
+
+
+def test_llm_aggregation_excludes_framework_wrapper_spans():
+    # Strands double-emits every LLM call (wrapper system=strands-agents +
+    # terminal system=aws.bedrock with identical tokens); the conditional-sum
+    # fields must exclude the wrapper or all token sums double.
+    query = obs.q_trace_aggregates()
+    assert 'strcontains(coalesce(attributes.gen_ai.system, ""), "strands-agents")' in query
+    assert 'strcontains(attributes.gen_ai.operation.name, "chat")' in query
+
+
+def test_trace_meta_dedupes_wrapper_llm_spans(client, mocked_aws):
+    res = client.get(f"/api/observability/traces/{'c' * 32}")
+    assert res.status_code == 200
+    meta = res.json()["meta"]
+    # wrapper (strands-agents) + terminal (aws.bedrock) with identical tokens
+    # → only the terminal span counts
+    assert meta["llm_count"] == 1
+    assert meta["tokens"]["input"] == 500 and meta["tokens"]["output"] == 50
 
 
 def test_session_filtered_query_is_well_formed():
@@ -216,6 +268,8 @@ def _fake_logs():
             {"sessions": 3, "agents": 2}],
         "by attributes.gen_ai.tool.name as tool": [
             {"tool": "hr-database___get_employee", "calls": 9, "errors": 1}],
+        f'filter traceId = "{"c" * 32}"': [
+            {"@message": json.dumps({**s, "traceId": "c" * 32})} for s in DEDUP_SPANS],
         "fields @message": [{"@message": json.dumps(s)} for s in TREE_SPANS],
     })
 

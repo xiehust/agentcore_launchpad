@@ -16,10 +16,15 @@ export function SessionsTab({ data, selected, onSelect }: SessionsTabProps) {
   const toast = useToast();
 
   const copyId = (id: string) => {
-    navigator.clipboard
-      .writeText(id)
-      .then(() => toast(t("obs.sessions.copied"), "good"))
-      .catch(() => toast(t("obs.sessions.copyFailed"), "warn"));
+    try {
+      // navigator.clipboard is undefined in non-secure contexts (http LAN)
+      navigator.clipboard
+        .writeText(id)
+        .then(() => toast(t("obs.sessions.copied"), "good"))
+        .catch(() => toast(t("obs.sessions.copyFailed"), "warn"));
+    } catch {
+      toast(t("obs.sessions.copyFailed"), "warn");
+    }
   };
 
   return (

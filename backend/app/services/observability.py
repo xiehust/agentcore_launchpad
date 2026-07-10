@@ -12,6 +12,8 @@ Cost figures are advisory estimates: token counts × config `model_prices`
 """
 
 import json
+import re
+import threading
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -41,7 +43,20 @@ NANOS_PER_MS = 1_000_000
 CACHE_READ_FACTOR = 0.1
 CACHE_WRITE_FACTOR = 1.25
 
+# The router enforces these shapes too; re-checked here (defense in depth)
+# because the ids are interpolated into Logs Insights query strings.
+TRACE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
+
 _CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_CACHE_LOCK = threading.Lock()
+_KEY_LOCKS: dict[str, threading.Lock] = {}
+
+
+def _require(pattern: re.Pattern[str], value: str, what: str) -> str:
+    if not pattern.fullmatch(value):
+        raise AppError("observability.bad_id", f"invalid {what}", status_code=422)
+    return value
 
 
 def _now() -> float:
@@ -50,14 +65,34 @@ def _now() -> float:
 
 def reset_cache() -> None:
     _CACHE.clear()
+    _KEY_LOCKS.clear()
 
 
 def _cached(key: str, force: bool, build: Callable[[], dict[str, Any]]) -> dict[str, Any]:
-    hit = _CACHE.get(key)
-    if hit and not force and _now() - hit[0] < CACHE_TTL_SECONDS:
-        return {**hit[1], "cache": {"hit": True, "age_seconds": round(_now() - hit[0], 1)}}
-    value = build()
-    _CACHE[key] = (_now(), value)
+    """60s TTL cache with per-key single-flight (Logs Insights is billed per
+    scan — concurrent misses must not stampede) and expired-entry eviction
+    (detail keys are per trace/session id and would otherwise accumulate)."""
+
+    def lookup() -> dict[str, Any] | None:
+        hit = _CACHE.get(key)
+        if hit and not force and _now() - hit[0] < CACHE_TTL_SECONDS:
+            return {**hit[1], "cache": {"hit": True, "age_seconds": round(_now() - hit[0], 1)}}
+        return None
+
+    if (fresh := lookup()) is not None:
+        return fresh
+    with _CACHE_LOCK:
+        key_lock = _KEY_LOCKS.setdefault(key, threading.Lock())
+    with key_lock:
+        if (fresh := lookup()) is not None:  # a concurrent request built it
+            return fresh
+        value = build()
+        now = _now()
+        with _CACHE_LOCK:
+            for stale in [k for k, (ts, _) in _CACHE.items() if now - ts >= CACHE_TTL_SECONDS]:
+                _CACHE.pop(stale, None)
+                _KEY_LOCKS.pop(stale, None)
+            _CACHE[key] = (now, value)
     return {**value, "cache": {"hit": False, "age_seconds": 0.0}}
 
 
@@ -72,7 +107,9 @@ def _cw_client() -> Any:
 # ── Logs Insights runner ────────────────────────────────────────────────────
 
 
-def _start_query(logs: Any, query: str, start: int, end: int) -> str:
+def _start_query(logs: Any, query: str, start: int, end: int) -> str | None:
+    """Returns the query id, or None when the spans log group doesn't exist yet
+    (fresh account before any agent traffic) — callers degrade to empty rows."""
     for attempt in (0, 1):
         try:
             return logs.start_query(
@@ -83,6 +120,8 @@ def _start_query(logs: Any, query: str, start: int, end: int) -> str:
             )["queryId"]
         except ClientError as exc:
             code = exc.response.get("Error", {}).get("Code", "")
+            if code == "ResourceNotFoundException":
+                return None
             if attempt == 0 and code in ("ThrottlingException", "LimitExceededException"):
                 time.sleep(1.5)
                 continue
@@ -105,8 +144,19 @@ def run_insights_queries(
     results: dict[str, list[dict[str, str]]] = {}
     deadline = time.time() + QUERY_DEADLINE_SECONDS
     for name, qid in query_ids.items():
+        if qid is None:  # log group missing — empty view, not an error
+            results[name] = []
+            continue
         while True:
-            res = logs.get_query_results(queryId=qid)
+            try:
+                res = logs.get_query_results(queryId=qid)
+            except ClientError as exc:
+                code = exc.response.get("Error", {}).get("Code", "")
+                raise AppError(
+                    "observability.query_failed",
+                    f"Logs Insights polling failed: {code}",
+                    status_code=502,
+                ) from exc
             status = res["status"]
             if status == "Complete":
                 results[name] = [
@@ -114,10 +164,21 @@ def run_insights_queries(
                     for row in res["results"]
                 ]
                 break
-            if status in ("Failed", "Cancelled", "Timeout") or time.time() > deadline:
+            if status in ("Failed", "Cancelled", "Timeout"):
                 raise AppError(
                     "observability.query_failed",
                     f"Logs Insights query '{name}' ended with status {status}",
+                    status_code=502,
+                )
+            if time.time() > deadline:
+                try:
+                    logs.stop_query(queryId=qid)  # don't keep billing a lost query
+                except ClientError:
+                    pass
+                raise AppError(
+                    "observability.query_failed",
+                    f"Logs Insights query '{name}' timed out after "
+                    f"{QUERY_DEADLINE_SECONDS}s",
                     status_code=502,
                 )
             time.sleep(0.8)
@@ -127,14 +188,17 @@ def run_insights_queries(
 # ── Query builders (shapes validated against live aws/spans data) ──────────
 
 
-# Aggregations restrict token sums/LLM counts to terminal LLM operations
-# (operation.name chat / text_completion / generate_content): agent-level spans
-# (invoke_agent) repeat their children's gen_ai.usage.* values, so a naive
-# ispresent()-based sum double-counts (verified against live data). The
-# `x * is_llm` multiplication is Logs Insights' conditional sum.
+# Aggregations restrict token sums/LLM counts to terminal LLM client spans:
+# (a) agent-level spans (operation.name=invoke_agent) repeat their children's
+# gen_ai.usage.* values, and (b) the Strands SDK emits each LLM call twice —
+# a framework wrapper span (gen_ai.system=strands-agents) plus the terminal
+# provider span (gen_ai.system=aws.bedrock) with identical token counts (both
+# verified against live data; naive sums count 2-3x). The `x * is_llm`
+# multiplication is Logs Insights' conditional sum.
 _IS_LLM_FIELDS = """fields (strcontains(attributes.gen_ai.operation.name, "chat")
         + strcontains(attributes.gen_ai.operation.name, "text_completion")
-        + strcontains(attributes.gen_ai.operation.name, "generate_content")) as is_llm,
+        + strcontains(attributes.gen_ai.operation.name, "generate_content"))
+       * (1 - strcontains(coalesce(attributes.gen_ai.system, ""), "strands-agents")) as is_llm,
        strcontains(status.code, "ERROR") as is_error
 | fields attributes.gen_ai.usage.input_tokens * is_llm as llm_in,
          attributes.gen_ai.usage.output_tokens * is_llm as llm_out,
@@ -143,6 +207,8 @@ _IS_LLM_FIELDS = """fields (strcontains(attributes.gen_ai.operation.name, "chat"
 
 
 def q_trace_aggregates(session_id: str | None = None, limit: int = TRACE_LIMIT) -> str:
+    if session_id is not None:
+        _require(SESSION_ID_RE, session_id, "session id")
     session_filter = (
         f'filter attributes.session.id = "{session_id}"\n| ' if session_id else ""
     )
@@ -235,6 +301,7 @@ filter ispresent(attributes.gen_ai.tool.name)
 
 
 def q_trace_spans(trace_id: str) -> str:
+    _require(TRACE_ID_RE, trace_id, "trace id")
     return f"""
 filter traceId = "{trace_id}"
 | fields @message
@@ -312,19 +379,27 @@ _LLM_OPS = ("chat", "text_completion", "generate_content")
 
 def categorize_span(name: str, attributes: dict[str, Any] | None = None,
                     kind: str | None = None) -> str:
+    """Order matters: strong signals (execute_tool prefix, operation.name)
+    before substring needles, so e.g. `execute_tool search_memory` is a tool
+    and an LLM chat span whose name mentions "agent" still counts as llm."""
     attrs = attributes or {}
     lowered = name.lower()
-    if any(n in lowered for n in _MEMORY_NEEDLES):
-        return "memory"
+    operation = str(attrs.get("gen_ai.operation.name", ""))
+    if lowered.startswith("execute_tool") or operation == "execute_tool":
+        return "tool"
+    if operation in _LLM_OPS:
+        return "llm"
+    if operation == "invoke_agent":
+        return "agent"
     if any(n in lowered for n in _GATEWAY_NEEDLES):
         return "gateway"
-    if lowered.startswith("execute_tool") or "gen_ai.tool.name" in attrs:
+    if any(n in lowered for n in _MEMORY_NEEDLES):
+        return "memory"
+    if "gen_ai.tool.name" in attrs:
         return "tool"
-    operation = str(attrs.get("gen_ai.operation.name", ""))
-    if operation == "invoke_agent" or any(n in lowered for n in _AGENT_NEEDLES):
+    if any(n in lowered for n in _AGENT_NEEDLES):
         return "agent"
-    if operation in _LLM_OPS or lowered.startswith("chat") or "converse" in lowered \
-            or "invoke_model" in lowered:
+    if lowered.startswith("chat") or "converse" in lowered or "invoke_model" in lowered:
         return "llm"
     if kind == "SERVER" or "http.method" in attrs or "http.request.method" in attrs:
         return "http"
@@ -603,7 +678,12 @@ def get_dashboard(range_key: str, force: bool = False,
         distincts = results["distincts"][0] if results["distincts"] else {}
         trace_total = int(_num(totals, "traces"))
         errors = int(_num(totals, "errors"))
-        tokens_by_model = query_token_usage_metrics(hours, cw=cw)
+        try:
+            tokens_by_model = query_token_usage_metrics(hours, cw=cw)
+        except ClientError:
+            # Metrics are one tile/chart — a CloudWatch failure must not take
+            # down the whole dashboard when the Logs Insights data succeeded.
+            tokens_by_model = []
         tokens_in = sum(r["input"] for r in tokens_by_model)
         tokens_out = sum(r["output"] for r in tokens_by_model)
         costs = [r["est_cost_usd"] for r in tokens_by_model if r["est_cost_usd"] is not None]
@@ -689,7 +769,14 @@ def get_trace(trace_id: str, range_key: str, db: Session, force: bool = False,
                 continue
         tree = build_span_tree(raw_spans)
         spans = tree["spans"]
-        llm_spans = [s for s in spans if s["tokens"] and s["category"] == "llm"]
+        # Strands emits each LLM call as a wrapper span (system=strands-agents)
+        # plus a terminal provider span with identical tokens; sum terminal
+        # spans only, falling back to wrappers for SDKs that emit just those.
+        with_tokens = [s for s in spans if s["tokens"] and s["category"] == "llm"]
+        llm_spans = [
+            s for s in with_tokens
+            if s["attributes"].get("gen_ai.system") != "strands-agents"
+        ] or with_tokens
         tokens = {
             "input": round(sum(s["tokens"]["input"] for s in llm_spans)),
             "output": round(sum(s["tokens"]["output"] for s in llm_spans)),
@@ -822,6 +909,14 @@ def _turn_text(raw: str) -> str | None:
     return "\n".join(parts) if parts else None
 
 
+def _event_iso(value: Any) -> str:
+    """boto3 event timestamps are tz-aware datetimes in the SERVER's local tz;
+    normalize to UTC ISO so the frontend can render in the browser's tz."""
+    if isinstance(value, datetime):
+        return value.astimezone(UTC).isoformat(timespec="seconds")
+    return str(value or "")
+
+
 def session_transcript(db: Session, session_id: str) -> dict[str, Any]:
     row = db.query(ChatSession).filter(ChatSession.session_id == session_id).first()
     if row is None:
@@ -849,7 +944,7 @@ def session_transcript(db: Session, session_id: str) -> dict[str, Any]:
                 {
                     "role": conv.get("role"),
                     "text": text[:4000],
-                    "at": str(event.get("eventTimestamp", "")),
+                    "at": _event_iso(event.get("eventTimestamp")),
                 }
             )
     long_term = None

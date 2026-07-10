@@ -98,8 +98,14 @@ export function Chat() {
         const active = res.agents.filter((a) => a.status === "active");
         setAgents(active);
         const linked = linkedAgent && active.find((a) => a.id === linkedAgent);
-        if (linked) setAgentId(linked.id);
-        else if (active.length && !agentId) setAgentId(active[0].id);
+        if (linked) {
+          setAgentId(linked.id);
+        } else {
+          // Linked agent unknown/inactive: drop the linked session too, so a
+          // foreign session id is never posted to a different agent's runtime.
+          if (linkedSession) setSessionId(null);
+          if (active.length && !agentId) setAgentId(active[0].id);
+        }
       })
       .catch(() => {});
     void loadKeys();
@@ -190,9 +196,11 @@ export function Chat() {
   };
 
   useEffect(() => {
-    if (sessionId && !busy) void refreshMemory(sessionId);
+    // agentId in deps: on a deep-linked session the agent resolves after mount
+    // and the memory rail must load once it does.
+    if (sessionId && agentId && !busy) void refreshMemory(sessionId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, busy]);
+  }, [sessionId, busy, agentId]);
 
   const newSession = () => {
     setSessionId(null);
