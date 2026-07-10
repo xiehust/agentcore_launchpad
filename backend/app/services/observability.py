@@ -712,6 +712,7 @@ def get_dashboard(range_key: str, force: bool = False,
         ]
         return {
             "range": range_key,
+            "prices_meta": get_settings().model_prices_meta or None,
             "tiles": {
                 "traces": {"total": trace_total, "ok": trace_total - errors, "error": errors},
                 "sessions": {

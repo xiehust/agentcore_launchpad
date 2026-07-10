@@ -98,8 +98,17 @@ export interface ObsTokens {
   cache_write?: number;
 }
 
+export interface ObsPricesMeta {
+  updated_at?: string;
+  source?: string;
+  source_models?: number;
+  updated?: string[];
+  added?: string[];
+}
+
 export interface ObsDashboard {
   range: string;
+  prices_meta?: ObsPricesMeta | null;
   tiles: {
     traces: { total: number; ok: number; error: number };
     sessions: { total: number; agents: number };
@@ -289,5 +298,10 @@ export const api = {
   obsSession: (sessionId: string, range: string, force = false) =>
     request<ObsSessionDetail>(
       `/api/observability/sessions/${encodeURIComponent(sessionId)}?${obsQuery(range, force)}`,
+    ),
+  obsRefreshPrices: () =>
+    request<{ prices: Record<string, unknown>; meta: Required<ObsPricesMeta> }>(
+      "/api/observability/prices/refresh",
+      { method: "POST" },
     ),
 };

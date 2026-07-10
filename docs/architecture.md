@@ -142,7 +142,14 @@ values.
 Cost figures are **advisory estimates**: token counts × `model_prices` from
 `config/launchpad.yaml` (USD per 1M tokens, substring-matched against
 `gen_ai.request.model`; unknown models show token counts with a `—` cost). The
-UI labels them `≈ / EST`.
+UI labels them `≈ / EST`. The price map is kept fresh from litellm's public
+price file (`app/services/model_prices.py`): a daily daemon plus the dashboard's
+`⟳ UPDATE PRICES` button (`POST /api/observability/prices/refresh`) pull exact
+per-model entries — including regional Bedrock premiums and cache read/write
+rates — for every model seen in the account's telemetry, refresh the operator's
+short fallback keys, and leave unmatched keys untouched. Source URL and
+interval are configurable (`model_prices_source_url`,
+`model_prices_refresh_hours`; `0` disables the daemon).
 
 Tab IA: **DASHBOARD** (5 stat tiles + traffic/latency/tokens/tools charts) ·
 **SESSIONS** (list → detail with memory transcript + traces-in-session cards) ·

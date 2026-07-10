@@ -1,8 +1,10 @@
 import type { CSSProperties } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { Panel, StatTile } from "../../components";
+import { Panel, StatTile, useToast } from "../../components";
 import type { ObsDashboard } from "../../lib/api";
+import { api } from "../../lib/api";
 import { fmtBucket, fmtCompact, fmtCost, fmtDuration } from "./format";
 
 function TrafficChart({ data }: { data: ObsDashboard }) {
@@ -115,14 +117,51 @@ function LatencyChart({ data }: { data: ObsDashboard }) {
   );
 }
 
-function TokensByModel({ data }: { data: ObsDashboard }) {
+function TokensByModel({
+  data,
+  onPricesRefreshed,
+}: {
+  data: ObsDashboard;
+  onPricesRefreshed?: () => void;
+}) {
   const { t } = useTranslation();
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
   const rows = data.tokens_by_model;
   const grand = Math.max(1, ...rows.map((r) => r.total));
+
+  const refreshPrices = () => {
+    setBusy(true);
+    api
+      .obsRefreshPrices()
+      .then((res) => {
+        toast(
+          t("obs.prices.refreshed", {
+            updated: res.meta.updated.length,
+            added: res.meta.added.length,
+          }),
+          "good",
+        );
+        onPricesRefreshed?.();
+      })
+      .catch((err: unknown) => {
+        toast(
+          t("obs.loadFailed", { msg: err instanceof Error ? err.message : String(err) }),
+          "crit",
+        );
+      })
+      .finally(() => setBusy(false));
+  };
+
   return (
     <Panel
       title={t("obs.charts.tokensTitle")}
       sub={t("obs.charts.tokensSub")}
+      end={
+        <button className="rowact" disabled={busy} onClick={refreshPrices}>
+          ⟳ {busy ? "…" : t("obs.prices.update")}
+        </button>
+      }
       style={{ "--i": 7 } as CSSProperties}
     >
       {rows.length === 0 ? (
@@ -158,7 +197,13 @@ function TokensByModel({ data }: { data: ObsDashboard }) {
               <i style={{ background: "var(--s2)" }} />
               {t("obs.legend.output")}
             </span>
-            <span className="dim">{t("obs.charts.priceNote")}</span>
+            <span className="dim">
+              {t("obs.charts.priceNote")}
+              {data.prices_meta?.updated_at != null &&
+                ` · ${t("obs.prices.updatedAt", {
+                  date: data.prices_meta.updated_at.slice(0, 10),
+                })}`}
+            </span>
           </div>
         </>
       )}
@@ -222,7 +267,13 @@ function TopTools({ data }: { data: ObsDashboard }) {
   );
 }
 
-export function DashboardTab({ data }: { data: ObsDashboard }) {
+export function DashboardTab({
+  data,
+  onPricesRefreshed,
+}: {
+  data: ObsDashboard;
+  onPricesRefreshed?: () => void;
+}) {
   const { t } = useTranslation();
   const { tiles } = data;
   const errPct = (tiles.error_rate * 100).toFixed(1);
@@ -290,7 +341,7 @@ export function DashboardTab({ data }: { data: ObsDashboard }) {
         <LatencyChart data={data} />
       </div>
       <div className="obs-grid" style={{ marginBottom: 0 }}>
-        <TokensByModel data={data} />
+        <TokensByModel data={data} onPricesRefreshed={onPricesRefreshed} />
         <TopTools data={data} />
       </div>
     </>

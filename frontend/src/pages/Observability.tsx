@@ -213,7 +213,7 @@ export function Observability() {
           <div className="loading-line">{t("common.loading")}</div>
         </Panel>
       ) : tab === "dashboard" && dashboard ? (
-        <DashboardTab data={dashboard} />
+        <DashboardTab data={dashboard} onPricesRefreshed={() => load(true)} />
       ) : tab === "traces" && traces ? (
         <TracesTab data={traces} onOpenSession={openSession} onOpenTrace={openTrace} />
       ) : tab === "sessions" && sessions ? (

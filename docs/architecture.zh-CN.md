@@ -134,7 +134,12 @@ public  /v1  ──┘        │
 
 成本为**参考估算**:token 数 × `config/launchpad.yaml` 中的 `model_prices`
 (每百万 token 的美元价,按子串匹配 `gen_ai.request.model`;未知模型只显示
-token 数,成本为 `—`)。界面以 `≈ / EST` 标注。
+token 数,成本为 `—`)。界面以 `≈ / EST` 标注。价格表通过 litellm 的公开
+价格文件保持更新(`app/services/model_prices.py`):每日守护线程 + 仪表盘的
+「⟳ 更新价格」按钮(`POST /api/observability/prices/refresh`)会为账户遥测中
+出现过的每个模型拉取精确条目(含 Bedrock 区域溢价与缓存读写价),刷新运维
+维护的短键,未匹配的键保持不动。来源 URL 与周期可配置
+(`model_prices_source_url`、`model_prices_refresh_hours`,设 `0` 关闭守护线程)。
 
 页签结构:**仪表盘**(5 个统计卡片 + 流量/延迟/TOKEN/工具图表)·
 **会话**(列表 → 含记忆转录与会话内追踪卡片的详情)·

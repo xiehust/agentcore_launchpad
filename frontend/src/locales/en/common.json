@@ -506,6 +506,11 @@
       "page": "PAGE {{page}} / {{pages}}",
       "perPage": "{{size}} / PAGE",
       "sizeLabel": "Rows per page"
+    },
+    "prices": {
+      "update": "UPDATE PRICES",
+      "refreshed": "price map updated — {{updated}} refreshed · {{added}} added",
+      "updatedAt": "prices updated {{date}}"
     }
   },
   "common": {

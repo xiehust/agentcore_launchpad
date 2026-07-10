@@ -11,8 +11,9 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Path, Query
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.db import get_db
-from app.services import observability
+from app.services import model_prices, observability
 
 router = APIRouter(prefix="/api/observability", tags=["observability"])
 
@@ -27,6 +28,25 @@ SessionSearchParam = Annotated[str | None, Query(max_length=128, pattern="^[A-Za
 @router.get("/dashboard")
 def dashboard(range: RangeParam = "24h", force: bool = False) -> dict[str, Any]:
     return observability.get_dashboard(range, force=force)
+
+
+@router.get("/prices")
+def prices() -> dict[str, Any]:
+    settings = get_settings()
+    return {
+        "prices": settings.model_prices,
+        "meta": settings.model_prices_meta,
+        "source": settings.model_prices_source_url,
+        "refresh_hours": settings.model_prices_refresh_hours,
+    }
+
+
+@router.post("/prices/refresh")
+def refresh_prices() -> dict[str, Any]:
+    """Pull the latest model prices from the configured litellm source.
+
+    Writes only the local config file — no AWS resource is touched."""
+    return model_prices.refresh_model_prices()
 
 
 @router.get("/traces")

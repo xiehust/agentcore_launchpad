@@ -23,6 +23,7 @@ from app.routers.overview import router as overview_router
 from app.routers.public_api import router as public_router
 from app.routers.registry import router as registry_router
 from app.routers.tools import router as tools_router
+from app.services.model_prices import start_auto_refresh
 
 API_DESCRIPTION = """AgentCore Launchpad — enterprise agent platform.
 
@@ -69,6 +70,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
             logging.getLogger("launchpad").info(
                 "resumed %d interrupted deploy job(s)", len(resumed)
             )
+        start_auto_refresh()  # periodic model-price refresh (real server only)
 
     @app.get("/api/health")
     def health() -> dict[str, str]:

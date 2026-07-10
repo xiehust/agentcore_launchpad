@@ -53,13 +53,21 @@ class Settings(BaseSettings):
 
     # Advisory USD-per-1M-token prices for observability cost estimates.
     # Keys are substring-matched against gen_ai.request.model ids; unknown
-    # models report tokens with a null cost. Overridable in launchpad.yaml.
+    # models report tokens with a null cost. Overridable in launchpad.yaml,
+    # and refreshed from litellm's public price file by
+    # app.services.model_prices (manual button + periodic daemon).
     model_prices: dict[str, Any] = {
         "sonnet-4-6": {"input": 3.0, "output": 15.0},
         "opus-4-8": {"input": 5.0, "output": 25.0},
         "sonnet-4-5": {"input": 3.0, "output": 15.0},
         "nemotron-nano": {"input": 0.2, "output": 0.6},
     }
+    model_prices_meta: dict[str, Any] = {}  # written by the price refresher
+    model_prices_source_url: str = (
+        "https://raw.githubusercontent.com/BerriAI/litellm/main/"
+        "model_prices_and_context_window.json"
+    )
+    model_prices_refresh_hours: int = 24  # 0 disables the periodic refresher
 
     @classmethod
     def settings_customise_sources(
