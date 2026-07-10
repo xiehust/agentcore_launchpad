@@ -22,3 +22,12 @@ demo_users:
   passwords:
     river: "<set by bootstrap — platform-admin>"
     demo: "<set by bootstrap — hr-analyst>"
+
+# Observability cost estimates (advisory, shown as "≈ / EST" in the console):
+# USD per 1M tokens, keys substring-matched against gen_ai.request.model ids.
+# Models without an entry show token counts with a "—" cost.
+model_prices:
+  sonnet-4-6: {input: 3.0, output: 15.0}
+  opus-4-8: {input: 5.0, output: 25.0}
+  sonnet-4-5: {input: 3.0, output: 15.0}
+  nemotron-nano: {input: 0.2, output: 0.6}

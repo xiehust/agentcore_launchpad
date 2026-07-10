@@ -1,0 +1,869 @@
+"""Observability aggregations — Logs Insights over aws/spans + bedrock-agentcore metrics.
+
+Design contract: design/mockup-observability.html. Every view is served from a
+60s TTL cache so the (slow, billed-per-scan) Logs Insights queries run at most
+once a minute per (view, range). Tokens-by-model comes from the
+`bedrock-agentcore` metrics namespace (gen_ai.client.token.usage, per the
+mockup); top tools and all trace/session rollups come from aws/spans, which
+covers every agent framework, not just those emitting client metrics.
+
+Cost figures are advisory estimates: token counts × config `model_prices`
+(USD per 1M tokens, substring-matched on the model id; unknown model → None).
+"""
+
+import json
+import time
+from collections.abc import Callable
+from datetime import UTC, datetime
+from typing import Any
+
+import boto3
+from botocore.exceptions import ClientError
+from sqlalchemy.orm import Session
+
+from app.core.config import get_settings
+from app.core.errors import AppError
+from app.models.ledger import Agent, ChatSession
+from app.services import memory
+
+SPANS_LOG_GROUP = "aws/spans"
+RANGE_HOURS = {"1h": 1, "6h": 6, "24h": 24, "7d": 168}
+BIN_BY_RANGE = {"1h": "5m", "6h": "15m", "24h": "1h", "7d": "6h"}
+TRACE_LIMIT = 100
+SESSION_LIMIT = 100
+SPANS_PER_TRACE = 500
+CACHE_TTL_SECONDS = 60.0
+QUERY_DEADLINE_SECONDS = 55
+NANOS_PER_MS = 1_000_000
+
+# Anthropic-convention multipliers applied when a price entry has no explicit
+# cache_read / cache_write rate — advisory, like every cost figure here.
+CACHE_READ_FACTOR = 0.1
+CACHE_WRITE_FACTOR = 1.25
+
+_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+
+
+def _now() -> float:
+    return time.time()
+
+
+def reset_cache() -> None:
+    _CACHE.clear()
+
+
+def _cached(key: str, force: bool, build: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    hit = _CACHE.get(key)
+    if hit and not force and _now() - hit[0] < CACHE_TTL_SECONDS:
+        return {**hit[1], "cache": {"hit": True, "age_seconds": round(_now() - hit[0], 1)}}
+    value = build()
+    _CACHE[key] = (_now(), value)
+    return {**value, "cache": {"hit": False, "age_seconds": 0.0}}
+
+
+def _logs_client() -> Any:
+    return boto3.client("logs", region_name=get_settings().region)
+
+
+def _cw_client() -> Any:
+    return boto3.client("cloudwatch", region_name=get_settings().region)
+
+
+# ── Logs Insights runner ────────────────────────────────────────────────────
+
+
+def _start_query(logs: Any, query: str, start: int, end: int) -> str:
+    for attempt in (0, 1):
+        try:
+            return logs.start_query(
+                logGroupName=SPANS_LOG_GROUP,
+                startTime=start,
+                endTime=end,
+                queryString=query,
+            )["queryId"]
+        except ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code", "")
+            if attempt == 0 and code in ("ThrottlingException", "LimitExceededException"):
+                time.sleep(1.5)
+                continue
+            raise AppError(
+                "observability.query_failed",
+                f"Logs Insights start_query failed: {code}",
+                status_code=502,
+            ) from exc
+    raise AppError("observability.query_failed", "unreachable", status_code=502)
+
+
+def run_insights_queries(
+    queries: dict[str, str], hours: int, logs: Any = None
+) -> dict[str, list[dict[str, str]]]:
+    """Start all queries concurrently, poll each to completion, flatten rows."""
+    logs = logs or _logs_client()
+    end = int(_now())
+    start = end - hours * 3600
+    query_ids = {name: _start_query(logs, q, start, end) for name, q in queries.items()}
+    results: dict[str, list[dict[str, str]]] = {}
+    deadline = time.time() + QUERY_DEADLINE_SECONDS
+    for name, qid in query_ids.items():
+        while True:
+            res = logs.get_query_results(queryId=qid)
+            status = res["status"]
+            if status == "Complete":
+                results[name] = [
+                    {f["field"]: f["value"] for f in row if f["field"] != "@ptr"}
+                    for row in res["results"]
+                ]
+                break
+            if status in ("Failed", "Cancelled", "Timeout") or time.time() > deadline:
+                raise AppError(
+                    "observability.query_failed",
+                    f"Logs Insights query '{name}' ended with status {status}",
+                    status_code=502,
+                )
+            time.sleep(0.8)
+    return results
+
+
+# ── Query builders (shapes validated against live aws/spans data) ──────────
+
+
+# Aggregations restrict token sums/LLM counts to terminal LLM operations
+# (operation.name chat / text_completion / generate_content): agent-level spans
+# (invoke_agent) repeat their children's gen_ai.usage.* values, so a naive
+# ispresent()-based sum double-counts (verified against live data). The
+# `x * is_llm` multiplication is Logs Insights' conditional sum.
+_IS_LLM_FIELDS = """fields (strcontains(attributes.gen_ai.operation.name, "chat")
+        + strcontains(attributes.gen_ai.operation.name, "text_completion")
+        + strcontains(attributes.gen_ai.operation.name, "generate_content")) as is_llm,
+       strcontains(status.code, "ERROR") as is_error
+| fields attributes.gen_ai.usage.input_tokens * is_llm as llm_in,
+         attributes.gen_ai.usage.output_tokens * is_llm as llm_out,
+         attributes.gen_ai.usage.cache_read_input_tokens * is_llm as llm_cache_read,
+         attributes.gen_ai.usage.cache_write_input_tokens * is_llm as llm_cache_write"""
+
+
+def q_trace_aggregates(session_id: str | None = None, limit: int = TRACE_LIMIT) -> str:
+    session_filter = (
+        f'filter attributes.session.id = "{session_id}"\n| ' if session_id else ""
+    )
+    return f"""
+{session_filter}{_IS_LLM_FIELDS}
+| stats count(*) as span_count, sum(is_llm) as llm_count,
+        sum(llm_in) as tokens_in,
+        sum(llm_out) as tokens_out,
+        sum(llm_cache_read) as cache_read,
+        sum(llm_cache_write) as cache_write,
+        sum(is_error) as error_count,
+        min(startTimeUnixNano) as start_ns, max(endTimeUnixNano) as end_ns,
+        earliest(attributes.session.id) as session_id,
+        earliest(resource.attributes.service.name) as service,
+        earliest(attributes.gen_ai.request.model) as model,
+        count_distinct(attributes.gen_ai.request.model) as model_count
+  by traceId
+| sort start_ns desc
+| limit {limit}
+"""
+
+
+def q_root_spans(limit: int = 3 * TRACE_LIMIT) -> str:
+    # No session variant: root spans don't reliably carry session.id, so session
+    # views join roots by traceId against the session-filtered aggregates.
+    return f"""
+filter not ispresent(parentSpanId)
+| fields name, traceId, resource.attributes.service.name as service,
+         durationNano, startTimeUnixNano, status.code as status_code
+| sort startTimeUnixNano desc
+| limit {limit}
+"""
+
+
+def q_session_aggregates(limit: int = SESSION_LIMIT) -> str:
+    return f"""
+filter ispresent(attributes.session.id)
+| {_IS_LLM_FIELDS}
+| stats count_distinct(traceId) as traces, sum(is_llm) as llm_calls,
+        sum(llm_in) as tokens_in,
+        sum(llm_out) as tokens_out,
+        sum(is_error) as errors,
+        min(startTimeUnixNano) as first_ns, max(endTimeUnixNano) as last_ns,
+        earliest(resource.attributes.service.name) as service,
+        earliest(attributes.gen_ai.request.model) as model
+  by attributes.session.id as session_id
+| sort last_ns desc
+| limit {limit}
+"""
+
+
+def q_dashboard_series(range_key: str) -> str:
+    return f"""
+filter not ispresent(parentSpanId)
+| fields strcontains(status.code, "ERROR") as is_error
+| stats count(*) as traces, sum(is_error) as errors,
+        pct(durationNano, 50) as p50_nano, pct(durationNano, 95) as p95_nano
+  by bin({BIN_BY_RANGE[range_key]}) as bucket
+| sort bucket asc
+| limit 200
+"""
+
+
+def q_dashboard_totals() -> str:
+    return """
+filter not ispresent(parentSpanId)
+| fields strcontains(status.code, "ERROR") as is_error
+| stats count(*) as traces, sum(is_error) as errors,
+        pct(durationNano, 50) as p50_nano, pct(durationNano, 95) as p95_nano
+"""
+
+
+def q_dashboard_distincts() -> str:
+    return """
+filter ispresent(attributes.session.id)
+| stats count_distinct(attributes.session.id) as sessions,
+        count_distinct(resource.attributes.service.name) as agents
+"""
+
+
+def q_top_tools(limit: int = 10) -> str:
+    return f"""
+filter ispresent(attributes.gen_ai.tool.name)
+| fields strcontains(status.code, "ERROR") as is_error
+| stats count(*) as calls, sum(is_error) as errors
+  by attributes.gen_ai.tool.name as tool
+| sort calls desc
+| limit {limit}
+"""
+
+
+def q_trace_spans(trace_id: str) -> str:
+    return f"""
+filter traceId = "{trace_id}"
+| fields @message
+| limit {SPANS_PER_TRACE}
+"""
+
+
+# ── Row helpers ─────────────────────────────────────────────────────────────
+
+
+def _num(row: dict[str, str], key: str, default: float = 0.0) -> float:
+    try:
+        return float(row.get(key) or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def _ns_to_iso(ns: float | None) -> str | None:
+    if not ns:
+        return None
+    return datetime.fromtimestamp(ns / 1e9, tz=UTC).isoformat(timespec="seconds")
+
+
+# ── Cost estimator ──────────────────────────────────────────────────────────
+
+
+def match_price(model: str | None, prices: dict[str, Any]) -> dict[str, float] | None:
+    """Longest price-map key that is a substring of the model id."""
+    if not model:
+        return None
+    best: tuple[int, dict[str, float]] | None = None
+    for key, entry in prices.items():
+        if key in model and isinstance(entry, dict):
+            if best is None or len(key) > best[0]:
+                best = (len(key), entry)
+    return best[1] if best else None
+
+
+def estimate_cost(
+    model: str | None,
+    tokens_in: float,
+    tokens_out: float,
+    cache_read: float = 0.0,
+    cache_write: float = 0.0,
+    prices: dict[str, Any] | None = None,
+) -> float | None:
+    prices = get_settings().model_prices if prices is None else prices
+    entry = match_price(model, prices)
+    if not entry:
+        return None
+    rate_in = float(entry.get("input", 0.0))
+    rate_out = float(entry.get("output", 0.0))
+    rate_cache_read = float(entry.get("cache_read", rate_in * CACHE_READ_FACTOR))
+    rate_cache_write = float(entry.get("cache_write", rate_in * CACHE_WRITE_FACTOR))
+    cost = (
+        tokens_in * rate_in
+        + tokens_out * rate_out
+        + cache_read * rate_cache_read
+        + cache_write * rate_cache_write
+    ) / 1e6
+    return round(cost, 6)
+
+
+# ── Category mapper (mockup contract: llm/tool/memory/gateway/http/agent) ──
+
+_MEMORY_NEEDLES = (
+    "createevent", "listevents", "retrievememoryrecords", "listmemoryrecords",
+    "listactors", "listsessions", "memory",
+)
+_GATEWAY_NEEDLES = ("tools/call", "getresourceoauth2token", "mcp", "gateway",
+                    "oauth", "authorizeaction")
+_AGENT_NEEDLES = ("invoke_agent", "event_loop", "invoke_harness", "agent")
+_LLM_OPS = ("chat", "text_completion", "generate_content")
+
+
+def categorize_span(name: str, attributes: dict[str, Any] | None = None,
+                    kind: str | None = None) -> str:
+    attrs = attributes or {}
+    lowered = name.lower()
+    if any(n in lowered for n in _MEMORY_NEEDLES):
+        return "memory"
+    if any(n in lowered for n in _GATEWAY_NEEDLES):
+        return "gateway"
+    if lowered.startswith("execute_tool") or "gen_ai.tool.name" in attrs:
+        return "tool"
+    operation = str(attrs.get("gen_ai.operation.name", ""))
+    if operation == "invoke_agent" or any(n in lowered for n in _AGENT_NEEDLES):
+        return "agent"
+    if operation in _LLM_OPS or lowered.startswith("chat") or "converse" in lowered \
+            or "invoke_model" in lowered:
+        return "llm"
+    if kind == "SERVER" or "http.method" in attrs or "http.request.method" in attrs:
+        return "http"
+    return "other"
+
+
+# ── Agent-name mapper (service.name → platform agent display name) ─────────
+
+
+def build_agent_mapper(db: Session) -> Callable[[str | None], str]:
+    rows = (
+        db.query(Agent)
+        .filter(Agent.resource_id.isnot(None))
+        .order_by(Agent.updated_at.asc())
+        .all()
+    )
+    # Later (fresher) rows win; active rows win over deleted ones.
+    candidates: list[tuple[str, str]] = []
+    for agent in sorted(rows, key=lambda a: a.status == "active"):
+        base = (agent.resource_id or "").rsplit("-", 1)[0]
+        if base:
+            candidates.append((base, agent.name))
+
+    def map_service(service: str | None) -> str:
+        if not service:
+            return "unknown"
+        service_base = service.split(".")[0]
+        matched = None
+        for base, name in candidates:
+            if service_base in (base, f"harness_{base}") or service_base.endswith(base):
+                matched = name
+        return matched or service
+
+    return map_service
+
+
+# ── Span tree builder ───────────────────────────────────────────────────────
+
+
+def _span_ns(span: dict[str, Any], key: str) -> float | None:
+    value = span.get(key)
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _token_usage(attrs: dict[str, Any]) -> dict[str, float] | None:
+    if "gen_ai.usage.input_tokens" not in attrs and "gen_ai.usage.output_tokens" not in attrs:
+        return None
+    return {
+        "input": float(attrs.get("gen_ai.usage.input_tokens") or 0),
+        "output": float(attrs.get("gen_ai.usage.output_tokens") or 0),
+        "cache_read": float(attrs.get("gen_ai.usage.cache_read_input_tokens") or 0),
+        "cache_write": float(attrs.get("gen_ai.usage.cache_write_input_tokens") or 0),
+    }
+
+
+def build_span_tree(raw_spans: list[dict[str, Any]],
+                    prices: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Nest spans by parentSpanId; annotate offsets/durations as ms + percentages."""
+    starts = [s for s in (_span_ns(sp, "startTimeUnixNano") for sp in raw_spans) if s]
+    ends = [e for e in (_span_ns(sp, "endTimeUnixNano") for sp in raw_spans) if e]
+    trace_start = min(starts) if starts else 0.0
+    trace_end = max(ends) if ends else trace_start
+    total_ns = max(trace_end - trace_start, 1.0)
+
+    flat: list[dict[str, Any]] = []
+    nodes: dict[str, dict[str, Any]] = {}
+    for span in raw_spans:
+        attrs = span.get("attributes") or {}
+        name = str(span.get("name") or "span")
+        kind = span.get("kind")
+        start = _span_ns(span, "startTimeUnixNano")
+        end = _span_ns(span, "endTimeUnixNano")
+        duration_ns = (end - start) if start and end else _span_ns(span, "durationNano") or 0.0
+        offset_ns = (start - trace_start) if start else 0.0
+        tokens = _token_usage(attrs)
+        model = attrs.get("gen_ai.request.model")
+        finish = attrs.get("gen_ai.response.finish_reasons") or attrs.get(
+            "gen_ai.response.finish_reason"
+        )
+        row = {
+            "span_id": span.get("spanId"),
+            "parent_span_id": span.get("parentSpanId"),
+            "name": name[:120],
+            "category": categorize_span(name, attrs, kind),
+            "kind": kind,
+            "status": (span.get("status") or {}).get("code", "UNSET"),
+            "start_offset_ms": round(offset_ns / NANOS_PER_MS, 1),
+            "duration_ms": round(duration_ns / NANOS_PER_MS, 1),
+            "offset_pct": round(offset_ns / total_ns * 100, 2),
+            "width_pct": round(duration_ns / total_ns * 100, 2),
+            "model": model,
+            "finish_reason": finish,
+            "tool_name": attrs.get("gen_ai.tool.name"),
+            "tokens": tokens,
+            "est_cost_usd": (
+                estimate_cost(model, tokens["input"], tokens["output"],
+                              tokens["cache_read"], tokens["cache_write"], prices=prices)
+                if tokens and model else None
+            ),
+            "attributes": attrs,
+        }
+        flat.append(row)
+        if row["span_id"]:
+            nodes[row["span_id"]] = {**row, "children": [], "depth": 0}
+            nodes[row["span_id"]].pop("attributes")
+
+    roots: list[dict[str, Any]] = []
+    for node in nodes.values():
+        parent = nodes.get(node["parent_span_id"] or "")
+        if parent is not None and parent is not node:
+            parent["children"].append(node)
+        else:
+            roots.append(node)
+
+    def annotate(node: dict[str, Any], depth: int) -> None:
+        node["depth"] = depth
+        node["children"].sort(key=lambda c: c["start_offset_ms"])
+        for child in node["children"]:
+            annotate(child, depth + 1)
+
+    roots.sort(key=lambda r: r["start_offset_ms"])
+    for root in roots:
+        annotate(root, 0)
+    flat.sort(key=lambda r: r["start_offset_ms"])
+    return {
+        "start": _ns_to_iso(trace_start),
+        "duration_ms": round(total_ns / NANOS_PER_MS, 1),
+        "tree": roots,
+        "spans": flat,
+    }
+
+
+# ── Metrics (bedrock-agentcore namespace) ───────────────────────────────────
+
+
+def query_token_usage_metrics(hours: int, cw: Any = None) -> list[dict[str, Any]]:
+    """gen_ai.client.token.usage summed over the range, grouped by model."""
+    cw = cw or _cw_client()
+    metrics: list[dict[str, Any]] = []
+    for page in cw.get_paginator("list_metrics").paginate(
+        Namespace="bedrock-agentcore", MetricName="gen_ai.client.token.usage"
+    ):
+        metrics.extend(page["Metrics"])
+    if not metrics:
+        return []
+    period = max(hours * 3600, 60)
+    queries, keys = [], []
+    for i, metric in enumerate(metrics[:100]):
+        dims = {d["Name"]: d["Value"] for d in metric["Dimensions"]}
+        queries.append(
+            {
+                "Id": f"m{i}",
+                "MetricStat": {"Metric": metric, "Period": period, "Stat": "Sum"},
+                "ReturnData": True,
+            }
+        )
+        keys.append((dims.get("gen_ai.request.model", "unknown"),
+                     dims.get("gen_ai.token.type", "input")))
+    end = datetime.fromtimestamp(_now(), tz=UTC)
+    start = datetime.fromtimestamp(_now() - hours * 3600, tz=UTC)
+    response = cw.get_metric_data(MetricDataQueries=queries, StartTime=start, EndTime=end)
+    per_model: dict[str, dict[str, float]] = {}
+    for result in response.get("MetricDataResults", []):
+        index = int(result["Id"][1:])
+        model, token_type = keys[index]
+        total = sum(result.get("Values") or [])
+        if total:
+            per_model.setdefault(model, {})[token_type] = (
+                per_model.get(model, {}).get(token_type, 0.0) + total
+            )
+    prices = get_settings().model_prices
+    rows = []
+    for model, usage in per_model.items():
+        tokens_in, tokens_out = usage.get("input", 0.0), usage.get("output", 0.0)
+        rows.append(
+            {
+                "model": model,
+                "input": round(tokens_in),
+                "output": round(tokens_out),
+                "total": round(tokens_in + tokens_out),
+                "est_cost_usd": estimate_cost(model, tokens_in, tokens_out, prices=prices),
+            }
+        )
+    rows.sort(key=lambda r: -r["total"])
+    return rows
+
+
+# ── Row composers ───────────────────────────────────────────────────────────
+
+
+def _trace_row(
+    agg: dict[str, str],
+    root: dict[str, str] | None,
+    map_agent: Callable[[str | None], str],
+) -> dict[str, Any]:
+    start_ns, end_ns = _num(agg, "start_ns"), _num(agg, "end_ns")
+    tokens = {
+        "input": round(_num(agg, "tokens_in")),
+        "output": round(_num(agg, "tokens_out")),
+        "cache_read": round(_num(agg, "cache_read")),
+        "cache_write": round(_num(agg, "cache_write")),
+    }
+    tokens["total"] = tokens["input"] + tokens["output"]
+    model = agg.get("model") or None
+    service = agg.get("service") or (root or {}).get("service")
+    duration_ns = _num(root or {}, "durationNano") or (end_ns - start_ns)
+    return {
+        "trace_id": agg.get("traceId"),
+        "time": _ns_to_iso(start_ns),
+        "root_operation": (root or {}).get("name") or "trace",
+        "service": service,
+        "agent": map_agent(service),
+        "session_id": agg.get("session_id"),
+        "duration_ms": round(duration_ns / NANOS_PER_MS, 1),
+        "span_count": int(_num(agg, "span_count")),
+        "llm_count": int(_num(agg, "llm_count")),
+        "error_count": int(_num(agg, "error_count")),
+        "status": "error" if _num(agg, "error_count") > 0 else "ok",
+        "model": model,
+        "multi_model": _num(agg, "model_count") > 1,
+        "tokens": tokens,
+        "est_cost_usd": estimate_cost(
+            model, tokens["input"], tokens["output"],
+            tokens["cache_read"], tokens["cache_write"],
+        ),
+    }
+
+
+def _session_row(row: dict[str, str], map_agent: Callable[[str | None], str],
+                 platform_ids: set[str]) -> dict[str, Any]:
+    tokens_in, tokens_out = _num(row, "tokens_in"), _num(row, "tokens_out")
+    model = row.get("model") or None
+    service = row.get("service")
+    session_id = row.get("session_id") or ""
+    return {
+        "session_id": session_id,
+        "service": service,
+        "agent": map_agent(service),
+        "traces": int(_num(row, "traces")),
+        "llm_calls": int(_num(row, "llm_calls")),
+        "errors": int(_num(row, "errors")),
+        "tokens": {
+            "input": round(tokens_in),
+            "output": round(tokens_out),
+            "total": round(tokens_in + tokens_out),
+        },
+        "est_cost_usd": estimate_cost(model, tokens_in, tokens_out),
+        "first": _ns_to_iso(_num(row, "first_ns")),
+        "last": _ns_to_iso(_num(row, "last_ns")),
+        "platform": session_id in platform_ids,
+    }
+
+
+# ── Public views ────────────────────────────────────────────────────────────
+
+
+def get_dashboard(range_key: str, force: bool = False,
+                  logs: Any = None, cw: Any = None) -> dict[str, Any]:
+    hours = RANGE_HOURS[range_key]
+
+    def build() -> dict[str, Any]:
+        results = run_insights_queries(
+            {
+                "series": q_dashboard_series(range_key),
+                "totals": q_dashboard_totals(),
+                "distincts": q_dashboard_distincts(),
+                "tools": q_top_tools(),
+            },
+            hours,
+            logs=logs,
+        )
+        totals = results["totals"][0] if results["totals"] else {}
+        distincts = results["distincts"][0] if results["distincts"] else {}
+        trace_total = int(_num(totals, "traces"))
+        errors = int(_num(totals, "errors"))
+        tokens_by_model = query_token_usage_metrics(hours, cw=cw)
+        tokens_in = sum(r["input"] for r in tokens_by_model)
+        tokens_out = sum(r["output"] for r in tokens_by_model)
+        costs = [r["est_cost_usd"] for r in tokens_by_model if r["est_cost_usd"] is not None]
+        series = [
+            {
+                "bucket": row.get("bucket"),
+                "traces": int(_num(row, "traces")),
+                "errors": int(_num(row, "errors")),
+                "p50_ms": round(_num(row, "p50_nano") / NANOS_PER_MS, 1),
+                "p95_ms": round(_num(row, "p95_nano") / NANOS_PER_MS, 1),
+            }
+            for row in results["series"]
+        ]
+        tools = [
+            {
+                "tool": row.get("tool"),
+                "calls": int(_num(row, "calls")),
+                "errors": int(_num(row, "errors")),
+                "success_rate": round(
+                    (1 - _num(row, "errors") / _num(row, "calls")) * 100, 1
+                ) if _num(row, "calls") else None,
+            }
+            for row in results["tools"]
+        ]
+        return {
+            "range": range_key,
+            "tiles": {
+                "traces": {"total": trace_total, "ok": trace_total - errors, "error": errors},
+                "sessions": {
+                    "total": int(_num(distincts, "sessions")),
+                    "agents": int(_num(distincts, "agents")),
+                },
+                "error_rate": round(errors / trace_total, 4) if trace_total else 0.0,
+                "latency": {
+                    "p50_ms": round(_num(totals, "p50_nano") / NANOS_PER_MS, 1),
+                    "p95_ms": round(_num(totals, "p95_nano") / NANOS_PER_MS, 1),
+                },
+                "tokens": {
+                    "input": tokens_in,
+                    "output": tokens_out,
+                    "total": tokens_in + tokens_out,
+                    "est_cost_usd": round(sum(costs), 4) if costs else None,
+                },
+            },
+            "series": series,
+            "tokens_by_model": tokens_by_model,
+            "top_tools": tools,
+        }
+
+    return _cached(f"dashboard:{range_key}", force, build)
+
+
+def list_traces(range_key: str, db: Session, force: bool = False,
+                logs: Any = None) -> dict[str, Any]:
+    hours = RANGE_HOURS[range_key]
+
+    def build() -> dict[str, Any]:
+        results = run_insights_queries(
+            {"aggregates": q_trace_aggregates(), "roots": q_root_spans()}, hours, logs=logs
+        )
+        roots = {row.get("traceId"): row for row in results["roots"]}
+        map_agent = build_agent_mapper(db)
+        rows = [
+            _trace_row(agg, roots.get(agg.get("traceId")), map_agent)
+            for agg in results["aggregates"]
+        ]
+        return {"range": range_key, "traces": rows, "count": len(rows), "limit": TRACE_LIMIT}
+
+    return _cached(f"traces:{range_key}", force, build)
+
+
+def get_trace(trace_id: str, range_key: str, db: Session, force: bool = False,
+              logs: Any = None) -> dict[str, Any]:
+    hours = RANGE_HOURS[range_key]
+
+    def build() -> dict[str, Any]:
+        results = run_insights_queries({"spans": q_trace_spans(trace_id)}, hours, logs=logs)
+        raw_spans = []
+        for row in results["spans"]:
+            try:
+                raw_spans.append(json.loads(row.get("@message", "")))
+            except (TypeError, ValueError):
+                continue
+        tree = build_span_tree(raw_spans)
+        spans = tree["spans"]
+        llm_spans = [s for s in spans if s["tokens"] and s["category"] == "llm"]
+        tokens = {
+            "input": round(sum(s["tokens"]["input"] for s in llm_spans)),
+            "output": round(sum(s["tokens"]["output"] for s in llm_spans)),
+            "cache_read": round(sum(s["tokens"]["cache_read"] for s in llm_spans)),
+            "cache_write": round(sum(s["tokens"]["cache_write"] for s in llm_spans)),
+        }
+        tokens["total"] = tokens["input"] + tokens["output"]
+        costs = [s["est_cost_usd"] for s in llm_spans if s["est_cost_usd"] is not None]
+        service = next(
+            (
+                (sp.get("resource") or {}).get("attributes", {}).get("service.name")
+                for sp in raw_spans
+                if (sp.get("resource") or {}).get("attributes", {}).get("service.name")
+            ),
+            None,
+        )
+        session_id = next(
+            (s["attributes"].get("session.id") for s in spans
+             if s["attributes"].get("session.id")),
+            None,
+        )
+        map_agent = build_agent_mapper(db)
+        root = tree["tree"][0] if tree["tree"] else None
+        return {
+            "trace_id": trace_id,
+            "range": range_key,
+            "meta": {
+                "root_operation": root["name"] if root else None,
+                "service": service,
+                "agent": map_agent(service),
+                "session_id": session_id,
+                "start": tree["start"],
+                "duration_ms": tree["duration_ms"],
+                "span_count": len(spans),
+                "llm_count": len(llm_spans),
+                "status": "error" if any(s["status"] == "ERROR" for s in spans) else "ok",
+                "tokens": tokens,
+                "est_cost_usd": round(sum(costs), 6) if costs else None,
+            },
+            "tree": tree["tree"],
+            "spans": spans,
+        }
+
+    return _cached(f"trace:{trace_id}:{range_key}", force, build)
+
+
+def list_sessions(range_key: str, db: Session, force: bool = False,
+                  logs: Any = None) -> dict[str, Any]:
+    hours = RANGE_HOURS[range_key]
+
+    def build() -> dict[str, Any]:
+        results = run_insights_queries({"sessions": q_session_aggregates()}, hours, logs=logs)
+        map_agent = build_agent_mapper(db)
+        platform_ids = {row.session_id for row in db.query(ChatSession.session_id).all()}
+        rows = [_session_row(r, map_agent, platform_ids) for r in results["sessions"]]
+        return {"range": range_key, "sessions": rows, "count": len(rows),
+                "limit": SESSION_LIMIT}
+
+    return _cached(f"sessions:{range_key}", force, build)
+
+
+def get_session(session_id: str, range_key: str, db: Session, force: bool = False,
+                logs: Any = None) -> dict[str, Any]:
+    hours = RANGE_HOURS[range_key]
+    transcript = session_transcript(db, session_id)
+
+    def build() -> dict[str, Any]:
+        results = run_insights_queries(
+            {"aggregates": q_trace_aggregates(session_id=session_id), "roots": q_root_spans()},
+            hours,
+            logs=logs,
+        )
+        roots = {row.get("traceId"): row for row in results["roots"]}
+        map_agent = build_agent_mapper(db)
+        rows = [
+            _trace_row(agg, roots.get(agg.get("traceId")), map_agent)
+            for agg in results["aggregates"]
+        ]
+        tokens = {
+            "input": sum(r["tokens"]["input"] for r in rows),
+            "output": sum(r["tokens"]["output"] for r in rows),
+        }
+        tokens["total"] = tokens["input"] + tokens["output"]
+        costs = [r["est_cost_usd"] for r in rows if r["est_cost_usd"] is not None]
+        times = [r["time"] for r in rows if r["time"]]
+        return {
+            "session_id": session_id,
+            "range": range_key,
+            "summary": {
+                "agent": rows[0]["agent"] if rows else None,
+                "traces": len(rows),
+                "llm_calls": sum(r["llm_count"] for r in rows),
+                "errors": sum(r["error_count"] for r in rows),
+                "tokens": tokens,
+                "est_cost_usd": round(sum(costs), 6) if costs else None,
+                "first": min(times) if times else None,
+                "last": max(times) if times else None,
+            },
+            "traces": rows,
+        }
+
+    payload = _cached(f"session:{session_id}:{range_key}", force, build)
+    # Transcript is attached outside the cache: memory errors must degrade to
+    # {available: false} on every request, never poison the cached span data.
+    return {**payload, "transcript": transcript}
+
+
+# ── Memory transcript (platform sessions only) ──────────────────────────────
+
+
+def _turn_text(raw: str) -> str | None:
+    """Extract display text from a memory event.
+
+    Harness agents persist whole message envelopes as the event text
+    ({"message": {"role", "content": [{"text"|"toolUse"|"toolResult"...}]}});
+    platform-written events are already plain text. Tool-only turns (no text
+    parts) return None and are dropped from the transcript.
+    """
+    text = raw.strip()
+    if not text.startswith("{"):
+        return raw
+    try:
+        envelope = json.loads(text)
+    except ValueError:
+        return raw
+    content = (envelope.get("message") or {}).get("content")
+    if not isinstance(content, list):
+        return raw
+    parts = [p.get("text", "") for p in content if isinstance(p, dict) and p.get("text")]
+    return "\n".join(parts) if parts else None
+
+
+def session_transcript(db: Session, session_id: str) -> dict[str, Any]:
+    row = db.query(ChatSession).filter(ChatSession.session_id == session_id).first()
+    if row is None:
+        return {"available": False, "reason": "not_platform_session"}
+    agent = db.get(Agent, row.agent_id)
+    try:
+        events = memory.list_events(row.actor_id, session_id, max_results=100)
+    except Exception as exc:
+        return {
+            "available": False,
+            "reason": "memory_unavailable",
+            "detail": f"{type(exc).__name__}: {exc}"[:200],
+            "actor_id": row.actor_id,
+        }
+    turns = []
+    for event in sorted(events, key=lambda e: str(e.get("eventTimestamp", ""))):
+        for part in event.get("payload", []):
+            conv = part.get("conversational")
+            if not conv:
+                continue
+            text = _turn_text(conv.get("content", {}).get("text", ""))
+            if text is None:
+                continue  # tool-use/tool-result turn — not conversational display
+            turns.append(
+                {
+                    "role": conv.get("role"),
+                    "text": text[:4000],
+                    "at": str(event.get("eventTimestamp", "")),
+                }
+            )
+    long_term = None
+    try:
+        long_term = sum(
+            len(memory.list_records(f"{ns}/{row.actor_id}", max_results=20))
+            for ns in ("/preferences", "/facts")
+        )
+    except Exception:
+        pass
+    return {
+        "available": True,
+        "actor_id": row.actor_id,
+        "agent_name": agent.name if agent else None,
+        "turns": turns,
+        "long_term_records": long_term,
+    }

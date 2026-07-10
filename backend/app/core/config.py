@@ -51,6 +51,16 @@ class Settings(BaseSettings):
     account_id: str = ""
     resources: dict[str, Any] = {}
 
+    # Advisory USD-per-1M-token prices for observability cost estimates.
+    # Keys are substring-matched against gen_ai.request.model ids; unknown
+    # models report tokens with a null cost. Overridable in launchpad.yaml.
+    model_prices: dict[str, Any] = {
+        "sonnet-4-6": {"input": 3.0, "output": 15.0},
+        "opus-4-8": {"input": 5.0, "output": 25.0},
+        "sonnet-4-5": {"input": 3.0, "output": 15.0},
+        "nemotron-nano": {"input": 0.2, "output": 0.6},
+    }
+
     @classmethod
     def settings_customise_sources(
         cls,
