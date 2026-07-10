@@ -21,6 +21,11 @@ from app.core.errors import AppError
 from app.evaluation import agentcore_eval as ac
 from app.evaluation.models import EvalRun
 from app.evaluation.queue import account_lock
+from app.evaluation.scenarios import (
+    ground_truth_metadata,
+    normalize_scenarios,
+    scenario_prompts,
+)
 from app.models.ledger import Agent
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client, data_client
@@ -70,17 +75,33 @@ def execute_run(
     mode: str,
     wait_seconds: int,
     existing_session_ids: list[str] | None = None,
+    time_range: dict[str, Any] | None = None,
+    insights: list[str] | None = None,
+    session_metadata: list[dict[str, Any]] | None = None,
 ) -> None:
-    """Drive one evaluation run to completion (runs inside the account lock)."""
+    """Drive one evaluation run to completion (runs inside the account lock).
+
+    Scope is one of: dataset ``items`` (invoke fresh sessions), explicit
+    ``existing_session_ids``, or a passive ``time_range`` window over the
+    agent's past traffic — the window path skips invoke/wait entirely."""
     try:
         data = data_client()
         session_ids = list(existing_session_ids or [])
-        if not session_ids:
+        if not session_ids and not time_range:
+            # One session per scenario; a scenario's turns replay sequentially
+            # in that same session. Ground truth (assertions / expected
+            # trajectory / expected responses) rides along as sessionMetadata.
+            scenarios = normalize_scenarios(items)
             _update(run_id, status="invoking")
-            for item in items:
-                result = rt.invoke_runtime_text(data, agent_arn, item["prompt"])
-                session_ids.append(result["session_id"])
+            for scenario in scenarios:
+                sid: str | None = None
+                for prompt in scenario_prompts(scenario):
+                    result = rt.invoke_runtime_text(data, agent_arn, prompt, session_id=sid)
+                    sid = result["session_id"]
+                session_ids.append(sid)
                 _update(run_id, session_ids=list(session_ids))
+            if session_metadata is None:
+                session_metadata = ground_truth_metadata(scenarios, session_ids) or None
             _update(run_id, status="waiting")
             _sleep(wait_seconds)
 
@@ -91,7 +112,9 @@ def execute_run(
                 name=f"run_{run_id[:8]}",
                 service_name=service_name,
                 log_groups=["aws/spans", log_group],
-                session_ids=session_ids,
+                session_ids=session_ids or None,
+                time_range=time_range,
+                insights=insights,
             )
         else:
             response = ac.start_batch_evaluation(
@@ -99,12 +122,21 @@ def execute_run(
                 name=f"run_{run_id[:8]}",
                 service_name=service_name,
                 log_groups=["aws/spans", log_group],
-                session_ids=session_ids,
+                session_ids=session_ids or None,
+                time_range=time_range,
                 evaluators=evaluators,
+                session_metadata=session_metadata,
             )
         batch_id = response["batchEvaluationId"]
         _update(run_id, batch_eval_id=batch_id)
-        result = ac.poll_batch_evaluation(data, batch_id=batch_id, max_polls=60)
+        # Insights cluster across sessions and routinely run 15-25 minutes;
+        # give them a 30-minute budget instead of the evaluator default.
+        if mode == "insights":
+            result = ac.poll_batch_evaluation(
+                data, batch_id=batch_id, max_polls=60, interval=30.0
+            )
+        else:
+            result = ac.poll_batch_evaluation(data, batch_id=batch_id, max_polls=60)
         _finish_from_result(run_id, mode, result)
     except Exception as exc:
         _update(run_id, status="failed", error=f"{type(exc).__name__}: {exc}"[:500])
@@ -180,8 +212,16 @@ def submit_run(
     mode: str = "evaluators",
     wait_seconds: int = 90,
     session_ids: list[str] | None = None,
+    time_range: dict[str, Any] | None = None,
+    insights: list[str] | None = None,
+    session_metadata: list[dict[str, Any]] | None = None,
+    lookback_hours: int | None = None,
 ) -> EvalRun:
     service_name, log_group = resolve_telemetry(agent)
+    # Window runs have no dataset; encode the scope in dataset_name so the
+    # runs list can render "window · Nh" without a schema change.
+    if lookback_hours and not dataset_name:
+        dataset_name = f"window:{lookback_hours}h"
     db = SessionLocal()
     try:
         run = EvalRun(
@@ -213,6 +253,9 @@ def submit_run(
             mode=mode,
             wait_seconds=wait_seconds,
             existing_session_ids=session_ids,
+            time_range=time_range,
+            insights=insights,
+            session_metadata=session_metadata,
         ),
     )
     _update(run_id, queue_position=position)

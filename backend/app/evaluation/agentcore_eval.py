@@ -23,9 +23,7 @@ BUILTIN_EVALUATORS = [
 
 # The 13 general-purpose built-in evaluators, by evaluation level (see
 # AgentCore Evaluations docs: built-in-evaluators-overview). IDs are used as
-# `Builtin.<Name>`. The service also exposes ground-truth-only trajectory
-# matchers (Builtin.Trajectory*Match); excluded — they need
-# evaluationMetadata.groundTruth.expectedTrajectory, which this lab never sends.
+# `Builtin.<Name>`.
 ALL_BUILTIN_EVALUATORS: dict[str, str] = {
     # session level
     "Builtin.GoalSuccessRate": "SESSION",
@@ -44,6 +42,16 @@ ALL_BUILTIN_EVALUATORS: dict[str, str] = {
     # tool-call level
     "Builtin.ToolSelectionAccuracy": "TOOL_CALL",
     "Builtin.ToolParameterAccuracy": "TOOL_CALL",
+}
+
+# Ground-truth-only trajectory matchers — they score against
+# evaluationMetadata.groundTruth.expectedTrajectory, so they are only valid
+# on dataset runs whose scenarios define expected_trajectory (levels verified
+# against a live ListEvaluators).
+TRAJECTORY_EVALUATORS: dict[str, str] = {
+    "Builtin.TrajectoryExactOrderMatch": "SESSION",
+    "Builtin.TrajectoryInOrderMatch": "SESSION",
+    "Builtin.TrajectoryAnyOrderMatch": "SESSION",
 }
 
 EVAL_TERMINAL = {"COMPLETED", "FAILED", "STOPPED", "COMPLETED_WITH_ERRORS"}
@@ -319,6 +327,42 @@ def create_llm_judge_evaluator(
     return client.create_evaluator(
         evaluatorName=name,
         description=description or name,
+        level=level,
+        evaluatorConfig={
+            "llmAsAJudge": {
+                "instructions": instructions,
+                "ratingScale": {"numerical": rating_scale},
+                "modelConfig": {
+                    "bedrockEvaluatorModelConfig": {"modelId": model_id}
+                },
+            }
+        },
+        clientToken=str(uuid.uuid4()),
+    )
+
+
+def get_evaluator(client: Any, *, evaluator_id: str) -> dict[str, Any]:
+    return client.get_evaluator(evaluatorId=evaluator_id)
+
+
+def update_evaluator(
+    client: Any,
+    *,
+    evaluator_id: str,
+    instructions: str,
+    rating_scale: list[dict[str, Any]],
+    model_id: str,
+    level: str,
+    description: str,
+) -> dict[str, Any]:
+    """Full-replace update of an LLM-as-a-judge evaluator config.
+
+    UpdateEvaluator takes the complete llmAsAJudge config (same shape as
+    create) — partial patches are not supported, so callers must send every
+    field back."""
+    return client.update_evaluator(
+        evaluatorId=evaluator_id,
+        description=description,
         level=level,
         evaluatorConfig={
             "llmAsAJudge": {
