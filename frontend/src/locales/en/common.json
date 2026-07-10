@@ -483,7 +483,9 @@
       "tool": "TOOL",
       "toolName": "NAME",
       "toolStatus": "STATUS",
-      "rawAttrs": "RAW ATTRIBUTES ({{count}})"
+      "rawAttrs": "RAW ATTRIBUTES ({{count}})",
+      "inputMessages": "INPUT MESSAGES ({{count}})",
+      "outputMessages": "OUTPUT MESSAGES ({{count}})"
     },
     "session": {
       "conversation": "CONVERSATION",

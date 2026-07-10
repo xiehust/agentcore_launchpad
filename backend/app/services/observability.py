@@ -109,13 +109,19 @@ def _cw_client() -> Any:
 # ── Logs Insights runner ────────────────────────────────────────────────────
 
 
-def _start_query(logs: Any, query: str, start: int, end: int) -> str | None:
-    """Returns the query id, or None when the spans log group doesn't exist yet
+def _start_query(
+    logs: Any, query: str, start: int, end: int,
+    log_groups: list[str] | None = None,
+) -> str | None:
+    """Returns the query id, or None when the target log group doesn't exist
     (fresh account before any agent traffic) — callers degrade to empty rows."""
+    target: dict[str, Any] = (
+        {"logGroupNames": log_groups} if log_groups else {"logGroupName": SPANS_LOG_GROUP}
+    )
     for attempt in (0, 1):
         try:
             return logs.start_query(
-                logGroupName=SPANS_LOG_GROUP,
+                **target,
                 startTime=start,
                 endTime=end,
                 queryString=query,
@@ -136,13 +142,17 @@ def _start_query(logs: Any, query: str, start: int, end: int) -> str | None:
 
 
 def run_insights_queries(
-    queries: dict[str, str], hours: int, logs: Any = None
+    queries: dict[str, str], hours: int, logs: Any = None,
+    log_groups: list[str] | None = None,
 ) -> dict[str, list[dict[str, str]]]:
     """Start all queries concurrently, poll each to completion, flatten rows."""
     logs = logs or _logs_client()
     end = int(_now())
     start = end - hours * 3600
-    query_ids = {name: _start_query(logs, q, start, end) for name, q in queries.items()}
+    query_ids = {
+        name: _start_query(logs, q, start, end, log_groups=log_groups)
+        for name, q in queries.items()
+    }
     results: dict[str, list[dict[str, str]]] = {}
     deadline = time.time() + QUERY_DEADLINE_SECONDS
     for name, qid in query_ids.items():
@@ -308,6 +318,18 @@ def q_trace_spans(trace_id: str) -> str:
 filter traceId = "{trace_id}"
 | fields @message
 | limit {SPANS_PER_TRACE}
+"""
+
+
+def q_trace_message_events(trace_id: str) -> str:
+    # Runs against the agents' runtime log groups (otel-rt-logs), where the
+    # SDKs emit gen_ai message events (prompts/completions) as OTel log
+    # records correlated to spans via traceId/spanId.
+    _require(TRACE_ID_RE, trace_id, "trace id")
+    return f"""
+filter traceId = "{trace_id}"
+| fields @message, spanId
+| limit 200
 """
 
 
@@ -535,6 +557,112 @@ def build_span_tree(raw_spans: list[dict[str, Any]],
         "tree": roots,
         "spans": flat,
     }
+
+
+# ── gen_ai message events (prompts / completions per span) ─────────────────
+
+MESSAGE_TEXT_CAP = 2000
+MESSAGES_PER_SIDE = 20
+BLOCKS_PER_MESSAGE = 20
+
+
+def _parse_content_blocks(raw: Any) -> list[dict[str, Any]]:
+    """Message content arrives as a JSON string of content blocks
+    ([{"text"}, {"toolUse"}, {"toolResult"}]); normalize + truncate."""
+    if not isinstance(raw, str):
+        return []
+    try:
+        blocks = json.loads(raw)
+    except ValueError:
+        return [{"type": "text", "text": raw[:MESSAGE_TEXT_CAP]}]
+    if not isinstance(blocks, list):
+        blocks = [blocks]
+    out: list[dict[str, Any]] = []
+    for block in blocks[:BLOCKS_PER_MESSAGE]:
+        if not isinstance(block, dict):
+            out.append({"type": "text", "text": str(block)[:MESSAGE_TEXT_CAP]})
+        elif "text" in block:
+            out.append({"type": "text", "text": str(block["text"])[:MESSAGE_TEXT_CAP]})
+        elif "toolUse" in block:
+            use = block["toolUse"] or {}
+            out.append({
+                "type": "tool_use",
+                "name": use.get("name"),
+                "input": json.dumps(use.get("input"), ensure_ascii=False)[:500],
+            })
+        elif "toolResult" in block:
+            result = block["toolResult"] or {}
+            out.append({
+                "type": "tool_result",
+                "status": result.get("status"),
+                "text": json.dumps(result.get("content"), ensure_ascii=False)[:500],
+            })
+        else:
+            out.append({"type": "other",
+                        "text": json.dumps(block, ensure_ascii=False)[:300]})
+    return out
+
+
+def _normalize_messages(messages: Any) -> list[dict[str, Any]]:
+    if not isinstance(messages, list):
+        return []
+    out = []
+    for message in messages[:MESSAGES_PER_SIDE]:
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        finish = None
+        if isinstance(content, str):  # some scopes emit the payload directly
+            blocks = _parse_content_blocks(content)
+        elif isinstance(content, dict):
+            blocks = _parse_content_blocks(
+                content.get("content") or content.get("message")
+            )
+            finish = content.get("finish_reason")
+        else:
+            continue
+        if not blocks:
+            continue
+        entry: dict[str, Any] = {"role": message.get("role"), "blocks": blocks}
+        if finish:
+            entry["finish_reason"] = finish
+        out.append(entry)
+    return out
+
+
+def parse_message_events(rows: list[dict[str, str]]) -> dict[str, dict[str, Any]]:
+    """spanId → {input: [...], output: [...]} from runtime OTel log records."""
+    by_span: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        try:
+            record = json.loads(row.get("@message", ""))
+            span_id = record.get("spanId")
+            body = record.get("body")
+            if not span_id or not isinstance(body, dict):
+                continue
+            entry = by_span.setdefault(span_id, {})
+            for side in ("input", "output"):
+                payload = body.get(side)
+                if not entry.get(side) and isinstance(payload, dict):
+                    normalized = _normalize_messages(payload.get("messages"))
+                    if normalized:
+                        entry[side] = normalized
+        except (TypeError, ValueError, AttributeError):
+            continue  # malformed record — message events are best-effort
+        if len(by_span) >= 50:
+            break
+    return {k: v for k, v in by_span.items() if v}
+
+
+def _span_log_groups(raw_spans: list[dict[str, Any]]) -> list[str]:
+    groups: set[str] = set()
+    for span in raw_spans:
+        names = ((span.get("resource") or {}).get("attributes") or {}).get(
+            "aws.log.group.names"
+        )
+        if isinstance(names, str):
+            groups.update(g.strip() for g in names.split(",") if g.strip())
+    return sorted(groups)[:5]
 
 
 # ── Metrics (bedrock-agentcore namespace) ───────────────────────────────────
@@ -772,6 +900,21 @@ def get_trace(trace_id: str, range_key: str, db: Session, force: bool = False,
                 continue
         tree = build_span_tree(raw_spans)
         spans = tree["spans"]
+        # gen_ai message events (prompts/completions) live in the agents' own
+        # runtime log groups, referenced by the spans themselves; best-effort.
+        messages_by_span: dict[str, dict[str, Any]] = {}
+        log_groups = _span_log_groups(raw_spans)
+        if log_groups:
+            try:
+                event_rows = run_insights_queries(
+                    {"events": q_trace_message_events(trace_id)},
+                    hours, logs=logs, log_groups=log_groups,
+                )["events"]
+                messages_by_span = parse_message_events(event_rows)
+            except Exception:  # best-effort enrichment — never fail the trace
+                messages_by_span = {}
+        for span in spans:
+            span["messages"] = messages_by_span.get(span["span_id"] or "")
         # Strands emits each LLM call as a wrapper span (system=strands-agents)
         # plus a terminal provider span with identical tokens; sum terminal
         # spans only, falling back to wrappers for SDKs that emit just those.

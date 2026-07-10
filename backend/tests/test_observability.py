@@ -57,6 +57,31 @@ DEDUP_SPANS = [
 ]
 
 
+# trace with runtime-log-group resources + gen_ai message events attached
+MSG_SPANS = [
+    {**_span("root3", None, "POST /invocations", 0, 10, kind="SERVER"),
+     "resource": {"attributes": {
+         "aws.log.group.names": "/aws/bedrock-agentcore/runtimes/test-DEFAULT"}}},
+    {**_span("llm2", "root3", "chat global.anthropic.claude-sonnet-4-6", 1, 9,
+             attrs={**_LLM_USAGE, "gen_ai.system": "aws.bedrock"}),
+     "resource": {"attributes": {
+         "aws.log.group.names": "/aws/bedrock-agentcore/runtimes/test-DEFAULT"}}},
+]
+MSG_EVENT = {
+    "scope": {"name": "strands.telemetry.tracer"},
+    "body": {
+        "input": {"messages": [
+            {"content": {"content": json.dumps([{"text": "How many days?"}])},
+             "role": "user"}]},
+        "output": {"messages": [
+            {"content": {"message": json.dumps([{"text": "hello there"}]),
+                         "finish_reason": "end_turn"}, "role": "assistant"}]},
+    },
+    "traceId": "d" * 32,
+    "spanId": "llm2",
+}
+
+
 @pytest.fixture(autouse=True)
 def fresh_cache():
     obs.reset_cache()
@@ -154,6 +179,69 @@ def test_session_filtered_query_is_well_formed():
     assert query.startswith('filter attributes.session.id = "abc12345"')
     assert '\n| fields' in query
     assert not query.startswith("|")
+
+
+def test_parse_message_events_from_runtime_log_record():
+    # Shape observed live in /aws/bedrock-agentcore/runtimes/*-DEFAULT
+    # (otel-rt-logs): strands.telemetry.tracer log records with
+    # body.input/output.messages whose content is a JSON string of blocks.
+    record = {
+        "scope": {"name": "strands.telemetry.tracer"},
+        "severityNumber": 9,
+        "body": {
+            "output": {"messages": [{
+                "content": {
+                    "message": json.dumps([
+                        {"text": "Sure! Let me look that up right away."},
+                        {"toolUse": {"toolUseId": "tooluse_X",
+                                     "name": "hr-database___get_employee",
+                                     "input": {"employee_id": "EMP-4096"}}},
+                    ]),
+                    "finish_reason": "tool_use",
+                },
+                "role": "assistant",
+            }]},
+            "input": {"messages": [
+                {"content": {"content": json.dumps([{"text": "You are the HR assistant."}])},
+                 "role": "system"},
+                {"content": {"content": json.dumps([{"text": "x" * 5000}])},
+                 "role": "user"},
+            ]},
+        },
+        "traceId": "6a" * 16,
+        "spanId": "cd2fb023cc6041cc",
+    }
+    by_span = obs.parse_message_events([{"@message": json.dumps(record)}])
+    entry = by_span["cd2fb023cc6041cc"]
+    assert [m["role"] for m in entry["input"]] == ["system", "user"]
+    assert len(entry["input"][1]["blocks"][0]["text"]) == obs.MESSAGE_TEXT_CAP  # truncated
+    out = entry["output"][0]
+    assert out["finish_reason"] == "tool_use"
+    assert out["blocks"][0] == {"type": "text",
+                                "text": "Sure! Let me look that up right away."}
+    assert out["blocks"][1]["type"] == "tool_use"
+    assert out["blocks"][1]["name"] == "hr-database___get_employee"
+    assert '"EMP-4096"' in out["blocks"][1]["input"]
+    # non-message records (plain logs, unparsable) are ignored
+    assert obs.parse_message_events([{"@message": "not json"},
+                                     {"@message": json.dumps({"spanId": "x"})}]) == {}
+    # content may be a plain string (bedrock-runtime scope events) — no crash
+    plain = {"spanId": "s1", "traceId": "t",
+             "body": {"input": {"messages": [
+                 {"content": "raw prompt text", "role": "user"}]}}}
+    parsed = obs.parse_message_events([{"@message": json.dumps(plain)}])
+    assert parsed["s1"]["input"][0]["blocks"][0]["text"] == "raw prompt text"
+
+
+def test_trace_detail_attaches_span_messages(client, mocked_aws):
+    res = client.get(f"/api/observability/traces/{'d' * 32}")
+    assert res.status_code == 200
+    spans = res.json()["spans"]
+    llm = next(s for s in spans if s["span_id"] == "llm2")
+    assert llm["messages"]["output"][0]["blocks"][0]["text"] == "hello there"
+    assert llm["messages"]["input"][0]["role"] == "user"
+    root = next(s for s in spans if s["span_id"] == "root3")
+    assert root["messages"] is None
 
 
 # ── cost estimator ──────────────────────────────────────────────────────────
@@ -270,6 +358,12 @@ def _fake_logs():
             {"tool": "hr-database___get_employee", "calls": 9, "errors": 1}],
         f'filter traceId = "{"c" * 32}"': [
             {"@message": json.dumps({**s, "traceId": "c" * 32})} for s in DEDUP_SPANS],
+        # message-events query (runtime log groups) must route before the
+        # span query for the same trace id
+        f'filter traceId = "{"d" * 32}"\n| fields @message, spanId': [
+            {"@message": json.dumps(MSG_EVENT)}],
+        f'filter traceId = "{"d" * 32}"': [
+            {"@message": json.dumps({**s, "traceId": "d" * 32})} for s in MSG_SPANS],
         "fields @message": [{"@message": json.dumps(s)} for s in TREE_SPANS],
     })
 

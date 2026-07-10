@@ -177,6 +177,25 @@ export interface ObsSpanNode extends ObsSpan {
   children: ObsSpanNode[];
 }
 
+export interface ObsMessageBlock {
+  type: "text" | "tool_use" | "tool_result" | "other";
+  text?: string;
+  name?: string | null;
+  input?: string;
+  status?: string | null;
+}
+
+export interface ObsSpanMessage {
+  role: string | null;
+  finish_reason?: string;
+  blocks: ObsMessageBlock[];
+}
+
+export interface ObsSpanMessages {
+  input?: ObsSpanMessage[];
+  output?: ObsSpanMessage[];
+}
+
 export interface ObsTraceDetail {
   trace_id: string;
   range: string;
@@ -194,7 +213,10 @@ export interface ObsTraceDetail {
     est_cost_usd: number | null;
   };
   tree: ObsSpanNode[];
-  spans: (ObsSpan & { attributes: Record<string, unknown> })[];
+  spans: (ObsSpan & {
+    attributes: Record<string, unknown>;
+    messages?: ObsSpanMessages | null;
+  })[];
   cache: ObsCache;
 }
 

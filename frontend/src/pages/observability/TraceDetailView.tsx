@@ -3,7 +3,13 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Btn, Chip, Panel } from "../../components";
-import type { ObsSpan, ObsSpanNode, ObsTraceDetail } from "../../lib/api";
+import type {
+  ObsSpan,
+  ObsSpanMessage,
+  ObsSpanMessages,
+  ObsSpanNode,
+  ObsTraceDetail,
+} from "../../lib/api";
 import { api, ApiError } from "../../lib/api";
 import { fmtCost, fmtDuration, fmtInt, shortId } from "./format";
 
@@ -37,12 +43,53 @@ function flattenTree(nodes: ObsSpanNode[]): ObsSpanNode[] {
   return out;
 }
 
+function MessageList({ label, messages }: { label: string; messages: ObsSpanMessage[] }) {
+  return (
+    <div className="obs-sect">
+      <h4>{label}</h4>
+      <div className="msgscroll">
+        {messages.map((message, i) => (
+          <div className="msgitem" key={i}>
+            <div className="msgrole">
+              {message.role ?? "—"}
+              {message.finish_reason != null && (
+                <span className="dim"> · {message.finish_reason}</span>
+              )}
+            </div>
+            {message.blocks.map((block, j) =>
+              block.type === "text" ? (
+                <div className="msgtext" key={j}>
+                  {block.text}
+                </div>
+              ) : block.type === "tool_use" ? (
+                <div className="msgtool" key={j}>
+                  ⇄ {block.name ?? "tool"}({block.input})
+                </div>
+              ) : block.type === "tool_result" ? (
+                <div className="msgtool" key={j}>
+                  ✓ {block.status ?? "result"} · {block.text}
+                </div>
+              ) : (
+                <div className="msgtext dim" key={j}>
+                  {block.text}
+                </div>
+              ),
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function SpanDrawer({
   span,
   attributes,
+  messages,
 }: {
   span: ObsSpan;
   attributes: Record<string, unknown>;
+  messages: ObsSpanMessages | null;
 }) {
   const { t } = useTranslation();
   const attrs = Object.entries(attributes);
@@ -140,6 +187,18 @@ function SpanDrawer({
           </div>
         </div>
       )}
+      {messages?.input != null && messages.input.length > 0 && (
+        <MessageList
+          label={t("obs.drawer.inputMessages", { count: messages.input.length })}
+          messages={messages.input}
+        />
+      )}
+      {messages?.output != null && messages.output.length > 0 && (
+        <MessageList
+          label={t("obs.drawer.outputMessages", { count: messages.output.length })}
+          messages={messages.output}
+        />
+      )}
       {(span.tool_name != null || toolAttrs.length > 0) && (
         <div className="obs-sect">
           <h4>{t("obs.drawer.tool")}</h4>
@@ -229,10 +288,10 @@ export function TraceDetailView({ traceId, range, onBack, onOpenSession }: Trace
   }, [traceId, range]);
 
   const rows = useMemo(() => (detail ? flattenTree(detail.tree) : []), [detail]);
-  const attrsBySpan = useMemo(() => {
-    const map = new Map<string, Record<string, unknown>>();
+  const flatBySpan = useMemo(() => {
+    const map = new Map<string, ObsTraceDetail["spans"][number]>();
     detail?.spans.forEach((s) => {
-      if (s.span_id) map.set(s.span_id, s.attributes);
+      if (s.span_id) map.set(s.span_id, s);
     });
     return map;
   }, [detail]);
@@ -380,7 +439,8 @@ export function TraceDetailView({ traceId, range, onBack, onOpenSession }: Trace
         {selectedSpan != null && (
           <SpanDrawer
             span={selectedSpan}
-            attributes={attrsBySpan.get(selectedSpan.span_id ?? "") ?? {}}
+            attributes={flatBySpan.get(selectedSpan.span_id ?? "")?.attributes ?? {}}
+            messages={flatBySpan.get(selectedSpan.span_id ?? "")?.messages ?? null}
           />
         )}
       </div>

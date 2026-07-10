@@ -483,7 +483,9 @@
       "tool": "工具",
       "toolName": "名称",
       "toolStatus": "状态",
-      "rawAttrs": "原始属性({{count}})"
+      "rawAttrs": "原始属性({{count}})",
+      "inputMessages": "输入消息({{count}})",
+      "outputMessages": "输出消息({{count}})"
     },
     "session": {
       "conversation": "对话",

@@ -356,6 +356,14 @@ tr.rowlink{cursor:pointer}
 .obs-drawer .kv{border-bottom:1px solid var(--grid);padding:6.5px 0}
 .obs-drawer .kv:last-child{border-bottom:0}
 .obs-drawer .kv .v.hl{color:var(--ink);font-weight:600}
+/* span drawer — gen_ai message events */
+.msgscroll{max-height:260px;overflow-y:auto;display:flex;flex-direction:column;gap:8px}
+.msgitem{border:1px solid var(--grid);background:#0E1210;padding:7px 9px}
+.msgrole{font-family:var(--mono);font-size:9px;letter-spacing:.16em;color:var(--ink-3);text-transform:uppercase;margin-bottom:4px}
+.msgtext{font-size:11.5px;color:var(--ink-2);line-height:1.5;white-space:pre-wrap;word-break:break-word}
+.msgtext + .msgtext,.msgtext + .msgtool,.msgtool + .msgtext,.msgtool + .msgtool{margin-top:5px}
+.msgtool{font-family:var(--mono);font-size:10px;color:var(--s2);line-height:1.5;word-break:break-all}
+
 /* session detail (mockup screen D) */
 .turn{margin-bottom:12px}
 .turn .who{font-family:var(--mono);font-size:9px;letter-spacing:.18em;color:var(--ink-3);margin-bottom:4px}
