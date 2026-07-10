@@ -113,6 +113,52 @@ def test_chat_endpoint_tracks_session(client, monkeypatch):
     assert len(sessions) == 1 and sessions[0]["turns"] == 1
 
 
+def test_chat_history_persists_and_replays(client, monkeypatch):
+    """Thread items are stored in event order and replayed by /history; the
+    sessions list carries a first-prompt preview."""
+    agent_id = make_active_agent(name="chat-hist-agent")
+    monkeypatch.setattr(
+        chat_service,
+        "invoke_agent_text",
+        # real runtimes answer under the session id they were invoked with
+        lambda a, p, session_id=None, actor_id="river": {
+            "text": f"echo: {p}", "session_id": session_id,
+        },
+    )
+    client.post(f"/api/chat/{agent_id}", json={"prompt": "first question"})
+    sid = client.get(f"/api/chat/{agent_id}/sessions").json()["sessions"][0]["session_id"]
+    client.post(f"/api/chat/{agent_id}",
+                json={"prompt": "second question", "session_id": sid})
+
+    history = client.get(
+        f"/api/chat/{agent_id}/history", params={"session_id": sid}
+    ).json()["messages"]
+    assert [(m["role"], m["text"]) for m in history] == [
+        ("user", "first question"), ("agent", "echo: first question"),
+        ("user", "second question"), ("agent", "echo: second question"),
+    ]
+
+    sessions = client.get(f"/api/chat/{agent_id}/sessions").json()["sessions"]
+    assert sessions[0]["preview"] == "first question"
+    assert sessions[0]["turns"] == 2
+
+
+def test_chat_history_records_errors(client, monkeypatch):
+    """A failed turn keeps the user prompt and stores the error row."""
+    agent_id = make_active_agent(name="chat-hist-err")
+
+    def boom(*a, **k):
+        raise RuntimeError("runtime exploded")
+
+    monkeypatch.setattr(chat_service, "invoke_agent_text", boom)
+    client.post(f"/api/chat/{agent_id}", json={"prompt": "doomed", "session_id": "e" * 40})
+    history = client.get(
+        f"/api/chat/{agent_id}/history", params={"session_id": "e" * 40}
+    ).json()["messages"]
+    assert [m["role"] for m in history] == ["user", "error"]
+    assert "runtime exploded" in history[1]["text"]
+
+
 def test_v1_and_console_share_invoke_chain():
     """Code-level proof: both surfaces call the same chain functions."""
     import inspect

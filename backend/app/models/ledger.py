@@ -73,6 +73,22 @@ class ChatSession(Base):
     )
 
 
+class ChatMessage(Base):
+    """One rendered thread item of a console chat session (user turn, agent
+    answer, tool call, error) — the Chat playground's reload-safe history.
+    Integer autoincrement pk doubles as the replay order."""
+
+    __tablename__ = "chat_messages"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"), index=True)
+    session_id: Mapped[str] = mapped_column(String(80), index=True)
+    role: Mapped[str] = mapped_column(String(16))  # user | agent | tool | error
+    text: Mapped[str] = mapped_column(Text, default="")
+    name: Mapped[str | None] = mapped_column(String(80), default=None)  # tool name
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class ApiKey(Base):
     __tablename__ = "api_keys"
 

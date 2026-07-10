@@ -19,6 +19,19 @@ interface MemorySummary {
   records: { namespace: string; text: string }[];
 }
 
+interface SessionItem {
+  session_id: string;
+  turns: number;
+  last_at: string | null;
+  preview: string;
+}
+
+interface HistoryRow {
+  role: string;
+  text: string;
+  name: string | null;
+}
+
 interface TraceSpan {
   name: string;
   category: "model" | "tool" | "memory" | "policy" | "runtime" | "other";
@@ -75,7 +88,7 @@ export function Chat() {
   const { t } = useTranslation();
   // Cross-link entry (from Observability session detail): preselect the agent
   // and resume the session; unknown values degrade to the defaults gracefully.
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const linkedAgent = searchParams.get("agent");
   const linkedSession = searchParams.get("session");
   const [agents, setAgents] = useState<AgentInfo[]>([]);
@@ -85,11 +98,13 @@ export function Chat() {
   const [sessionId, setSessionId] = useState<string | null>(linkedSession);
   const [busy, setBusy] = useState(false);
   const [memory, setMemory] = useState<MemorySummary | null>(null);
+  const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [trace, setTrace] = useState<TraceInfo | null>(null);
   const [traceBusy, setTraceBusy] = useState(false);
   const [keys, setKeys] = useState<KeyInfo[]>([]);
   const [newKey, setNewKey] = useState<KeyInfo | null>(null);
   const threadRef = useRef<HTMLDivElement>(null);
+  const restoredRef = useRef(false);
 
   useEffect(() => {
     api
@@ -134,6 +149,57 @@ export function Chat() {
     }
   };
 
+  const loadSessions = async (aid: string) => {
+    try {
+      const res = await fetch(`/api/chat/${aid}/sessions`);
+      if (res.ok) setSessions(((await res.json()) as { sessions: SessionItem[] }).sessions);
+    } catch {
+      /* history rail is best-effort */
+    }
+  };
+
+  useEffect(() => {
+    if (agentId) void loadSessions(agentId);
+    else setSessions([]);
+  }, [agentId]);
+
+  const restoreSession = async (sid: string) => {
+    if (!agentId || busy) return;
+    try {
+      const res = await fetch(
+        `/api/chat/${agentId}/history?session_id=${encodeURIComponent(sid)}`,
+      );
+      if (!res.ok) return;
+      const rows = ((await res.json()) as { messages: HistoryRow[] }).messages;
+      setMessages(
+        rows.map((r): Message =>
+          r.role === "user"
+            ? { kind: "user", text: r.text }
+            : r.role === "agent"
+              ? { kind: "agent", text: r.text }
+              : r.role === "tool"
+                ? { kind: "tool", text: r.name ?? "tool", name: r.name ?? "tool" }
+                : { kind: "error", text: r.text },
+        ),
+      );
+      setSessionId(sid);
+      setTrace(null);
+      setSearchParams({ agent: agentId, session: sid }, { replace: true });
+    } catch {
+      /* history rail is best-effort */
+    }
+  };
+
+  // Reload / deep-link with a session in the URL: back-fill the thread once
+  // the agent is resolved, so the conversation is visible, not just resumable.
+  useEffect(() => {
+    if (!restoredRef.current && agentId && sessionId && messages.length === 0) {
+      restoredRef.current = true;
+      void restoreSession(sessionId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentId, sessionId]);
+
   const send = async () => {
     const prompt = input.trim();
     if (!prompt || !agentId || busy) return;
@@ -157,6 +223,11 @@ export function Chat() {
         };
         if (event === "meta" && payload.session_id) {
           setSessionId(payload.session_id);
+          // keep the session in the URL so a reload restores this conversation
+          setSearchParams(
+            { agent: agentId, session: payload.session_id },
+            { replace: true },
+          );
         } else if (event === "tool") {
           setMessages((m) => [
             ...m,
@@ -192,6 +263,7 @@ export function Chat() {
     } finally {
       setBusy(false);
       if (sessionId) void refreshMemory(sessionId);
+      if (agentId) void loadSessions(agentId);
     }
   };
 
@@ -202,11 +274,12 @@ export function Chat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, busy, agentId]);
 
-  const newSession = () => {
+  const newSession = (aid: string = agentId) => {
     setSessionId(null);
     setMessages([]);
     setMemory(null);
     setTrace(null);
+    setSearchParams(aid ? { agent: aid } : {}, { replace: true });
   };
 
   const loadTrace = async () => {
@@ -262,7 +335,7 @@ export function Chat() {
                 value={agentId}
                 onChange={(e) => {
                   setAgentId(e.target.value);
-                  newSession();
+                  newSession(e.target.value);
                 }}
                 style={{
                   background: "transparent",
@@ -293,7 +366,7 @@ export function Chat() {
               <Chip tone="aqua" icon="◈">
                 {t("chatPage.memoryOn")}
               </Chip>
-              <Btn onClick={newSession}>{t("chatPage.newSession")}</Btn>
+              <Btn onClick={() => newSession()}>{t("chatPage.newSession")}</Btn>
             </>
           }
           style={{ "--i": 0 } as CSSProperties}
@@ -358,6 +431,35 @@ export function Chat() {
         </Panel>
 
         <div>
+          <Panel
+            title={t("chatPage.historyTitle")}
+            sub={sessions.length ? String(sessions.length) : undefined}
+            pad={false}
+            style={{ "--i": 1 } as CSSProperties}
+          >
+            <div style={{ maxHeight: 200, overflowY: "auto" }} data-testid="history-rail">
+              {sessions.length === 0 && (
+                <div className="empty">{t("chatPage.historyEmpty")}</div>
+              )}
+              {sessions.map((s) => (
+                <button
+                  key={s.session_id}
+                  type="button"
+                  className={`histrow${s.session_id === sessionId ? " on" : ""}`}
+                  onClick={() => void restoreSession(s.session_id)}
+                >
+                  <span className="hp">
+                    {s.preview || `${s.session_id.slice(0, 20)}…`}
+                  </span>
+                  <span className="hm mono">
+                    {t("chatPage.historyTurns", { count: s.turns })} ·{" "}
+                    {(s.last_at ?? "").slice(5, 16).replace("T", " ")}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </Panel>
+          <div style={{ height: 14 }} />
           <Panel
             title={t("chatPage.traceTitle")}
             sub={sessionId ? `${sessionId.slice(0, 12)}…` : "aws/spans"}

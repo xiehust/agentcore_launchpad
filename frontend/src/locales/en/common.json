@@ -314,7 +314,10 @@
       "title": "Disable API key",
       "body": "Clients using “{{name}}” will start receiving 401s immediately. You can re-enable it later."
     },
-    "openInObs": "OPEN IN OBSERVABILITY"
+    "openInObs": "OPEN IN OBSERVABILITY",
+    "historyTitle": "HISTORY",
+    "historyEmpty": "No previous conversations with this agent.",
+    "historyTurns": "{{count}} turn(s)"
   },
   "evalPage": {
     "metaLive": "BATCH + INSIGHTS · LLM-AS-A-JUDGE · 1 BATCH / ACCOUNT — QUEUE MANAGED",
