@@ -18,6 +18,7 @@ from app.models.ledger import Agent, ApiKey
 from app.routers.apikeys import hash_key
 from app.services.chat import chat_stream, sse_encode
 from app.services.invoke import invoke_agent_text
+from app.services.memory import scoped_actor
 
 router = APIRouter(prefix="/v1", tags=["public-v1"])
 
@@ -71,7 +72,8 @@ def v1_invoke(
     agent = _active_agent(db, agent_id)
     started = time.monotonic()
     result = invoke_agent_text(
-        agent, req.prompt, session_id=req.session_id, actor_id=req.actor_id
+        agent, req.prompt, session_id=req.session_id,
+        actor_id=scoped_actor(agent.id, req.actor_id),
     )
     return {
         "agent": agent.name,
@@ -90,9 +92,11 @@ def v1_invoke_stream(
 ) -> StreamingResponse:
     agent = _active_agent(db, agent_id)
 
+    mem_actor = scoped_actor(agent.id, req.actor_id)
+
     def generate():
         for event in chat_stream(
-            agent, req.prompt, session_id=req.session_id, actor_id=req.actor_id
+            agent, req.prompt, session_id=req.session_id, actor_id=mem_actor
         ):
             yield sse_encode(event)
 

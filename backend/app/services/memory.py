@@ -14,6 +14,26 @@ def _memory_id() -> str:
     return memory_id
 
 
+SCOPE_SEP = "__"
+
+
+def scoped_actor(agent_id: str, base_actor: str = "river") -> str:
+    """Fold the agent id into the memory actor id so memory partitions per agent.
+
+    AgentCore Memory has no notion of "agent": its long-term namespace templates
+    (``/facts/{actorId}``, ``/preferences/{actorId}``) and its short-term events
+    are both keyed only on ``actorId`` (plus ``sessionId``). Scoping the actor is
+    therefore the single lever that separates BOTH stores by agent — long-term
+    records land in ``/facts/<agent>__<actor>`` and short-term events are written
+    under the same compound actor, so one agent's memory never bleeds into
+    another's for the same human.
+
+    Agent ids are uuid4 hex (``[0-9a-f]{32}``), so the compound id stays within
+    the actorId charset and is safe as a namespace path segment.
+    """
+    return f"{agent_id}{SCOPE_SEP}{base_actor}"
+
+
 def create_turn_event(
     actor_id: str, session_id: str, prompt: str, answer: str
 ) -> dict[str, Any]:
@@ -60,12 +80,14 @@ def session_memory_summary(actor_id: str, session_id: str) -> dict[str, Any]:
     """Right-rail panel data: event count + long-term records for the actor."""
     events = list_events(actor_id, session_id)
     records: list[dict[str, Any]] = []
-    for namespace in (f"/preferences/{actor_id}", f"/facts/{actor_id}"):
-        for record in list_records(namespace, max_results=10):
+    for label in ("/preferences", "/facts"):
+        # actor_id is already agent-scoped (see scoped_actor); the display label
+        # keeps just the strategy — the actor/agent is implied by the session.
+        for record in list_records(f"{label}/{actor_id}", max_results=10):
             content = record.get("content", {})
             records.append(
                 {
-                    "namespace": namespace,
+                    "namespace": label,
                     "text": content.get("text", "")[:200],
                     "record_id": record.get("memoryRecordId"),
                 }

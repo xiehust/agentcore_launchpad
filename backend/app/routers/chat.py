@@ -54,9 +54,14 @@ def _track_session(agent_id: str, session_id: str, actor_id: str) -> None:
 def chat(agent_id: str, req: ChatRequest, db: Session = Depends(get_db)) -> StreamingResponse:
     agent = _get_active_agent(db, agent_id)
 
+    # Memory partitions per agent: the runtime writes short-term events and the
+    # extractor lands long-term records under this compound actor. The ledger
+    # still records the human actor (req.actor_id) so the sessions list shows it.
+    mem_actor = memory_service.scoped_actor(agent.id, req.actor_id)
+
     def generate():
         session_id = req.session_id
-        for event in chat_stream(agent, req.prompt, session_id=session_id, actor_id=req.actor_id):
+        for event in chat_stream(agent, req.prompt, session_id=session_id, actor_id=mem_actor):
             if event["event"] == "meta":
                 session_id = event["data"]["session_id"]
                 _track_session(agent.id, session_id, req.actor_id)
@@ -94,7 +99,9 @@ def list_sessions(agent_id: str, db: Session = Depends(get_db)) -> dict[str, Any
 @router.get("/chat/{agent_id}/memory")
 def session_memory(agent_id: str, session_id: str, actor_id: str = "river") -> dict[str, Any]:
     try:
-        return memory_service.session_memory_summary(actor_id, session_id)
+        # Read back the same agent-scoped partition the chat write path uses.
+        mem_actor = memory_service.scoped_actor(agent_id, actor_id)
+        return memory_service.session_memory_summary(mem_actor, session_id)
     except Exception as exc:
         raise AppError(
             "memory.unavailable", f"memory lookup failed: {exc}", status_code=502

@@ -5,7 +5,11 @@ Flow (against the persistent `hr-assistant` harness agent):
   1. session A turn 1: identify as EMP-1024, ask vacation days → expects "9"
   2. session A turn 2: "what department am I in?" → continuity proves turn-1 context
   3. ListEvents(session A) shows conversation events (short-term)
-  4. state a preference → poll ListMemoryRecords /preferences/<actor> (async extraction)
+  4. state a preference → poll for the extracted long-term record (async).
+     NB: memory is agent-scoped — events and records live under the compound
+     actor `<agent_id>__<actor>` (see memory.scoped_actor), so this flow reads
+     via the /memory endpoint, which re-scopes internally, rather than hitting
+     /preferences/<actor> directly.
   5. session B (NEW): ask about preferences → long-term influence evidence
 
 Run:  cd backend && uv run python scripts/e2e_chat_memory.py [--actor river]

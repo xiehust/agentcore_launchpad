@@ -1068,8 +1068,11 @@ def session_transcript(db: Session, session_id: str) -> dict[str, Any]:
     if row is None:
         return {"available": False, "reason": "not_platform_session"}
     agent = db.get(Agent, row.agent_id)
+    # Memory is written under an agent-scoped actor (see memory.scoped_actor);
+    # the ledger stores the bare human actor, so re-scope for the read.
+    mem_actor = memory.scoped_actor(row.agent_id, row.actor_id)
     try:
-        events = memory.list_events(row.actor_id, session_id, max_results=100)
+        events = memory.list_events(mem_actor, session_id, max_results=100)
     except Exception as exc:
         return {
             "available": False,
@@ -1096,7 +1099,7 @@ def session_transcript(db: Session, session_id: str) -> dict[str, Any]:
     long_term = None
     try:
         long_term = sum(
-            len(memory.list_records(f"{ns}/{row.actor_id}", max_results=20))
+            len(memory.list_records(f"{ns}/{mem_actor}", max_results=20))
             for ns in ("/preferences", "/facts")
         )
     except Exception:

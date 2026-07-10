@@ -56,7 +56,7 @@ real, runnable code in this repo.
 |---|---|
 | **Runtime** | Hosts zip and container agents (`CreateAgentRuntime`); the invoke chain calls the runtime data plane. |
 | **Harness** | Hosts 方式B agents (`CreateHarness`) — a managed entrypoint with no build artifact. |
-| **Memory** | One shared `launchpad_memory` singleton: short-term session events + long-term semantic & user-preference strategies. Managed-harness agents extract preferences to `/preferences/{actor}` and auto-retrieve them in new sessions. |
+| **Memory** | One shared `launchpad_memory` singleton: short-term session events + long-term semantic & user-preference strategies. Namespaces are keyed only on `{actorId}` (there is no `{agentId}` template), so the platform folds the agent id into the actor — `scoped_actor(agent_id, human)` → `<agent>__<human>` — which partitions **both** short-term events and long-term records (`/facts/<agent>__<human>`) per agent. One agent's learned facts never bleed into another's for the same person; the ledger still stores the bare human actor for display. |
 | **Gateway** | `launchpad-gw` turns a REST API (office-facts) and a Lambda (hr-database) into MCP tools with Cognito-JWT auth; agent tool calls flow through it. |
 | **Identity** | Token vault backing the gateway — an OAuth2 provider (agent outbound auth) and an API-key provider. |
 | **Registry** | `launchpad-registry` catalogues three descriptor types: A2A (agents), MCP (tools), AGENT_SKILLS (skills). Every deploy auto-creates and submits an A2A record. |

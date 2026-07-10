@@ -1,0 +1,91 @@
+"""Per-agent memory scoping.
+
+AgentCore Memory keys both long-term namespaces (``/facts/{actorId}``,
+``/preferences/{actorId}``) and short-term events only on ``actorId`` (plus
+``sessionId``) — there is no ``{agentId}`` template variable and all agents
+share one memory resource. Folding the agent id into the actor is therefore the
+single lever that partitions BOTH stores per agent, so one agent's learned
+facts never bleed into another's for the same human. These tests pin that the
+lever is applied consistently on every write and read boundary.
+"""
+
+import app.routers.chat as chat_router
+import app.services.memory as memory_service
+from app.core.db import SessionLocal
+from app.models.ledger import Agent, ChatSession
+from app.services.memory import scoped_actor
+
+
+def make_active_agent(name="mem-agent") -> str:
+    db = SessionLocal()
+    agent = Agent(
+        name=name, method="zip_runtime", status="active",
+        arn="arn:aws:bedrock-agentcore:us-west-2:1:runtime/x", spec={"name": name},
+    )
+    db.add(agent)
+    db.commit()
+    agent_id = agent.id
+    db.close()
+    return agent_id
+
+
+def test_scoped_actor_folds_agent_id():
+    assert scoped_actor("a1b2", "river") == "a1b2__river"
+    assert scoped_actor("a1b2") == "a1b2__river"  # default human actor
+    # distinct agents → distinct partitions for the same human
+    assert scoped_actor("agentA", "river") != scoped_actor("agentB", "river")
+    # uuid4-hex agent ids keep the compound id namespace-path-safe
+    compound = scoped_actor("0123456789abcdef0123456789abcdef", "river")
+    assert "/" not in compound and " " not in compound
+
+
+def test_chat_write_passes_scoped_actor_but_ledger_keeps_human(client, monkeypatch):
+    agent_id = make_active_agent(name="mem-write")
+    captured: dict[str, str] = {}
+
+    def fake_stream(agent, prompt, session_id=None, actor_id="river"):
+        captured["actor_id"] = actor_id
+        yield {"event": "meta",
+               "data": {"session_id": "s" * 40, "agent": agent.name, "mode": "buffered"}}
+        yield {"event": "done", "data": {"latency_ms": 1}}
+
+    monkeypatch.setattr(chat_router, "chat_stream", fake_stream)
+    res = client.post(f"/api/chat/{agent_id}", json={"prompt": "hi"})
+    assert res.status_code == 200
+    # the invoke chain (→ runtime write + long-term extraction) sees the scoped actor
+    assert captured["actor_id"] == f"{agent_id}__river"
+    # but the sessions ledger records the bare human actor for display
+    db = SessionLocal()
+    row = db.query(ChatSession).filter(ChatSession.agent_id == agent_id).first()
+    db.close()
+    assert row is not None and row.actor_id == "river"
+
+
+def test_session_memory_read_uses_same_scoped_actor(client, monkeypatch):
+    agent_id = make_active_agent(name="mem-read")
+    captured: dict[str, str] = {}
+
+    def fake_summary(actor_id, session_id):
+        captured["actor_id"] = actor_id
+        return {"event_count": 0, "events": [], "records": []}
+
+    monkeypatch.setattr(memory_service, "session_memory_summary", fake_summary)
+    res = client.get(f"/api/chat/{agent_id}/memory", params={"session_id": "s" * 40})
+    assert res.status_code == 200
+    # read partition must equal the write partition, else the rail shows nothing
+    assert captured["actor_id"] == f"{agent_id}__river"
+
+
+def test_summary_display_label_hides_compound_actor(monkeypatch):
+    """The rail chip shows the strategy (/facts, /preferences), never the
+    compound actor id."""
+    monkeypatch.setattr(memory_service, "list_events", lambda *a, **k: [])
+    monkeypatch.setattr(
+        memory_service, "list_records",
+        lambda ns, max_results=10: [{"content": {"text": "likes brevity"},
+                                     "memoryRecordId": "r1"}],
+    )
+    out = memory_service.session_memory_summary("agentX__river", "sess")
+    labels = {r["namespace"] for r in out["records"]}
+    assert labels <= {"/preferences", "/facts"}
+    assert all("river" not in r["namespace"] for r in out["records"])
