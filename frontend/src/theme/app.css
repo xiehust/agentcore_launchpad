@@ -61,7 +61,7 @@ body::after{ /* film grain */
 .side .sys b{color:var(--ink-2);font-weight:500}
 
 /* main */
-main{padding:26px 28px 60px;max-width:1460px}
+main{padding:26px 28px 60px;max-width:1460px;width:100%;margin:0 auto}
 .view{display:block}
 .view .panel,.view .tile{animation:rise .5s cubic-bezier(.22,.9,.3,1) both;animation-delay:calc(var(--i,0)*70ms)}
 @keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
