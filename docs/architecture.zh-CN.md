@@ -141,6 +141,15 @@ token 数,成本为 `—`)。界面以 `≈ / EST` 标注。价格表通过 lite
 维护的短键,未匹配的键保持不动。来源 URL 与周期可配置
 (`model_prices_source_url`、`model_prices_refresh_hours`,设 `0` 关闭守护线程)。
 
+**各创建方式的遥测:** Strands(zip/studio)与 harness Agent 原生发射 gen_ai
+span。Claude Agent SDK 容器把 `claude` CLI 当子进程驱动——ADOT 自动插桩看不见
+——因此生成的 Agent 手工发射遥测(`app/templates/claude_sdk_agent/tracing.py`,
+移植自 agentxray demo-agent):一个 `invoke_agent` 根 span、每次工具调用一个
+`execute_tool` span、一个携带整次查询 token 用量的聚合 `chat` span
+(`ResultMessage.usage`;SDK 的 `cache_creation` 映射为 `cache_write`),以及
+供 Span 抽屉展示输入/输出消息的 Strands 形状内容 event。scope 名必须保持
+`strands.telemetry.tracer` —— AgentCore 只解析受支持插桩库的 span/event。
+
 页签结构:**仪表盘**(5 个统计卡片 + 流量/延迟/TOKEN/工具图表)·
 **会话**(列表 → 含记忆转录与会话内追踪卡片的详情)·
 **追踪**(可筛选列表 → 瀑布甘特图 + Span 抽屉:含缓存读写的 token 用量、

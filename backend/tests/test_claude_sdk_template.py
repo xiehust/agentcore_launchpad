@@ -41,10 +41,31 @@ def test_rendered_main_compiles(tmp_path: Path):
     py_compile.compile(str(target), doraise=True)
 
 
+def test_rendered_main_emits_manual_telemetry():
+    """The SDK's LLM/tool work happens in the claude CLI subprocess, invisible
+    to ADOT — the generated agent must emit the gen_ai telemetry itself."""
+    code = render_main_py(SPEC)
+    assert "tracing.traced_invocation" in code
+    assert "tracing.record_tool_call" in code
+    assert "tracing.record_llm_usage" in code
+    assert "tracing.record_result" in code
+
+
+def test_tracing_module_compiles_and_uses_eval_scope(tmp_path: Path):
+    src = Path("app/templates/claude_sdk_agent/tracing.py")
+    py_compile.compile(str(src), cfile=str(tmp_path / "tracing.pyc"), doraise=True)
+    text = src.read_text(encoding="utf-8")
+    # Evaluations only parse spans/events from supported instrumentation scopes.
+    assert 'EVAL_SCOPE = "strands.telemetry.tracer"' in text
+    # cache token attr names follow the aws/spans convention the console sums
+    assert "gen_ai.usage.cache_write_input_tokens" in text
+
+
 def test_assemble_build_context(tmp_path: Path):
     ctx = assemble_build_context(SPEC, tmp_path / "ctx")
     files = {str(p.relative_to(ctx)) for p in ctx.rglob("*") if p.is_file()}
-    assert {"Dockerfile", "requirements.txt", "buildspec.yml", "main.py"} <= files
+    assert {"Dockerfile", "requirements.txt", "buildspec.yml", "main.py",
+            "tracing.py"} <= files
     assert ".claude/agents/fact-checker.md" in files
     dockerfile = (ctx / "Dockerfile").read_text()
     assert "linux/arm64" in dockerfile

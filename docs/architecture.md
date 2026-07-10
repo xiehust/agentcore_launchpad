@@ -151,6 +151,17 @@ short fallback keys, and leave unmatched keys untouched. Source URL and
 interval are configurable (`model_prices_source_url`,
 `model_prices_refresh_hours`; `0` disables the daemon).
 
+**Telemetry per creation method:** Strands (zip/studio) and harness agents emit
+gen_ai spans natively. Claude Agent SDK containers drive the `claude` CLI as a
+subprocess — invisible to ADOT auto-instrumentation — so the generated agent
+emits the telemetry manually (`app/templates/claude_sdk_agent/tracing.py`,
+adapted from the agentxray demo-agent): an `invoke_agent` root span, one
+`execute_tool` span per tool call, one aggregate `chat` span carrying the
+query's token usage (`ResultMessage.usage`; the SDK's `cache_creation` maps to
+`cache_write`), and Strands-shaped content events for the span drawer's
+input/output messages. The scope name must stay `strands.telemetry.tracer` —
+AgentCore only parses spans/events from supported instrumentation scopes.
+
 Tab IA: **DASHBOARD** (5 stat tiles + traffic/latency/tokens/tools charts) ·
 **SESSIONS** (list → detail with memory transcript + traces-in-session cards) ·
 **TRACES** (filterable list → waterfall Gantt with span drawer: token usage

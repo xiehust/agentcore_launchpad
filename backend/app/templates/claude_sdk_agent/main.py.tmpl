@@ -5,17 +5,27 @@ to a claude-agent-sdk query. Models are served through Bedrock
 (CLAUDE_CODE_USE_BEDROCK=1) using the runtime execution role — no API key.
 
 Subagents live in /app/.claude/agents/ and are discovered by the claude CLI.
+
+Telemetry: the SDK drives the claude CLI as a subprocess, invisible to ADOT
+auto-instrumentation — tracing.py emits the gen_ai spans/events manually
+(invoke_agent → execute_tool per tool call + one aggregate chat span with the
+query's token usage), parented under the auto-instrumented /invocations span.
 """
 
 import json
+from dataclasses import dataclass, field
 from typing import Any
 
+import tracing
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
     ResultMessage,
     TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+    UserMessage,
     query,
 )
 
@@ -45,25 +55,77 @@ def build_options() -> ClaudeAgentOptions:
     return ClaudeAgentOptions(**kwargs)
 
 
-async def run_query(prompt: str) -> dict[str, Any]:
+@dataclass
+class ToolCall:
+    """One tool invocation: ToolUseBlock paired with its ToolResultBlock."""
+
+    call_id: str
+    name: str
+    input: dict[str, Any]
+    result_text: str = ""
+    is_error: bool = False
+
+
+@dataclass
+class QueryOutcome:
+    result: str = ""
+    usage: dict[str, Any] = field(default_factory=dict)
+    tool_calls: list[ToolCall] = field(default_factory=list)
+
+
+def _result_text(content: Any) -> str:
+    """Flatten a ToolResultBlock's content (str or [{type: text, ...}])."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [b.get("text", "") for b in content if isinstance(b, dict)]
+        return "\n".join(p for p in parts if p)
+    return json.dumps(content) if content is not None else ""
+
+
+async def run_query(prompt: str) -> QueryOutcome:
+    """One SDK query: collect the assistant text, tool calls AND token usage.
+
+    Tool use arrives as ToolUseBlock (in AssistantMessage) and its matching
+    ToolResultBlock (in UserMessage), paired by tool_use_id — captured so
+    telemetry can emit one execute_tool span per call.
+    """
     chunks: list[str] = []
-    usage: dict[str, Any] = {}
+    outcome = QueryOutcome()
+    calls: dict[str, ToolCall] = {}
     async for message in query(prompt=prompt, options=build_options()):
         if isinstance(message, AssistantMessage):
             for block in message.content:
                 if isinstance(block, TextBlock):
                     chunks.append(block.text)
+                elif isinstance(block, ToolUseBlock):
+                    # SDK-MCP tools are namespaced mcp__<server>__<name>;
+                    # Claude Code built-ins (Task, …) pass through unchanged.
+                    name = block.name.split("__")[-1]
+                    calls[block.id] = ToolCall(
+                        call_id=block.id, name=name, input=dict(block.input or {})
+                    )
+        elif isinstance(message, UserMessage):
+            content = message.content if isinstance(message.content, list) else []
+            for block in content:
+                if isinstance(block, ToolResultBlock) and block.tool_use_id in calls:
+                    call = calls[block.tool_use_id]
+                    call.result_text = _result_text(block.content)
+                    call.is_error = bool(block.is_error)
         elif isinstance(message, ResultMessage):
             if message.is_error:
                 raise RuntimeError(f"claude query failed: {message.result}")
-            usage = {
+            outcome.usage = {
+                **(message.usage or {}),
                 "duration_ms": message.duration_ms,
                 "num_turns": message.num_turns,
                 "total_cost_usd": message.total_cost_usd,
             }
             if message.result and not chunks:
                 chunks.append(str(message.result))
-    return {"result": "\n".join(chunks).strip(), "usage": usage}
+    outcome.result = "\n".join(chunks).strip()
+    outcome.tool_calls = list(calls.values())
+    return outcome
 
 
 @app.entrypoint
@@ -73,7 +135,36 @@ async def invoke(payload: dict[str, Any], context: Any = None) -> dict[str, Any]
     prompt = str(payload.get("prompt", "")).strip()
     if not prompt:
         return {"error": "payload must include a non-empty 'prompt'"}
-    return await run_query(prompt)
+    session_id = str(
+        getattr(context, "session_id", "") or payload.get("session_id", "") or "adhoc"
+    )
+
+    with tracing.traced_invocation(AGENT_NAME, session_id) as span:
+        outcome = await run_query(prompt)  # unhandled errors mark the span ERROR
+        for call in outcome.tool_calls:
+            tracing.record_tool_call(
+                session_id=session_id,
+                call_id=call.call_id,
+                name=call.name,
+                arguments=call.input,
+                result_text=call.result_text,
+                is_error=call.is_error,
+            )
+        tracing.record_llm_usage(
+            session_id=session_id,
+            model=MODEL_ID,
+            usage=outcome.usage,
+            num_turns=outcome.usage.get("num_turns"),
+        )
+        tracing.record_result(
+            span,
+            session_id=session_id,
+            system_prompt=SYSTEM_PROMPT,
+            prompt=prompt,
+            output=outcome.result,
+            model=MODEL_ID,
+        )
+    return {"result": outcome.result, "usage": outcome.usage}
 
 
 if __name__ == "__main__":
