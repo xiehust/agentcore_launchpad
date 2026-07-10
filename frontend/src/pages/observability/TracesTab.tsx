@@ -8,6 +8,12 @@ import { fmtClock, fmtCost, fmtDuration, fmtInt, shortId } from "./format";
 
 const TIMEOUT_MS = 30_000;
 
+/** Harness runtimes emit a constant stream of 2-span "InternalOperation"
+ * health-check traces — noise for humans, hidden by default. */
+function isSystemTrace(r: ObsTraceRow): boolean {
+  return r.root_operation === "InternalOperation" && r.llm_count === 0;
+}
+
 function statusChip(row: ObsTraceRow, t: (k: string) => string) {
   if (row.status === "ok") {
     return (
@@ -34,12 +40,18 @@ export function TracesTab({ data, onOpenSession, onOpenTrace }: TracesTabProps) 
   const [agent, setAgent] = useState("all");
   const [status, setStatus] = useState<"all" | "ok" | "error">("all");
   const [query, setQuery] = useState("");
+  const [showSystem, setShowSystem] = useState(false);
 
   const agents = useMemo(
     () => [...new Set(data.traces.map((r) => r.agent))].sort(),
     [data.traces],
   );
+  const systemCount = useMemo(
+    () => data.traces.filter(isSystemTrace).length,
+    [data.traces],
+  );
   const rows = data.traces.filter((r) => {
+    if (!showSystem && isSystemTrace(r)) return false;
     if (agent !== "all" && r.agent !== agent) return false;
     if (status !== "all" && r.status !== status) return false;
     if (query) {
@@ -88,6 +100,16 @@ export function TracesTab({ data, onOpenSession, onOpenTrace }: TracesTabProps) 
           onChange={(e) => setQuery(e.target.value)}
           placeholder={t("obs.traces.searchPlaceholder")}
         />
+        {systemCount > 0 && (
+          <button
+            className={`fsel${showSystem ? " on-ok" : ""}`}
+            onClick={() => setShowSystem(!showSystem)}
+          >
+            {showSystem
+              ? t("obs.traces.systemShown", { count: systemCount })
+              : t("obs.traces.systemHidden", { count: systemCount })}
+          </button>
+        )}
         <Chip tone="muted">
           {t("obs.traces.scanned", { count: rows.length, range: data.range.toUpperCase() })}
         </Chip>
@@ -103,6 +125,7 @@ export function TracesTab({ data, onOpenSession, onOpenTrace }: TracesTabProps) 
           { key: "llm", label: t("obs.traces.cols.llm") },
           { key: "tokens", label: t("obs.traces.cols.tokensCost") },
           { key: "status", label: t("obs.traces.cols.status") },
+          { key: "open", label: "" },
         ]}
         isEmpty={rows.length === 0}
         empty={data.traces.length === 0 ? t("obs.traces.empty") : t("obs.traces.noMatch")}
@@ -111,6 +134,7 @@ export function TracesTab({ data, onOpenSession, onOpenTrace }: TracesTabProps) 
           <tr
             key={r.trace_id}
             className="rowlink"
+            title={t("obs.traces.rowHint")}
             onClick={() => onOpenTrace(r.trace_id)}
           >
             <td className="mono dim">{fmtClock(r.time)}</td>
@@ -141,6 +165,17 @@ export function TracesTab({ data, onOpenSession, onOpenTrace }: TracesTabProps) 
                 : "— · —"}
             </td>
             <td>{statusChip(r, t)}</td>
+            <td>
+              <button
+                className="rowact"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenTrace(r.trace_id);
+                }}
+              >
+                {t("obs.traces.openWaterfall")} ▸
+              </button>
+            </td>
           </tr>
         ))}
       </DataTable>

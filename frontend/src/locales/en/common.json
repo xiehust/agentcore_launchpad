@@ -419,7 +419,11 @@
         "llm": "LLM",
         "tokensCost": "TOKENS · COST",
         "status": "STATUS"
-      }
+      },
+      "systemHidden": "◌ {{count}} system pings hidden",
+      "systemShown": "◌ system pings shown ({{count}})",
+      "openWaterfall": "WATERFALL",
+      "rowHint": "Open trace waterfall"
     },
     "sessions": {
       "copy": "Copy full session id",
@@ -488,7 +492,8 @@
       "notFound": "SESSION NOT FOUND — CHECK THE ID OR WIDEN THE TIME RANGE",
       "tracesTitle": "TRACES IN SESSION",
       "tracesSub": "{{count}} · newest first",
-      "noTraces": "NO TRACES IN RANGE FOR THIS SESSION"
+      "noTraces": "NO TRACES IN RANGE FOR THIS SESSION",
+      "back": "‹ SESSIONS"
     }
   },
   "common": {

@@ -419,7 +419,11 @@
         "llm": "LLM",
         "tokensCost": "TOKEN · 成本",
         "status": "状态"
-      }
+      },
+      "systemHidden": "◌ 已隐藏 {{count}} 条系统心跳",
+      "systemShown": "◌ 正在显示系统心跳({{count}})",
+      "openWaterfall": "瀑布图",
+      "rowHint": "打开追踪瀑布图"
     },
     "sessions": {
       "copy": "复制完整会话 ID",
@@ -488,7 +492,8 @@
       "notFound": "未找到该会话 — 请检查 ID 或扩大时间范围",
       "tracesTitle": "会话内追踪",
       "tracesSub": "{{count}} · 最新在前",
-      "noTraces": "该时间范围内此会话无追踪"
+      "noTraces": "该时间范围内此会话无追踪",
+      "back": "‹ 会话"
     }
   },
   "common": {

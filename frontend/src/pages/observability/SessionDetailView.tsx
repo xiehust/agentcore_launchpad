@@ -1,5 +1,5 @@
-import type { CSSProperties } from "react";
-import { useEffect, useState } from "react";
+import type { CSSProperties, ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
@@ -31,6 +31,16 @@ export function SessionDetailView({ sessionId, range, onOpenTrace }: SessionDeta
   const [detail, setDetail] = useState<ObsSessionDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [invalid, setInvalid] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  // The detail renders below the (long) sessions table — bring it into view
+  // when a session is picked, otherwise the click looks like a no-op. Runs
+  // again once data lands: the layout above shifts while loading, which
+  // strands the first (smooth) scroll short of the target.
+  const loaded = detail != null;
+  useEffect(() => {
+    wrapRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [sessionId, loaded]);
 
   useEffect(() => {
     setDetail(null);
@@ -61,41 +71,49 @@ export function SessionDetailView({ sessionId, range, onOpenTrace }: SessionDeta
     };
   }, [sessionId, range]);
 
+  // Single scrollable anchor around every render state (66px clears the
+  // sticky topbar).
+  const wrap = (children: ReactNode) => (
+    <div ref={wrapRef} style={{ scrollMarginTop: 66 }}>
+      {children}
+    </div>
+  );
+
   if (invalid) {
-    return (
+    return wrap(
       <Panel brk style={{ marginTop: 14 } as CSSProperties}>
         <div className="empty">{t("obs.session.notFound")}</div>
-      </Panel>
+      </Panel>,
     );
   }
   if (error != null) {
-    return (
+    return wrap(
       <Panel brk style={{ marginTop: 14 } as CSSProperties}>
         <div className="obs-error">
           <span>{t("obs.loadFailed", { msg: error })}</span>
         </div>
-      </Panel>
+      </Panel>,
     );
   }
   if (detail == null) {
-    return (
+    return wrap(
       <Panel brk style={{ marginTop: 14 } as CSSProperties}>
         <div className="loading-line">{t("common.loading")}</div>
-      </Panel>
+      </Panel>,
     );
   }
 
   const { transcript, traces, summary } = detail;
   if (traces.length === 0 && !transcript.available) {
-    return (
+    return wrap(
       <Panel brk style={{ marginTop: 14 } as CSSProperties}>
         <div className="empty">{t("obs.session.notFound")}</div>
-      </Panel>
+      </Panel>,
     );
   }
   const agentLabel = (transcript.agent_name ?? summary.agent ?? "agent").toUpperCase();
 
-  return (
+  return wrap(
     <div className="grid-31" style={{ marginTop: 14 }}>
       <Panel
         brk

@@ -83,10 +83,12 @@ export function Observability() {
     [tab, range, t, toast],
   );
 
+  const sessionDetailMode = tab === "sessions" && selectedSession != null;
+
   useEffect(() => {
-    if (traceId) return; // waterfall view owns its own fetch
+    if (traceId || sessionDetailMode) return; // detail views own their fetches
     load(false);
-  }, [load, traceId]);
+  }, [load, traceId, sessionDetailMode]);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -98,7 +100,7 @@ export function Observability() {
       const p = new URLSearchParams(prev);
       p.set("tab", next);
       p.delete("trace");
-      if (next !== "sessions") p.delete("session");
+      p.delete("session"); // tab click always lands on the list (openSession sets both)
       return p;
     });
   };
@@ -181,7 +183,25 @@ export function Observability() {
         </div>
       </div>
 
-      {error != null ? (
+      {sessionDetailMode && selectedSession != null ? (
+        // Detail replaces the list (same pattern as trace → waterfall): with
+        // ~100 live sessions, rendering it below the table hid it off-screen.
+        <>
+          <div className="obs-bar">
+            <button className="obs-tab" onClick={() => switchTab("sessions")}>
+              {t("obs.session.back")}
+            </button>
+            <span className="mono" style={{ color: "var(--ink)" }} title={selectedSession}>
+              {t("obs.waterfall.sessionLabel")} {selectedSession}
+            </span>
+          </div>
+          <SessionDetailView
+            sessionId={selectedSession}
+            range={range}
+            onOpenTrace={openTrace}
+          />
+        </>
+      ) : error != null ? (
         <Panel brk>
           <div className="obs-error">
             <span>{t("obs.loadFailed", { msg: error })}</span>
@@ -199,9 +219,6 @@ export function Observability() {
       ) : tab === "sessions" && sessions ? (
         <SessionsTab data={sessions} selected={selectedSession} onSelect={openSession} />
       ) : null}
-      {tab === "sessions" && selectedSession != null && (
-        <SessionDetailView sessionId={selectedSession} range={range} onOpenTrace={openTrace} />
-      )}
     </section>
   );
 }
