@@ -1,10 +1,10 @@
 import type { CSSProperties } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 
-import { Btn, Chip, Panel, useToast, ViewHead } from "../components";
-import type { DeploymentInfo, JobInfo, StageInfo } from "../lib/api";
+import { Btn, Chip, ConfirmDialog, Panel, useToast, ViewHead } from "../components";
+import type { AgentInfo, DeploymentInfo, JobInfo, StageInfo } from "../lib/api";
 import { api, ApiError } from "../lib/api";
 
 const DEFAULT_MODEL = "global.anthropic.claude-sonnet-4-6";
@@ -21,6 +21,16 @@ interface LaunchState {
 }
 
 type Method = "harness" | "zip_runtime" | "container";
+
+// Spec fields we read back when loading an existing agent into the wizard.
+interface StoredSpec {
+  model_id?: string;
+  system_prompt?: string;
+  tools?: { type: string; name: string }[];
+  skills?: string[];
+  memory?: { long_term?: boolean };
+  env?: Record<string, string>;
+}
 
 export function CreateAgent() {
   const { t } = useTranslation();
@@ -41,6 +51,9 @@ export function CreateAgent() {
   );
   const [longTerm, setLongTerm] = useState(true);
   const [mcpServers, setMcpServers] = useState("");
+  // when set, the wizard edits an existing agent and the launch button re-publishes it
+  const [editing, setEditing] = useState<{ id: string; name: string; method: Method } | null>(null);
+  const [detailsMode, setDetailsMode] = useState(false);
 
   useEffect(() => {
     fetch("/api/tools")
@@ -57,11 +70,26 @@ export function CreateAgent() {
         /* gateway not bootstrapped — chips stay hidden */
       });
   }, []);
+
+  const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const reloadAgents = useCallback(() => {
+    void api
+      .listAgents()
+      .then((res) => setAgents(res.agents))
+      .catch(() => {
+        /* list is best-effort — a fetch blip shouldn't blank the page */
+      });
+  }, []);
+  useEffect(() => reloadAgents(), [reloadAgents]);
+
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [launch, setLaunch] = useState<LaunchState | null>(null);
   const [deployment, setDeployment] = useState<DeploymentInfo | null>(null);
   const [job, setJob] = useState<JobInfo | null>(null);
   const [agentStatus, setAgentStatus] = useState<string>("deploying");
+  const [confirm, setConfirm] = useState<
+    { kind: "republish" } | { kind: "delete"; id: string; name: string } | null
+  >(null);
 
   const failureToasted = useRef(false);
   const poll = useCallback(async () => {
@@ -89,41 +117,103 @@ export function CreateAgent() {
   }, [launch, t, toast]);
 
   useEffect(() => {
-    if (!launch || agentStatus === "active" || agentStatus === "failed") return;
-    void poll();
+    if (!launch) return;
+    void poll(); // always load once (covers read-only "details" of a finished deploy)
+    if (agentStatus === "active" || agentStatus === "failed") return;
     const timer = setInterval(() => void poll(), 2000);
     return () => clearInterval(timer);
   }, [launch, agentStatus, poll]);
 
+  const resetForm = () => {
+    setEditing(null);
+    setDetailsMode(false);
+    setName("");
+    setModelId(DEFAULT_MODEL);
+    setSystemPrompt("");
+    setTools([]);
+    setSelectedGateway([]);
+    setSkills([]);
+    setLongTerm(true);
+    setMcpServers("");
+    setSubmitError(null);
+  };
+
+  const buildSpec = () => ({
+    name,
+    method,
+    model_id: modelId,
+    system_prompt: systemPrompt,
+    tools:
+      method === "harness"
+        ? [
+            ...tools.map((n) => ({ type: "builtin", name: n })),
+            ...selectedGateway.map((n) => ({ type: "gateway", name: n })),
+          ]
+        : [],
+    memory: { short_term: true, long_term: longTerm },
+    ...(method === "harness" && skills.length ? { skills } : {}),
+    ...(method === "container" && mcpServers.trim()
+      ? { env: { LAUNCHPAD_MCP_SERVERS: mcpServers.trim() } }
+      : {}),
+  });
+
   const submit = async () => {
     setSubmitError(null);
     try {
-      const res = await api.createAgent({
-        name,
-        method,
-        model_id: modelId,
-        system_prompt: systemPrompt,
-        tools:
-          method === "harness"
-            ? [
-                ...tools.map((n) => ({ type: "builtin", name: n })),
-                ...selectedGateway.map((n) => ({ type: "gateway", name: n })),
-              ]
-            : [],
-        memory: { short_term: true, long_term: longTerm },
-        ...(method === "harness" && skills.length ? { skills } : {}),
-        ...(method === "container" && mcpServers.trim()
-          ? { env: { LAUNCHPAD_MCP_SERVERS: mcpServers.trim() } }
-          : {}),
-      });
+      const spec = buildSpec();
+      const res = editing
+        ? await api.redeployAgent(editing.id, spec)
+        : await api.createAgent(spec);
       failureToasted.current = false;
       setLaunch({ agentId: res.agent.id, jobId: res.job_id });
       setAgentStatus("deploying");
+      setDetailsMode(false);
       setStep(3);
+      reloadAgents();
     } catch (err) {
       setSubmitError(
         err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : String(err),
       );
+    }
+  };
+
+  const startEdit = (agent: AgentInfo) => {
+    const spec = (agent.spec ?? {}) as StoredSpec;
+    setEditing({ id: agent.id, name: agent.name, method: agent.method as Method });
+    setDetailsMode(false);
+    setMethod(agent.method as Method);
+    setName(agent.name);
+    setModelId(spec.model_id ?? DEFAULT_MODEL);
+    setSystemPrompt(spec.system_prompt ?? "");
+    setTools((spec.tools ?? []).filter((x) => x.type === "builtin").map((x) => x.name));
+    setSelectedGateway((spec.tools ?? []).filter((x) => x.type === "gateway").map((x) => x.name));
+    setSkills(spec.skills ?? []);
+    setLongTerm(spec.memory?.long_term ?? true);
+    setMcpServers(spec.env?.LAUNCHPAD_MCP_SERVERS ?? "");
+    setSubmitError(null);
+    setStep(2);
+  };
+
+  const openDetails = (agent: AgentInfo) => {
+    const jobId = agent.deployment?.job_id;
+    if (!jobId) return;
+    setEditing(null);
+    setDetailsMode(true);
+    failureToasted.current = true; // don't re-toast an old failure when merely viewing
+    setDeployment(agent.deployment ?? null);
+    setJob(null);
+    setLaunch({ agentId: agent.id, jobId });
+    setAgentStatus(agent.status);
+    setStep(3);
+  };
+
+  const doDelete = async (id: string) => {
+    try {
+      await api.deleteAgent(id);
+      toast(t("create.list.deleted"));
+      reloadAgents();
+    } catch (err) {
+      toast(err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : String(err));
     }
   };
 
@@ -138,10 +228,7 @@ export function CreateAgent() {
 
       <div className="steps">
         {([1, 2, 3] as const).map((n) => (
-          <div
-            key={n}
-            className={`step${step === n ? " now" : step > n ? " done" : ""}`}
-          >
+          <div key={n} className={`step${step === n ? " now" : step > n ? " done" : ""}`}>
             <span className="n">{step > n ? "✓" : `0${n}`}</span>
             <b>{t(`create.steps.${n}`)}</b>
           </div>
@@ -214,6 +301,14 @@ export function CreateAgent() {
               {t("create.next")} ▸
             </Btn>
           </div>
+
+          <div style={{ height: 18 }} />
+          <AgentList
+            agents={agents}
+            onEdit={startEdit}
+            onDetails={openDetails}
+            onDelete={(id, name) => setConfirm({ kind: "delete", id, name })}
+          />
         </>
       )}
 
@@ -237,12 +332,21 @@ export function CreateAgent() {
             }
             style={{ "--i": 0 } as CSSProperties}
           >
+            {editing && (
+              <div className="note" style={{ borderColor: "var(--amber)", marginBottom: 12 }}>
+                <span className="i" style={{ color: "var(--amber)" }}>
+                  [⟳]
+                </span>
+                <span>{t("create.editing", { name: editing.name })}</span>
+              </div>
+            )}
             <div className="field">
               <label htmlFor="agent-name">{t("create.configure.name")}</label>
               <input
                 id="agent-name"
                 className="input"
                 value={name}
+                disabled={!!editing}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="hr-assistant-v3"
               />
@@ -377,7 +481,10 @@ export function CreateAgent() {
           </Panel>
 
           <div>
-            <Panel title={t("create.launchPanel.title")} sub={t("create.launchPanel.sub")}>
+            <Panel
+              title={t(editing ? "create.republishPanel.title" : "create.launchPanel.title")}
+              sub={t(editing ? "create.republishPanel.sub" : "create.launchPanel.sub")}
+            >
               <div className="kv">
                 <span className="k">{t("create.launchPanel.sharedInfra")}</span>
                 <span className="v">CDK · launchpad-base ✓</span>
@@ -387,8 +494,12 @@ export function CreateAgent() {
                 <span className="v">{t("create.launchPanel.agentResourcesV")}</span>
               </div>
               <div className="kv">
-                <span className="k">{t("create.launchPanel.onSuccess")}</span>
-                <span className="v">{t("create.launchPanel.onSuccessV")}</span>
+                <span className="k">
+                  {t(editing ? "create.republishPanel.effect" : "create.launchPanel.onSuccess")}
+                </span>
+                <span className="v">
+                  {t(editing ? "create.republishPanel.effectV" : "create.launchPanel.onSuccessV")}
+                </span>
               </div>
             </Panel>
             <div style={{ height: 14 }} />
@@ -402,9 +513,20 @@ export function CreateAgent() {
             )}
             <Panel>
               <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-                <Btn onClick={() => setStep(1)}>◂ {t("create.back")}</Btn>
-                <Btn primary disabled={!configValid} onClick={() => void submit()}>
-                  ▲ {t("create.launch")}
+                <Btn
+                  onClick={() => {
+                    setStep(1);
+                    resetForm();
+                  }}
+                >
+                  ◂ {t("create.back")}
+                </Btn>
+                <Btn
+                  primary
+                  disabled={!configValid}
+                  onClick={() => (editing ? setConfirm({ kind: "republish" }) : void submit())}
+                >
+                  {editing ? `⟳ ${t("create.republish")}` : `▲ ${t("create.launch")}`}
                 </Btn>
               </div>
             </Panel>
@@ -417,18 +539,134 @@ export function CreateAgent() {
           deployment={deployment}
           job={job}
           agentStatus={agentStatus}
+          detailsMode={detailsMode}
           onRestart={() => {
             setStep(1);
             setLaunch(null);
             setDeployment(null);
             setJob(null);
-            setName("");
-            setSystemPrompt("");
-            setTools([]);
+            resetForm();
+            reloadAgents();
           }}
         />
       )}
+
+      <ConfirmDialog
+        open={confirm?.kind === "republish"}
+        title={t("create.republishConfirm.title")}
+        body={t("create.republishConfirm.body", { name })}
+        confirmLabel={t("create.republish")}
+        onConfirm={() => {
+          setConfirm(null);
+          void submit();
+        }}
+        onCancel={() => setConfirm(null)}
+      />
+      <ConfirmDialog
+        open={confirm?.kind === "delete"}
+        title={t("create.list.confirmDeleteTitle")}
+        body={t("create.list.confirmDelete", {
+          name: confirm?.kind === "delete" ? confirm.name : "",
+        })}
+        confirmLabel={t("create.list.delete")}
+        onConfirm={() => {
+          if (confirm?.kind === "delete") void doDelete(confirm.id);
+          setConfirm(null);
+        }}
+        onCancel={() => setConfirm(null)}
+      />
     </section>
+  );
+}
+
+const STATUS_TONE: Record<string, "good" | "warn" | "crit" | "muted"> = {
+  active: "good",
+  deploying: "warn",
+  failed: "crit",
+};
+
+function AgentList({
+  agents,
+  onEdit,
+  onDetails,
+  onDelete,
+}: {
+  agents: AgentInfo[];
+  onEdit: (a: AgentInfo) => void;
+  onDetails: (a: AgentInfo) => void;
+  onDelete: (id: string, name: string) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Panel title={t("create.list.title")} sub={t("create.list.sub")} pad={false}>
+      <table>
+        <thead>
+          <tr>
+            <th>{t("create.list.colName")}</th>
+            <th>{t("create.list.colMethod")}</th>
+            <th>{t("create.list.colStatus")}</th>
+            <th>{t("create.list.colRev")}</th>
+            <th>{t("create.list.colUpdated")}</th>
+            <th style={{ textAlign: "right" }}>{t("create.list.colActions")}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {agents.map((a) => (
+            <tr key={a.id}>
+              <td className="pri">{a.name}</td>
+              <td className="mono dim">{a.method}</td>
+              <td>
+                <Chip
+                  tone={STATUS_TONE[a.status] ?? "muted"}
+                  icon={a.status === "active" ? "●" : a.status === "failed" ? "✕" : "◐"}
+                >
+                  {t(`status.${a.status}`, a.status.toUpperCase())}
+                </Chip>
+              </td>
+              <td className="mono">{a.revision ?? "—"}</td>
+              <td className="mono dim">{(a.updated_at ?? "").replace("T", " ").slice(0, 16)}</td>
+              <td>
+                <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    className="rowact"
+                    disabled={a.status === "deploying"}
+                    style={a.status === "deploying" ? { opacity: 0.35 } : undefined}
+                    onClick={() => onEdit(a)}
+                  >
+                    {t("create.list.edit")}
+                  </button>
+                  {a.status === "active" && (
+                    <Link className="rowact" to={`/chat?agent=${a.id}`}>
+                      {t("create.list.chat")}
+                    </Link>
+                  )}
+                  {a.deployment && (
+                    <button type="button" className="rowact" onClick={() => onDetails(a)}>
+                      {t("create.list.details")}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="rowact"
+                    onClick={() => onDelete(a.id, a.name)}
+                  >
+                    {t("create.list.delete")}
+                  </button>
+                </div>
+              </td>
+            </tr>
+          ))}
+          {agents.length === 0 && (
+            <tr>
+              <td colSpan={6} className="dim mono" style={{ textAlign: "center" }}>
+                {t("create.list.empty")}
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </Panel>
   );
 }
 
@@ -450,11 +688,13 @@ function LaunchSequence({
   deployment,
   job,
   agentStatus,
+  detailsMode,
   onRestart,
 }: {
   deployment: DeploymentInfo | null;
   job: JobInfo | null;
   agentStatus: string;
+  detailsMode: boolean;
   onRestart: () => void;
 }) {
   const { t } = useTranslation();
@@ -463,7 +703,7 @@ function LaunchSequence({
     <div className="cfg-grid">
       <Panel
         brk
-        title={t("create.sequence.title")}
+        title={t(detailsMode ? "create.sequence.detailsTitle" : "create.sequence.title")}
         sub={job ? `job #${job.id.slice(0, 8)}` : undefined}
         end={
           agentStatus === "active" ? (
@@ -522,7 +762,9 @@ function LaunchSequence({
         <div style={{ height: 14 }} />
         <Panel>
           <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-            <Btn onClick={onRestart}>{t("create.sequence.newAgent")}</Btn>
+            <Btn onClick={onRestart}>
+              {t(detailsMode ? "create.sequence.backToList" : "create.sequence.newAgent")}
+            </Btn>
           </div>
         </Panel>
       </div>

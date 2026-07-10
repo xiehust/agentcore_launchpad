@@ -101,6 +101,71 @@ def test_delete_marks_ledger(client, monkeypatch):
     assert client.get("/api/agents").json()["agents"] == []  # deleted rows hidden
 
 
+def _activate(agent_id: str) -> None:
+    """Simulate a finished deploy: active with a live resource + ARN."""
+    db = SessionLocal()
+    agent = db.get(Agent, agent_id)
+    agent.status = "active"
+    agent.resource_id = "harness-xyz"
+    agent.arn = "arn:aws:bedrock-agentcore:us-west-2:111:harness/xyz"
+    db.commit()
+    db.close()
+
+
+def test_redeploy_updates_in_place(client, no_real_deploy):
+    """Re-publish keeps the resource (UpdateHarness/UpdateAgentRuntime, new
+    version) — it must NOT clear resource_id/arn, and the deploy job runs in
+    'update' mode."""
+    from app.models.ledger import Job
+
+    created = client.post("/api/agents", json=SPEC).json()
+    agent_id, first_job = created["agent"]["id"], created["job_id"]
+    _activate(agent_id)
+
+    res = client.post(f"/api/agents/{agent_id}/redeploy",
+                      json={**SPEC, "system_prompt": "Now answer in French."})
+    assert res.status_code == 202
+    body = res.json()
+    assert body["agent"]["status"] == "deploying"
+    assert body["job_id"] != first_job
+    assert no_real_deploy[-1] == body["job_id"]  # a new deploy job was launched
+
+    detail = client.get(f"/api/agents/{agent_id}").json()
+    assert detail["resource_id"] == "harness-xyz"  # SAME resource — updated in place
+    assert detail["arn"] == "arn:aws:bedrock-agentcore:us-west-2:111:harness/xyz"  # ARN kept
+    assert detail["spec"]["system_prompt"] == "Now answer in French."  # edited spec stored
+
+    db = SessionLocal()
+    assert db.get(Job, body["job_id"]).payload["mode"] == "update"  # update-mode pipeline
+    db.close()
+
+    listed = next(a for a in client.get("/api/agents").json()["agents"] if a["id"] == agent_id)
+    assert listed["revision"] == 2  # two deployment rows now
+
+
+def test_redeploy_rejects_name_or_method_change(client):
+    agent_id = client.post("/api/agents", json=SPEC).json()["agent"]["id"]
+    _activate(agent_id)
+    for bad in ({"name": "renamed-agent"}, {"method": "container"}):
+        res = client.post(f"/api/agents/{agent_id}/redeploy", json={**SPEC, **bad})
+        assert res.status_code == 400
+        assert res.json()["code"] == "agent.redeploy_immutable"
+
+
+def test_redeploy_conflicts_while_deploying(client):
+    # a freshly created agent is still "deploying" (pipeline stubbed) → no re-publish
+    agent_id = client.post("/api/agents", json=SPEC).json()["agent"]["id"]
+    res = client.post(f"/api/agents/{agent_id}/redeploy", json=SPEC)
+    assert res.status_code == 409
+    assert res.json()["code"] == "agent.deploy_in_progress"
+
+
+def test_redeploy_not_found(client):
+    res = client.post("/api/agents/nope/redeploy", json=SPEC)
+    assert res.status_code == 404
+    assert res.json()["code"] == "agent.not_found"
+
+
 def test_job_not_found_envelope(client):
     res = client.get("/api/jobs/nope")
     assert res.status_code == 404

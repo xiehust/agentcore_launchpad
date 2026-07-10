@@ -33,6 +33,7 @@ export interface AgentInfo {
   updated_at: string | null;
   deployment?: DeploymentInfo;
   deployments?: DeploymentInfo[];
+  revision?: number;
 }
 
 export interface JobEvent {
@@ -297,6 +298,11 @@ export const api = {
       body: JSON.stringify(spec),
     }),
   listAgents: () => request<{ agents: AgentInfo[] }>("/api/agents"),
+  redeployAgent: (id: string, spec: AgentSpecInput) =>
+    request<{ agent: AgentInfo; job_id: string; deployment_id: string }>(
+      `/api/agents/${id}/redeploy`,
+      { method: "POST", body: JSON.stringify(spec) },
+    ),
   getOverview: () => request<OverviewInfo>("/api/overview"),
   getAgent: (id: string) => request<AgentInfo>(`/api/agents/${id}`),
   getJob: (id: string) => request<JobInfo>(`/api/jobs/${id}`),

@@ -62,6 +62,58 @@ def create_container_runtime(
     return client.create_agent_runtime(**params)
 
 
+def _code_artifact(s3_bucket: str, s3_key: str) -> dict[str, Any]:
+    return {
+        "codeConfiguration": {
+            "code": {"s3": {"bucket": s3_bucket, "prefix": s3_key}},
+            "runtime": "PYTHON_3_13",
+            "entryPoint": ["opentelemetry-instrument", "main.py"],
+        }
+    }
+
+
+def update_code_runtime(
+    client: Any,
+    *,
+    runtime_id: str,
+    s3_bucket: str,
+    s3_key: str,
+    role_arn: str,
+    environment: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """UpdateAgentRuntime with a new zip artifact — publishes a new version in
+    place (same agentRuntimeId/ARN; the DEFAULT endpoint auto-rolls to it)."""
+    params: dict[str, Any] = {
+        "agentRuntimeId": runtime_id,
+        "agentRuntimeArtifact": _code_artifact(s3_bucket, s3_key),
+        "networkConfiguration": {"networkMode": "PUBLIC"},
+        "roleArn": role_arn,
+    }
+    if environment:
+        params["environmentVariables"] = dict(environment)
+    return client.update_agent_runtime(**params)
+
+
+def update_container_runtime(
+    client: Any,
+    *,
+    runtime_id: str,
+    container_uri: str,
+    role_arn: str,
+    environment: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """UpdateAgentRuntime with a new container image — new version, same ARN."""
+    params: dict[str, Any] = {
+        "agentRuntimeId": runtime_id,
+        "agentRuntimeArtifact": {"containerConfiguration": {"containerUri": container_uri}},
+        "networkConfiguration": {"networkMode": "PUBLIC"},
+        "roleArn": role_arn,
+    }
+    if environment:
+        params["environmentVariables"] = dict(environment)
+    return client.update_agent_runtime(**params)
+
+
 def get_runtime(client: Any, runtime_id: str) -> dict[str, Any]:
     return client.get_agent_runtime(agentRuntimeId=runtime_id)
 

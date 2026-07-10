@@ -16,6 +16,13 @@ def create_harness(client: Any, params: dict[str, Any]) -> dict[str, Any]:
     return client.create_harness(**params)["harness"]
 
 
+def update_harness(client: Any, params: dict[str, Any]) -> dict[str, Any]:
+    """UpdateHarness — publishes a new harness version in place. Same harnessId
+    and ARN; ``params`` carries ``harnessId`` plus the edited config (model,
+    systemPrompt, tools, memory…), i.e. the create params minus ``harnessName``."""
+    return client.update_harness(**params)["harness"]
+
+
 def get_harness(client: Any, harness_id: str) -> dict[str, Any]:
     return client.get_harness(harnessId=harness_id)["harness"]
 

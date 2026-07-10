@@ -146,29 +146,43 @@ def _stage_provision(ctx: StageContext, agent: Agent) -> StageResult:
 def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
     settings = get_settings()
     client = control_client()
+    mode = ctx.scratch.get("mode", "create")
     db = ctx.session()
     try:
         row = db.get(Agent, agent.id)
-        if row.resource_id:
-            runtime_id = row.resource_id
-            ctx.log(f"resuming — runtime {runtime_id} already created, polling status")
-        else:
+
+        def _kwargs() -> dict:
             spec = AgentSpec(**row.spec)
             environment = dict(spec.env)
             if (spec.memory.short_term or spec.memory.long_term) and settings.resources.get(
                 "memory_id"
             ):
                 environment.setdefault("LAUNCHPAD_MEMORY_ID", settings.resources["memory_id"])
-            created = rt.create_code_runtime(
-                client,
-                runtime_name=sanitize_runtime_name(row.name),
-                s3_bucket=ctx.scratch.get("s3_bucket")
+            return {
+                "s3_bucket": ctx.scratch.get("s3_bucket")
                 or settings.resources.get("artifacts_bucket", ""),
-                s3_key=ctx.scratch.get("s3_key")
+                "s3_key": ctx.scratch.get("s3_key")
                 or f"agents/{row.name}/deployment_package.zip",
-                role_arn=ctx.scratch.get("execution_role_arn")
+                "role_arn": ctx.scratch.get("execution_role_arn")
                 or settings.resources.get("execution_role_arn", ""),
-                environment=environment or None,
+                "environment": environment or None,
+            }
+
+        if mode == "update" and row.resource_id:  # re-publish → UpdateAgentRuntime (new version)
+            runtime_id = row.resource_id
+            updated = rt.update_code_runtime(client, runtime_id=runtime_id, **_kwargs())
+            row.version = str(updated.get("agentRuntimeVersion", row.version or "1"))
+            db.commit()
+            ctx.log(
+                f"UpdateAgentRuntime accepted · runtimeId {runtime_id} · "
+                f"new version {row.version}"
+            )
+        elif row.resource_id:
+            runtime_id = row.resource_id
+            ctx.log(f"resuming — runtime {runtime_id} already created, polling status")
+        else:
+            created = rt.create_code_runtime(
+                client, runtime_name=sanitize_runtime_name(row.name), **_kwargs()
             )
             runtime_id = created["agentRuntimeId"]
             row.resource_id = runtime_id

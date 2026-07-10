@@ -117,24 +117,38 @@ def _stage_provision(ctx: StageContext, agent: Agent) -> StageResult:
 
 def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
     client = control_client()
+    mode = ctx.scratch.get("mode", "create")
     db = ctx.session()
     try:
         row = db.get(Agent, agent.id)
-        if row.resource_id:  # resumed job — harness already created, just poll
-            harness_id = row.resource_id
-            ctx.log(f"resuming — harness {harness_id} already created, polling status")
-        else:
+
+        def _params() -> dict[str, Any]:
             params = ctx.scratch.get("create_params")
-            if params is None:  # resume path without scratch — regenerate
-                spec = AgentSpec(**row.spec)
+            if params is None:  # resume/update path without scratch — regenerate
                 settings = get_settings()
                 params = build_create_params(
-                    spec,
+                    AgentSpec(**row.spec),
                     settings.resources.get("execution_role_arn", ""),
                     settings.resources.get("memory_arn"),
                     gateway=_gateway_config(settings.resources),
                 )
-            harness = hc.create_harness(client, params)
+            return params
+
+        if mode == "update" and row.resource_id:  # in-place re-publish → UpdateHarness
+            harness_id = row.resource_id
+            update_params = {k: v for k, v in _params().items() if k != "harnessName"}
+            update_params["harnessId"] = harness_id
+            harness = hc.update_harness(client, update_params)
+            row.version = str(harness.get("harnessVersion", row.version or "1"))
+            db.commit()
+            ctx.log(
+                f"UpdateHarness accepted · harnessId {harness_id} · new version {row.version}"
+            )
+        elif row.resource_id:  # resumed create — harness already made, just poll
+            harness_id = row.resource_id
+            ctx.log(f"resuming — harness {harness_id} already created, polling status")
+        else:  # first create
+            harness = hc.create_harness(client, _params())
             harness_id = harness["harnessId"]
             row.resource_id = harness_id
             row.arn = harness.get("arn")

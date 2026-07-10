@@ -97,8 +97,13 @@ def _set_stage(
     db.commit()
 
 
-def create_deployment(db: Session, agent: Agent) -> tuple[Deployment, Job]:
-    """Create the Deployment (stages pending) + Job rows for one deploy run."""
+def create_deployment(
+    db: Session, agent: Agent, mode: str = "create"
+) -> tuple[Deployment, Job]:
+    """Create the Deployment (stages pending) + Job rows for one deploy run.
+
+    ``mode`` is "create" for a first deploy or "update" for an in-place
+    re-publish; the deploy stage reads it to choose Create* vs Update* APIs."""
     deployment = Deployment(
         agent_id=agent.id,
         stages=[{"name": s, "status": "pending", "detail": ""} for s in STAGE_ORDER],
@@ -107,7 +112,7 @@ def create_deployment(db: Session, agent: Agent) -> tuple[Deployment, Job]:
     db.flush()
     job = Job(
         type="deploy_agent",
-        payload={"agent_id": agent.id, "deployment_id": deployment.id},
+        payload={"agent_id": agent.id, "deployment_id": deployment.id, "mode": mode},
     )
     db.add(job)
     db.flush()
@@ -135,6 +140,7 @@ def execute_deploy_job(job_id: str) -> None:
 
         stages = get_method(agent.method)
         ctx = StageContext(agent_id=agent_id, deployment_id=deployment_id, job_id=job_id)
+        ctx.scratch["mode"] = job.payload.get("mode", "create")
 
         done = {s["name"] for s in deployment.stages if s["status"] in ("succeeded", "skipped")}
         for stage_name in STAGE_ORDER:

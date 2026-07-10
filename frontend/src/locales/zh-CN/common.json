@@ -9,7 +9,7 @@
     "operate": "运维",
     "phase02": "第二阶段",
     "overview": "总览",
-    "createAgent": "创建 Agent",
+    "createAgent": "Agent 管理",
     "registry": "注册中心",
     "chat": "对话演练场",
     "observability": "可观测",
@@ -79,8 +79,8 @@
     }
   },
   "create": {
-    "kicker": "// 自助发射台",
-    "title": "创建 Agent",
+    "kicker": "// AGENT 管理",
+    "title": "Agent 管理",
     "meta": "统一流水线 — 生成 → 打包 → 供给 → 部署 → 注册",
     "next": "下一步",
     "back": "返回",
@@ -145,7 +145,9 @@
       "title": "发射序列",
       "logTitle": "任务日志",
       "waiting": "等待任务事件……",
-      "newAgent": "再建一个"
+      "newAgent": "再建一个",
+      "detailsTitle": "部署详情",
+      "backToList": "返回列表"
     },
     "stages": {
       "generate": "生成",
@@ -154,7 +156,37 @@
       "deploy": "部署",
       "register": "注册"
     },
-    "launchFailedToast": "部署在 {{stage}} 阶段失败:{{msg}}"
+    "launchFailedToast": "部署在 {{stage}} 阶段失败:{{msg}}",
+    "editing": "正在编辑“{{name}}”。重新发布会就地更新——AgentCore 在同一资源上发布一个新版本（ARN 不变，DEFAULT 端点自动切到新版本），几乎无停机。",
+    "republish": "重新发布",
+    "republishConfirm": {
+      "title": "重新发布该 Agent？",
+      "body": "这会通过就地更新（UpdateHarness / UpdateAgentRuntime）以编辑后的配置发布“{{name}}”的一个新版本。ARN 保持不变，DEFAULT 端点切到新版本。"
+    },
+    "republishPanel": {
+      "title": "重新发布方案",
+      "sub": "就地 · 新版本",
+      "effect": "影响",
+      "effectV": "同 ARN · 新版本 · DEFAULT 自动切换"
+    },
+    "list": {
+      "title": "现有 AGENT",
+      "sub": "管理 · 编辑 · 重新发布",
+      "colName": "名称",
+      "colMethod": "方式",
+      "colStatus": "状态",
+      "colRev": "版本",
+      "colUpdated": "更新时间",
+      "colActions": "操作",
+      "edit": "编辑",
+      "chat": "对话",
+      "details": "详情",
+      "delete": "删除",
+      "empty": "还没有 Agent——请在上方创建。",
+      "deleted": "已删除 Agent。",
+      "confirmDeleteTitle": "删除该 Agent？",
+      "confirmDelete": "这会移除“{{name}}”及其 AWS 资源，且不可撤销。"
+    }
   },
   "registry": {
     "kicker": "// 发现层",
@@ -251,7 +283,9 @@
     "job.not_found": "未找到该任务",
     "validation.invalid_request": "请求校验失败",
     "http.404": "资源不存在",
-    "http.500": "服务器内部错误"
+    "http.500": "服务器内部错误",
+    "agent.redeploy_immutable": "重新发布时名称和方式不能变——如需变更请克隆为新 Agent。",
+    "agent.deploy_in_progress": "该 Agent 已有一个部署正在进行中。"
   },
   "chatPage": {
     "noAgents": "暂无运行中的 Agent — 请先部署",

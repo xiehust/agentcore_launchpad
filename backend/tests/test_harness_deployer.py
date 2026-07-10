@@ -56,11 +56,19 @@ class StubControl:
     def __init__(self, statuses):
         self.statuses = list(statuses)
         self.created_with = None
+        self.updated_with = None
+        self.version = "1"
         self.deleted = []
 
     def create_harness(self, **kwargs):
         self.created_with = kwargs
         return {"harness": {"harnessId": "h-123", "arn": "arn:h-123", "status": "CREATING"}}
+
+    def update_harness(self, **kwargs):
+        self.updated_with = kwargs
+        self.version = "2"  # UpdateHarness publishes a new version
+        return {"harness": {"harnessId": kwargs["harnessId"], "arn": "arn:h-123",
+                            "status": "UPDATING", "harnessVersion": self.version}}
 
     def get_harness(self, harnessId):
         status = self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
@@ -69,10 +77,47 @@ class StubControl:
                 "harnessId": harnessId,
                 "arn": "arn:h-123",
                 "status": status,
-                "harnessVersion": "1",
+                "harnessVersion": self.version,
                 "failureReason": "role cannot be assumed" if "FAILED" in status else None,
             }
         }
+
+
+def test_deploy_stage_update_mode_uses_update_harness(monkeypatch):
+    """Re-publish (mode=update) with a live resource must call UpdateHarness
+    (new version, same harnessId) — never CreateHarness."""
+    from app.core.db import SessionLocal
+    from app.deployer import harness as harness_deploy
+    from app.deployer.pipeline import StageContext
+    from app.models.ledger import Agent
+
+    db = SessionLocal()
+    agent = Agent(name="hr-assistant-v3", method="harness", status="active",
+                  resource_id="h-123", arn="arn:h-123", version="1",
+                  spec=spec().model_dump())
+    db.add(agent)
+    db.commit()
+    agent_id = agent.id
+    db.close()
+
+    stub = StubControl(["READY"])
+    monkeypatch.setattr(harness_deploy, "control_client", lambda: stub)
+
+    ctx = StageContext(agent_id=agent_id, deployment_id="d1", job_id="j1")
+    ctx.scratch["mode"] = "update"  # no create_params → stage regenerates them
+    db = SessionLocal()
+    agent = db.get(Agent, agent_id)
+    db.close()
+    result = harness_deploy._stage_deploy(ctx, agent)
+
+    assert stub.updated_with is not None and stub.created_with is None
+    assert stub.updated_with["harnessId"] == "h-123"
+    assert "harnessName" not in stub.updated_with  # update drops the immutable name
+    assert stub.updated_with["systemPrompt"] == [{"text": "You are an HR assistant."}]
+    assert "READY" in result.detail
+    db = SessionLocal()
+    assert db.get(Agent, agent_id).version == "2"  # new version recorded
+    db.close()
 
 
 def test_wait_ready_polls_to_ready():

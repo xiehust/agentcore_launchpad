@@ -93,22 +93,36 @@ def _stage_provision(ctx: StageContext, agent: Agent) -> StageResult:
 def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
     settings = get_settings()
     client = control_client()
+    mode = ctx.scratch.get("mode", "create")
     db = ctx.session()
     try:
         row = db.get(Agent, agent.id)
-        if row.resource_id:
+
+        def _kwargs() -> dict:
+            registry, repo, tag = _image_ref(settings, row)
+            spec = AgentSpec(**row.spec)
+            return {
+                "container_uri": ctx.scratch.get("image_uri") or f"{registry}/{repo}:{tag}",
+                "role_arn": ctx.scratch.get("execution_role_arn")
+                or settings.resources.get("execution_role_arn", ""),
+                "environment": spec.env or None,
+            }
+
+        if mode == "update" and row.resource_id:  # re-publish → UpdateAgentRuntime (new version)
+            runtime_id = row.resource_id
+            updated = rt.update_container_runtime(client, runtime_id=runtime_id, **_kwargs())
+            row.version = str(updated.get("agentRuntimeVersion", row.version or "1"))
+            db.commit()
+            ctx.log(
+                f"UpdateAgentRuntime accepted · runtimeId {runtime_id} · "
+                f"new version {row.version}"
+            )
+        elif row.resource_id:
             runtime_id = row.resource_id
             ctx.log(f"resuming — runtime {runtime_id} already created, polling status")
         else:
-            registry, repo, tag = _image_ref(settings, row)
-            spec = AgentSpec(**row.spec)
             created = rt.create_container_runtime(
-                client,
-                runtime_name=sanitize_runtime_name(row.name),
-                container_uri=ctx.scratch.get("image_uri") or f"{registry}/{repo}:{tag}",
-                role_arn=ctx.scratch.get("execution_role_arn")
-                or settings.resources.get("execution_role_arn", ""),
-                environment=spec.env or None,
+                client, runtime_name=sanitize_runtime_name(row.name), **_kwargs()
             )
             runtime_id = created["agentRuntimeId"]
             row.resource_id = runtime_id

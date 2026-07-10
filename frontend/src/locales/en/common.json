@@ -9,7 +9,7 @@
     "operate": "OPERATE",
     "phase02": "PHASE 02",
     "overview": "Overview",
-    "createAgent": "Create Agent",
+    "createAgent": "Agent Management",
     "registry": "Registry",
     "chat": "Chat Playground",
     "observability": "Observability",
@@ -79,8 +79,8 @@
     }
   },
   "create": {
-    "kicker": "// SELF-SERVICE LAUNCH",
-    "title": "Create Agent",
+    "kicker": "// AGENT MANAGEMENT",
+    "title": "Agent Management",
     "meta": "UNIFIED PIPELINE — GENERATE → PACKAGE → PROVISION → DEPLOY → REGISTER",
     "next": "NEXT",
     "back": "BACK",
@@ -145,7 +145,9 @@
       "title": "LAUNCH SEQUENCE",
       "logTitle": "JOB LOG",
       "waiting": "waiting for job events…",
-      "newAgent": "CREATE ANOTHER"
+      "newAgent": "CREATE ANOTHER",
+      "detailsTitle": "DEPLOYMENT DETAILS",
+      "backToList": "BACK TO LIST"
     },
     "stages": {
       "generate": "GENERATE",
@@ -154,7 +156,37 @@
       "deploy": "DEPLOY",
       "register": "REGISTER"
     },
-    "launchFailedToast": "Launch failed at {{stage}}: {{msg}}"
+    "launchFailedToast": "Launch failed at {{stage}}: {{msg}}",
+    "editing": "Editing “{{name}}”. Re-publishing updates it in place — AgentCore publishes a new version on the same resource (same ARN; the DEFAULT endpoint rolls over automatically), so downtime is near-zero.",
+    "republish": "RE-PUBLISH",
+    "republishConfirm": {
+      "title": "Re-publish agent?",
+      "body": "This publishes a new version of “{{name}}” with the edited config via an in-place update (UpdateHarness / UpdateAgentRuntime). The ARN stays the same and the DEFAULT endpoint rolls to the new version."
+    },
+    "republishPanel": {
+      "title": "RE-PUBLISH PLAN",
+      "sub": "in-place · new version",
+      "effect": "Effect",
+      "effectV": "same ARN · new version · DEFAULT rolls over"
+    },
+    "list": {
+      "title": "EXISTING AGENTS",
+      "sub": "manage · edit · re-publish",
+      "colName": "NAME",
+      "colMethod": "METHOD",
+      "colStatus": "STATUS",
+      "colRev": "REV",
+      "colUpdated": "UPDATED",
+      "colActions": "ACTIONS",
+      "edit": "EDIT",
+      "chat": "CHAT",
+      "details": "DETAILS",
+      "delete": "DELETE",
+      "empty": "No agents yet — create one above.",
+      "deleted": "Agent deleted.",
+      "confirmDeleteTitle": "Delete agent?",
+      "confirmDelete": "This removes “{{name}}” and its AWS resource. This cannot be undone."
+    }
   },
   "registry": {
     "kicker": "// DISCOVERY LAYER",
@@ -251,7 +283,9 @@
     "job.not_found": "Job not found",
     "validation.invalid_request": "Request validation failed",
     "http.404": "Resource not found",
-    "http.500": "Internal server error"
+    "http.500": "Internal server error",
+    "agent.redeploy_immutable": "Name and method cannot change on re-publish — clone to a new agent instead.",
+    "agent.deploy_in_progress": "A deployment is already in progress for this agent."
   },
   "chatPage": {
     "noAgents": "no active agents — deploy one first",
