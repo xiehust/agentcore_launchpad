@@ -23,10 +23,16 @@ class EvalDataset(Base):
 
     id: Mapped[str] = mapped_column(String(16), primary_key=True, default=_id)
     name: Mapped[str] = mapped_column(String(64))
-    kind: Mapped[str] = mapped_column(String(16), default="legacy")  # legacy prompt sets
+    kind: Mapped[str] = mapped_column(String(16), default="legacy")  # legacy|predefined
     locale: Mapped[str] = mapped_column(String(8), default="en")
+    description: Mapped[str] = mapped_column(Text, default="")
     items: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
-    # items: [{"prompt": str, "expected": str|None}]
+    # legacy items: [{"prompt": str, "expected": str|None}]
+    # predefined items (devguide scenario schema): [{"scenario_id", "turns":
+    #   [{"input", "expected_response"?}], "expected_trajectory"?: [str],
+    #   "assertions"?: [str], "metadata"?: {}}]
+    cloud: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    # cloud: {dataset_id, arn, status, synced_at, failure_reason} — last AWS sync
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 

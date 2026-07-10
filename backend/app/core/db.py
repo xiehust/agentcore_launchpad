@@ -53,3 +53,13 @@ def _migrate(bind) -> None:
                 conn.execute(
                     text("ALTER TABLE agents ADD COLUMN registry_record_id VARCHAR(64)")
                 )
+    if "eval_datasets" in inspector.get_table_names():
+        existing = {c["name"] for c in inspector.get_columns("eval_datasets")}
+        additions = {
+            "description": "ALTER TABLE eval_datasets ADD COLUMN description TEXT DEFAULT ''",
+            "cloud": "ALTER TABLE eval_datasets ADD COLUMN cloud JSON",
+        }
+        for column, ddl in additions.items():
+            if column not in existing:
+                with bind.begin() as conn:
+                    conn.execute(text(ddl))
