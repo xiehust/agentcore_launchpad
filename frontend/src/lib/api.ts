@@ -83,6 +83,172 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
+/* ── observability ─────────────────────────────────────────────────────── */
+
+export interface ObsCache {
+  hit: boolean;
+  age_seconds: number;
+}
+
+export interface ObsTokens {
+  input: number;
+  output: number;
+  total: number;
+  cache_read?: number;
+  cache_write?: number;
+}
+
+export interface ObsDashboard {
+  range: string;
+  tiles: {
+    traces: { total: number; ok: number; error: number };
+    sessions: { total: number; agents: number };
+    error_rate: number;
+    latency: { p50_ms: number; p95_ms: number };
+    tokens: { input: number; output: number; total: number; est_cost_usd: number | null };
+  };
+  series: { bucket: string; traces: number; errors: number; p50_ms: number; p95_ms: number }[];
+  tokens_by_model: {
+    model: string;
+    input: number;
+    output: number;
+    total: number;
+    est_cost_usd: number | null;
+  }[];
+  top_tools: { tool: string; calls: number; errors: number; success_rate: number | null }[];
+  cache: ObsCache;
+}
+
+export interface ObsTraceRow {
+  trace_id: string;
+  time: string | null;
+  root_operation: string;
+  service: string | null;
+  agent: string;
+  session_id: string | null;
+  duration_ms: number;
+  span_count: number;
+  llm_count: number;
+  error_count: number;
+  status: "ok" | "error";
+  model: string | null;
+  multi_model: boolean;
+  tokens: ObsTokens;
+  est_cost_usd: number | null;
+}
+
+export interface ObsTraces {
+  range: string;
+  traces: ObsTraceRow[];
+  count: number;
+  limit: number;
+  cache: ObsCache;
+}
+
+export interface ObsSpan {
+  span_id: string | null;
+  parent_span_id: string | null;
+  name: string;
+  category: "llm" | "tool" | "memory" | "gateway" | "http" | "agent" | "other";
+  kind: string | null;
+  status: string;
+  start_offset_ms: number;
+  duration_ms: number;
+  offset_pct: number;
+  width_pct: number;
+  model: string | null;
+  finish_reason: string | string[] | null;
+  tool_name: string | null;
+  tokens: { input: number; output: number; cache_read: number; cache_write: number } | null;
+  est_cost_usd: number | null;
+}
+
+export interface ObsSpanNode extends ObsSpan {
+  depth: number;
+  children: ObsSpanNode[];
+}
+
+export interface ObsTraceDetail {
+  trace_id: string;
+  range: string;
+  meta: {
+    root_operation: string | null;
+    service: string | null;
+    agent: string;
+    session_id: string | null;
+    start: string | null;
+    duration_ms: number;
+    span_count: number;
+    llm_count: number;
+    status: "ok" | "error";
+    tokens: ObsTokens;
+    est_cost_usd: number | null;
+  };
+  tree: ObsSpanNode[];
+  spans: (ObsSpan & { attributes: Record<string, unknown> })[];
+  cache: ObsCache;
+}
+
+export interface ObsSessionRow {
+  session_id: string;
+  service: string | null;
+  agent: string;
+  traces: number;
+  llm_calls: number;
+  errors: number;
+  tokens: ObsTokens;
+  est_cost_usd: number | null;
+  first: string | null;
+  last: string | null;
+  platform: boolean;
+}
+
+export interface ObsSessions {
+  range: string;
+  sessions: ObsSessionRow[];
+  count: number;
+  limit: number;
+  cache: ObsCache;
+}
+
+export interface ObsTranscriptTurn {
+  role: string;
+  text: string;
+  at: string;
+}
+
+export interface ObsTranscript {
+  available: boolean;
+  reason?: string;
+  detail?: string;
+  actor_id?: string;
+  agent_name?: string | null;
+  turns?: ObsTranscriptTurn[];
+  long_term_records?: number | null;
+}
+
+export interface ObsSessionDetail {
+  session_id: string;
+  range: string;
+  summary: {
+    agent: string | null;
+    traces: number;
+    llm_calls: number;
+    errors: number;
+    tokens: ObsTokens;
+    est_cost_usd: number | null;
+    first: string | null;
+    last: string | null;
+  };
+  traces: ObsTraceRow[];
+  transcript: ObsTranscript;
+  cache: ObsCache;
+}
+
+function obsQuery(range: string, force: boolean): string {
+  return `range=${encodeURIComponent(range)}${force ? "&force=true" : ""}`;
+}
+
 export interface OverviewInfo {
   registry_assets: { agents: number; tools: number; skills: number; total: number };
   active_sessions: number;
@@ -109,4 +275,18 @@ export const api = {
     ),
   deleteAgent: (id: string) =>
     request<{ deleted: boolean }>(`/api/agents/${id}`, { method: "DELETE" }),
+  obsDashboard: (range: string, force = false) =>
+    request<ObsDashboard>(`/api/observability/dashboard?${obsQuery(range, force)}`),
+  obsTraces: (range: string, force = false) =>
+    request<ObsTraces>(`/api/observability/traces?${obsQuery(range, force)}`),
+  obsTrace: (traceId: string, range: string, force = false) =>
+    request<ObsTraceDetail>(
+      `/api/observability/traces/${encodeURIComponent(traceId)}?${obsQuery(range, force)}`,
+    ),
+  obsSessions: (range: string, force = false) =>
+    request<ObsSessions>(`/api/observability/sessions?${obsQuery(range, force)}`),
+  obsSession: (sessionId: string, range: string, force = false) =>
+    request<ObsSessionDetail>(
+      `/api/observability/sessions/${encodeURIComponent(sessionId)}?${obsQuery(range, force)}`,
+    ),
 };

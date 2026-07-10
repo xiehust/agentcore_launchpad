@@ -12,6 +12,7 @@
     "createAgent": "Create Agent",
     "registry": "Registry",
     "chat": "Chat Playground",
+    "observability": "Observability",
     "evaluation": "Evaluation",
     "governance": "Governance",
     "payments": "Payments",
@@ -340,6 +341,100 @@
     "confirmCleanup": {
       "title": "Clean up experiment",
       "body": "This deletes the experiment's AWS resources (challenger runtime, gateway targets, A/B tests, online evaluators). This cannot be undone."
+    }
+  },
+  "obs": {
+    "kicker": "// TELEMETRY LAYER",
+    "title": "Observability",
+    "meta": "AWS/SPANS · TRANSACTION SEARCH · BEDROCK-AGENTCORE METRICS",
+    "tabs": {
+      "dashboard": "DASHBOARD",
+      "sessions": "SESSIONS",
+      "traces": "TRACES"
+    },
+    "cachedAgo": "cached {{s}}s ago",
+    "refresh": "REFRESH",
+    "rangeLabel": "Time range",
+    "loadFailed": "Observability query failed: {{msg}}",
+    "retry": "RETRY",
+    "tiles": {
+      "traces": "TRACES",
+      "okCount": "{{count}} ok",
+      "errCount": "{{count}} error",
+      "sessions": "SESSIONS",
+      "agentsActive": "{{count}} agents active",
+      "errorRate": "ERROR RATE",
+      "errorOf": "{{errors}} of {{total}} traces",
+      "latency": "LATENCY P50 / P95",
+      "latencyFoot": "root spans",
+      "tokens": "TOKENS · EST COST",
+      "tokensInOut": "{{in}} in · {{out}} out"
+    },
+    "charts": {
+      "trafficTitle": "TRAFFIC",
+      "trafficSub": "traces per bucket · errors overlaid",
+      "latencyTitle": "LATENCY",
+      "latencySub": "root-span percentiles",
+      "tokensTitle": "TOKENS BY MODEL",
+      "tokensSub": "gen_ai.client.token.usage · in / out",
+      "toolsTitle": "TOP TOOLS",
+      "toolsSub": "execute_tool spans · success rate",
+      "noData": "NO TRACES IN RANGE",
+      "noTokens": "NO TOKEN METRICS IN RANGE",
+      "noTools": "NO TOOL CALLS IN RANGE",
+      "now": "NOW",
+      "priceNote": "price map: config/launchpad.yaml · model_prices",
+      "callCount": "{{count}} calls"
+    },
+    "legend": {
+      "traces": "TRACES",
+      "errors": "ERRORS",
+      "p50": "P50",
+      "p95": "P95",
+      "input": "INPUT",
+      "output": "OUTPUT",
+      "success": "SUCCESS",
+      "error": "ERROR"
+    },
+    "status": {
+      "ok": "OK",
+      "error": "ERROR",
+      "timeout": "TIMEOUT"
+    },
+    "traces": {
+      "agentFilter": "Filter by agent",
+      "agentAll": "AGENT: ALL",
+      "searchPlaceholder": "⌕ filter by session.id / trace id…",
+      "scanned": "{{count}} traces · scanned {{range}}",
+      "empty": "NO TRACES IN RANGE — INVOKE AN AGENT TO GENERATE SPANS",
+      "noMatch": "NO TRACES MATCH THE ACTIVE FILTERS",
+      "cols": {
+        "time": "TIME",
+        "rootOp": "ROOT OPERATION",
+        "agent": "AGENT",
+        "session": "SESSION",
+        "duration": "DURATION",
+        "spans": "SPANS",
+        "llm": "LLM",
+        "tokensCost": "TOKENS · COST",
+        "status": "STATUS"
+      }
+    },
+    "sessions": {
+      "copy": "Copy full session id",
+      "copied": "session id copied",
+      "copyFailed": "copy failed",
+      "empty": "NO SESSIONS IN RANGE — CHAT WITH AN AGENT TO START ONE",
+      "cols": {
+        "session": "SESSION",
+        "agent": "AGENT",
+        "traces": "TRACES",
+        "llmCalls": "LLM CALLS",
+        "tokensCost": "TOKENS · COST",
+        "first": "FIRST",
+        "last": "LAST",
+        "errors": "ERRORS"
+      }
     }
   },
   "common": {

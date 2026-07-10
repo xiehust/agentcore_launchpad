@@ -27,11 +27,11 @@ export function Sidebar({ health }: { health: HealthInfo | null }) {
       {NAV_ENTRIES.slice(PLATFORM_COUNT).map(renderLink)}
       <div className="label">{t("nav.phase02")}</div>
       <div className="nav-item dim">
-        <span className="idx">07</span>
+        <span className="idx">08</span>
         {t("nav.payments")}
       </div>
       <div className="nav-item dim">
-        <span className="idx">08</span>
+        <span className="idx">09</span>
         {t("nav.settings")}
       </div>
       <div className="sys">

@@ -12,6 +12,7 @@
     "createAgent": "创建 Agent",
     "registry": "注册中心",
     "chat": "对话演练场",
+    "observability": "可观测",
     "evaluation": "评估",
     "governance": "治理",
     "payments": "支付",
@@ -340,6 +341,100 @@
     "confirmCleanup": {
       "title": "清理实验",
       "body": "将删除该实验的 AWS 资源(挑战者运行时、网关目标、A/B 测试、在线评估器),此操作不可撤销。"
+    }
+  },
+  "obs": {
+    "kicker": "// 遥测层",
+    "title": "可观测",
+    "meta": "AWS/SPANS · TRANSACTION SEARCH · BEDROCK-AGENTCORE 指标",
+    "tabs": {
+      "dashboard": "仪表盘",
+      "sessions": "会话",
+      "traces": "追踪"
+    },
+    "cachedAgo": "缓存于 {{s}} 秒前",
+    "refresh": "刷新",
+    "rangeLabel": "时间范围",
+    "loadFailed": "可观测查询失败:{{msg}}",
+    "retry": "重试",
+    "tiles": {
+      "traces": "追踪",
+      "okCount": "{{count}} 正常",
+      "errCount": "{{count}} 错误",
+      "sessions": "会话",
+      "agentsActive": "{{count}} 个 Agent 活跃",
+      "errorRate": "错误率",
+      "errorOf": "{{total}} 条追踪中 {{errors}} 条出错",
+      "latency": "延迟 P50 / P95",
+      "latencyFoot": "根 Span",
+      "tokens": "TOKEN · 预估成本",
+      "tokensInOut": "输入 {{in}} · 输出 {{out}}"
+    },
+    "charts": {
+      "trafficTitle": "流量",
+      "trafficSub": "每时段追踪数 · 叠加错误",
+      "latencyTitle": "延迟",
+      "latencySub": "根 Span 百分位",
+      "tokensTitle": "各模型 TOKEN 用量",
+      "tokensSub": "gen_ai.client.token.usage · 输入 / 输出",
+      "toolsTitle": "热门工具",
+      "toolsSub": "execute_tool Span · 成功率",
+      "noData": "该时间范围内无追踪",
+      "noTokens": "该时间范围内无 TOKEN 指标",
+      "noTools": "该时间范围内无工具调用",
+      "now": "现在",
+      "priceNote": "价格表:config/launchpad.yaml · model_prices",
+      "callCount": "{{count}} 次调用"
+    },
+    "legend": {
+      "traces": "追踪",
+      "errors": "错误",
+      "p50": "P50",
+      "p95": "P95",
+      "input": "输入",
+      "output": "输出",
+      "success": "成功",
+      "error": "错误"
+    },
+    "status": {
+      "ok": "正常",
+      "error": "错误",
+      "timeout": "超时"
+    },
+    "traces": {
+      "agentFilter": "按 Agent 筛选",
+      "agentAll": "AGENT:全部",
+      "searchPlaceholder": "⌕ 按 session.id / trace id 筛选…",
+      "scanned": "{{count}} 条追踪 · 扫描范围 {{range}}",
+      "empty": "该时间范围内无追踪 — 调用一次 Agent 即可生成 Span",
+      "noMatch": "没有符合当前筛选条件的追踪",
+      "cols": {
+        "time": "时间",
+        "rootOp": "根操作",
+        "agent": "AGENT",
+        "session": "会话",
+        "duration": "耗时",
+        "spans": "SPAN 数",
+        "llm": "LLM",
+        "tokensCost": "TOKEN · 成本",
+        "status": "状态"
+      }
+    },
+    "sessions": {
+      "copy": "复制完整会话 ID",
+      "copied": "会话 ID 已复制",
+      "copyFailed": "复制失败",
+      "empty": "该时间范围内无会话 — 与 Agent 对话即可创建",
+      "cols": {
+        "session": "会话",
+        "agent": "AGENT",
+        "traces": "追踪数",
+        "llmCalls": "LLM 调用",
+        "tokensCost": "TOKEN · 成本",
+        "first": "开始",
+        "last": "最近",
+        "errors": "错误"
+      }
     }
   },
   "common": {
