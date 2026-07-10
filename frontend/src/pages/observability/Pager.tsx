@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 
-export const PAGE_SIZES = [50, 100, 200] as const;
-export const DEFAULT_PAGE_SIZE: number = PAGE_SIZES[0];
+export const PAGE_SIZES = [20, 50, 100, 200] as const;
+export const DEFAULT_PAGE_SIZE: number = PAGE_SIZES[1];
 
 interface PagerProps {
   total: number;
