@@ -76,10 +76,10 @@ main{padding:26px 28px 60px;max-width:1460px;width:100%;margin:0 auto}
 .panel.brk::before,.panel.brk::after{content:"";position:absolute;width:11px;height:11px;pointer-events:none}
 .panel.brk::before{top:-1px;left:-1px;border-top:2px solid var(--amber);border-left:2px solid var(--amber)}
 .panel.brk::after{bottom:-1px;right:-1px;border-bottom:2px solid var(--amber);border-right:2px solid var(--amber)}
-.phead{display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line)}
+.phead{display:flex;align-items:center;gap:6px 10px;padding:13px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap}
 .phead h2{font-size:12px;font-weight:700;letter-spacing:.09em;font-stretch:112%}
 .phead .sub{font-family:var(--mono);font-size:10px;color:var(--ink-3)}
-.phead .end{margin-left:auto;display:flex;gap:8px;align-items:center}
+.phead .end{margin-left:auto;display:flex;gap:6px 8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;min-width:0}
 .pbody{padding:16px}
 
 /* chips / status — icon + label always, never color alone */
