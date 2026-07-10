@@ -1,0 +1,174 @@
+import type { CSSProperties } from "react";
+import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router-dom";
+
+import { Btn, Chip, Panel } from "../../components";
+import type { ObsSessionDetail } from "../../lib/api";
+import { api, ApiError } from "../../lib/api";
+import { fmtCost, fmtDuration, fmtInt, shortId } from "./format";
+
+export const SESSION_ID_RE = /^[A-Za-z0-9_-]{8,128}$/;
+
+/** Memory event timestamps arrive as python datetime strings — pull HH:MM:SS. */
+function turnClock(at: string): string {
+  const match = at.match(/\d{2}:\d{2}:\d{2}/);
+  return match ? match[0] : "";
+}
+
+interface SessionDetailViewProps {
+  sessionId: string;
+  range: string;
+  onOpenTrace: (traceId: string) => void;
+}
+
+export function SessionDetailView({ sessionId, range, onOpenTrace }: SessionDetailViewProps) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const [detail, setDetail] = useState<ObsSessionDetail | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [invalid, setInvalid] = useState(false);
+
+  useEffect(() => {
+    setDetail(null);
+    setError(null);
+    if (!SESSION_ID_RE.test(sessionId)) {
+      setInvalid(true);
+      return;
+    }
+    setInvalid(false);
+    api
+      .obsSession(sessionId, range)
+      .then(setDetail)
+      .catch((err: unknown) => {
+        if (err instanceof ApiError && err.code === "validation.invalid_request") {
+          setInvalid(true);
+        } else {
+          setError(err instanceof Error ? err.message : String(err));
+        }
+      });
+  }, [sessionId, range]);
+
+  if (invalid) {
+    return (
+      <Panel brk style={{ marginTop: 14 } as CSSProperties}>
+        <div className="empty">{t("obs.session.notFound")}</div>
+      </Panel>
+    );
+  }
+  if (error != null) {
+    return (
+      <Panel brk style={{ marginTop: 14 } as CSSProperties}>
+        <div className="obs-error">
+          <span>{t("obs.loadFailed", { msg: error })}</span>
+        </div>
+      </Panel>
+    );
+  }
+  if (detail == null) {
+    return (
+      <Panel brk style={{ marginTop: 14 } as CSSProperties}>
+        <div className="loading-line">{t("common.loading")}</div>
+      </Panel>
+    );
+  }
+
+  const { transcript, traces, summary } = detail;
+  if (traces.length === 0 && !transcript.available) {
+    return (
+      <Panel brk style={{ marginTop: 14 } as CSSProperties}>
+        <div className="empty">{t("obs.session.notFound")}</div>
+      </Panel>
+    );
+  }
+  const agentLabel = (transcript.agent_name ?? summary.agent ?? "agent").toUpperCase();
+
+  return (
+    <div className="grid-31" style={{ marginTop: 14 }}>
+      <Panel
+        brk
+        title={t("obs.session.conversation")}
+        sub={
+          transcript.available
+            ? t("obs.session.conversationSub", { actor: transcript.actor_id ?? "—" })
+            : shortId(sessionId, 20)
+        }
+        end={
+          transcript.available && transcript.agent_id != null ? (
+            <Btn
+              onClick={() =>
+                navigate(
+                  `/chat?agent=${encodeURIComponent(transcript.agent_id ?? "")}&session=${encodeURIComponent(sessionId)}`,
+                )
+              }
+            >
+              {t("obs.session.openInChat")} ↗
+            </Btn>
+          ) : undefined
+        }
+        style={{ "--i": 0 } as CSSProperties}
+      >
+        {!transcript.available ? (
+          <div className="empty">{t("obs.session.noTranscript")}</div>
+        ) : (transcript.turns ?? []).length === 0 ? (
+          <div className="empty">{t("obs.session.noTurns")}</div>
+        ) : (
+          <>
+            {(transcript.turns ?? []).map((turn, i) => {
+              const isUser = turn.role === "USER";
+              return (
+                <div className={`turn ${isUser ? "user" : "agent"}`} key={i}>
+                  <div className="who">
+                    {isUser ? t("obs.session.user") : agentLabel} · {turnClock(turn.at)}
+                  </div>
+                  <div className="msg">{turn.text}</div>
+                </div>
+              );
+            })}
+            {(transcript.long_term_records ?? 0) > 0 && (
+              <div className="memnote">
+                ◈{" "}
+                {t("obs.session.memnote", {
+                  count: transcript.long_term_records ?? 0,
+                  actor: transcript.actor_id ?? "—",
+                })}
+              </div>
+            )}
+          </>
+        )}
+      </Panel>
+      <Panel
+        title={t("obs.session.tracesTitle")}
+        sub={t("obs.session.tracesSub", { count: traces.length })}
+        style={{ "--i": 1 } as CSSProperties}
+      >
+        {traces.length === 0 ? (
+          <div className="empty">{t("obs.session.noTraces")}</div>
+        ) : (
+          traces.map((tr) => (
+            <button className="tracecard" key={tr.trace_id} onClick={() => onOpenTrace(tr.trace_id)}>
+              <div className="tc-h">
+                <span className="cat llm" />
+                {tr.time != null ? new Date(tr.time).toLocaleTimeString("en-GB", { hour12: false }) : "—"}{" "}
+                · {tr.root_operation}
+                {tr.status === "ok" ? (
+                  <Chip tone="good" icon="●" style={{ marginLeft: "auto" }}>
+                    {t("obs.status.ok")}
+                  </Chip>
+                ) : (
+                  <Chip tone="crit" icon="✕" style={{ marginLeft: "auto" }}>
+                    {t("obs.status.error")}
+                  </Chip>
+                )}
+              </div>
+              <div className="tc-m">
+                {fmtDuration(tr.duration_ms)} · {tr.span_count} spans · {tr.llm_count} llm ·{" "}
+                {fmtInt(tr.tokens.total)} tok · ≈{fmtCost(tr.est_cost_usd)}
+              </div>
+            </button>
+          ))
+        )}
+      </Panel>
+    </div>
+  );
+}

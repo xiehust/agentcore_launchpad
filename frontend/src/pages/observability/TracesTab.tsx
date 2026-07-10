@@ -26,14 +26,14 @@ function statusChip(row: ObsTraceRow, t: (k: string) => string) {
 interface TracesTabProps {
   data: ObsTraces;
   onOpenSession: (sessionId: string) => void;
+  onOpenTrace: (traceId: string) => void;
 }
 
-export function TracesTab({ data, onOpenSession }: TracesTabProps) {
+export function TracesTab({ data, onOpenSession, onOpenTrace }: TracesTabProps) {
   const { t } = useTranslation();
   const [agent, setAgent] = useState("all");
   const [status, setStatus] = useState<"all" | "ok" | "error">("all");
   const [query, setQuery] = useState("");
-  const [selected, setSelected] = useState<string | null>(null);
 
   const agents = useMemo(
     () => [...new Set(data.traces.map((r) => r.agent))].sort(),
@@ -110,8 +110,8 @@ export function TracesTab({ data, onOpenSession }: TracesTabProps) {
         {rows.map((r) => (
           <tr
             key={r.trace_id}
-            className={`rowlink${selected === r.trace_id ? " sel" : ""}`}
-            onClick={() => setSelected(r.trace_id)}
+            className="rowlink"
+            onClick={() => onOpenTrace(r.trace_id)}
           >
             <td className="mono dim">{fmtClock(r.time)}</td>
             <td className="pri">{r.root_operation}</td>

@@ -863,6 +863,7 @@ def session_transcript(db: Session, session_id: str) -> dict[str, Any]:
     return {
         "available": True,
         "actor_id": row.actor_id,
+        "agent_id": row.agent_id,
         "agent_name": agent.name if agent else None,
         "turns": turns,
         "long_term_records": long_term,

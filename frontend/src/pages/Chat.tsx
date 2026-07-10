@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Link, useSearchParams } from "react-router-dom";
 
 import { Btn, Chip, ConfirmDialog, Panel, ViewHead } from "../components";
 import type { AgentInfo } from "../lib/api";
@@ -72,11 +73,16 @@ async function* sseEvents(res: Response): AsyncGenerator<{ event: string; data: 
 
 export function Chat() {
   const { t } = useTranslation();
+  // Cross-link entry (from Observability session detail): preselect the agent
+  // and resume the session; unknown values degrade to the defaults gracefully.
+  const [searchParams] = useSearchParams();
+  const linkedAgent = searchParams.get("agent");
+  const linkedSession = searchParams.get("session");
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [agentId, setAgentId] = useState<string>("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
-  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(linkedSession);
   const [busy, setBusy] = useState(false);
   const [memory, setMemory] = useState<MemorySummary | null>(null);
   const [trace, setTrace] = useState<TraceInfo | null>(null);
@@ -91,7 +97,9 @@ export function Chat() {
       .then((res) => {
         const active = res.agents.filter((a) => a.status === "active");
         setAgents(active);
-        if (active.length && !agentId) setAgentId(active[0].id);
+        const linked = linkedAgent && active.find((a) => a.id === linkedAgent);
+        if (linked) setAgentId(linked.id);
+        else if (active.length && !agentId) setAgentId(active[0].id);
       })
       .catch(() => {});
     void loadKeys();
@@ -347,6 +355,16 @@ export function Chat() {
             sub={sessionId ? `${sessionId.slice(0, 12)}…` : "aws/spans"}
             end={
               <>
+                {sessionId && (
+                  <Link
+                    to={`/observability?session=${encodeURIComponent(sessionId)}`}
+                    className="chip amber"
+                    style={{ textDecoration: "none" }}
+                    data-testid="open-in-obs"
+                  >
+                    {t("chatPage.openInObs")} ↗
+                  </Link>
+                )}
                 {trace && (
                   <a
                     href={trace.cloudwatch_url}

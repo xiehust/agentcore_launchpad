@@ -279,7 +279,8 @@
     "confirmDisableKey": {
       "title": "停用 API 密钥",
       "body": "使用“{{name}}”的客户端将立即收到 401。之后可以重新启用。"
-    }
+    },
+    "openInObs": "在可观测中打开"
   },
   "evalPage": {
     "metaLive": "批量 + 洞察 · LLM 评审 · 每账户 1 个批任务 — 队列托管",
@@ -435,6 +436,59 @@
         "last": "最近",
         "errors": "错误"
       }
+    },
+    "categories": {
+      "llm": "LLM",
+      "tool": "工具",
+      "memory": "记忆",
+      "gateway": "网关",
+      "http": "HTTP",
+      "agent": "AGENT",
+      "other": "其他"
+    },
+    "waterfall": {
+      "back": "‹ 追踪",
+      "traceLabel": "追踪",
+      "sessionLabel": "会话",
+      "title": "瀑布图",
+      "sub": "SPAN 树 · 0 → {{dur}}",
+      "notFound": "未找到该追踪 — 请检查 ID 或扩大时间范围",
+      "cols": {
+        "span": "SPAN",
+        "timeline": "时间线",
+        "dur": "耗时"
+      }
+    },
+    "drawer": {
+      "title": "SPAN",
+      "operation": "操作",
+      "model": "模型",
+      "provider": "提供方",
+      "finishReason": "结束原因",
+      "duration": "耗时",
+      "status": "状态",
+      "tokenUsage": "TOKEN 用量",
+      "input": "输入",
+      "output": "输出",
+      "cacheRw": "缓存 读 / 写",
+      "estCost": "预估成本",
+      "tool": "工具",
+      "toolName": "名称",
+      "toolStatus": "状态",
+      "rawAttrs": "原始属性({{count}})"
+    },
+    "session": {
+      "conversation": "对话",
+      "conversationSub": "AgentCore 记忆 · ListEvents · actor {{actor}}",
+      "openInChat": "在对话演练场打开",
+      "user": "用户",
+      "memnote": "长期记忆:已为 actor {{actor}} 提取 {{count}} 条记录",
+      "noTranscript": "无记忆转录 — 外部会话或未启用记忆",
+      "noTurns": "尚未存储任何对话轮次",
+      "notFound": "未找到该会话 — 请检查 ID 或扩大时间范围",
+      "tracesTitle": "会话内追踪",
+      "tracesSub": "{{count}} · 最新在前",
+      "noTraces": "该时间范围内此会话无追踪"
     }
   },
   "common": {

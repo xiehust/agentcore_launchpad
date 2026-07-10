@@ -222,6 +222,7 @@ export interface ObsTranscript {
   reason?: string;
   detail?: string;
   actor_id?: string;
+  agent_id?: string;
   agent_name?: string | null;
   turns?: ObsTranscriptTurn[];
   long_term_records?: number | null;

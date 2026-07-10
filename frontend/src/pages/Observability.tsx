@@ -6,7 +6,9 @@ import { Btn, Panel, useToast, ViewHead } from "../components";
 import type { ObsDashboard, ObsSessions, ObsTraces } from "../lib/api";
 import { api } from "../lib/api";
 import { DashboardTab } from "./observability/DashboardTab";
+import { SessionDetailView } from "./observability/SessionDetailView";
 import { SessionsTab } from "./observability/SessionsTab";
+import { TraceDetailView } from "./observability/TraceDetailView";
 import { TracesTab } from "./observability/TracesTab";
 
 const RANGES = ["1h", "6h", "24h", "7d"] as const;
@@ -18,9 +20,18 @@ export function Observability() {
   const { t } = useTranslation();
   const toast = useToast();
   const [params, setParams] = useSearchParams();
-  const tabParam = params.get("tab") as TabKey | null;
-  const tab: TabKey = tabParam && TABS.includes(tabParam) ? tabParam : "dashboard";
+  const traceId = params.get("trace");
   const selectedSession = params.get("session");
+  const tabParam = params.get("tab") as TabKey | null;
+  // Deep links: ?trace= implies the traces tab, ?session= the sessions tab.
+  const tab: TabKey =
+    tabParam && TABS.includes(tabParam)
+      ? tabParam
+      : traceId
+        ? "traces"
+        : selectedSession
+          ? "sessions"
+          : "dashboard";
 
   const [range, setRange] = useState<RangeKey>("24h");
   const [dashboard, setDashboard] = useState<ObsDashboard | null>(null);
@@ -73,8 +84,9 @@ export function Observability() {
   );
 
   useEffect(() => {
+    if (traceId) return; // waterfall view owns its own fetch
     load(false);
-  }, [load]);
+  }, [load, traceId]);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -85,6 +97,8 @@ export function Observability() {
     setParams((prev) => {
       const p = new URLSearchParams(prev);
       p.set("tab", next);
+      p.delete("trace");
+      if (next !== "sessions") p.delete("session");
       return p;
     });
   };
@@ -94,6 +108,16 @@ export function Observability() {
       const p = new URLSearchParams(prev);
       p.set("tab", "sessions");
       p.set("session", sessionId);
+      p.delete("trace");
+      return p;
+    });
+  };
+
+  const openTrace = (id: string) => {
+    setParams((prev) => {
+      const p = new URLSearchParams(prev);
+      p.set("tab", "traces");
+      p.set("trace", id);
       return p;
     });
   };
@@ -104,6 +128,20 @@ export function Observability() {
     cacheAge != null && fetchedAt != null
       ? Math.max(0, Math.round(cacheAge + (now - fetchedAt) / 1000))
       : null;
+
+  if (traceId != null) {
+    return (
+      <section>
+        <ViewHead kicker={t("obs.kicker")} title={t("obs.title")} meta={t("obs.meta")} />
+        <TraceDetailView
+          traceId={traceId}
+          range={range}
+          onBack={() => switchTab("traces")}
+          onOpenSession={openSession}
+        />
+      </section>
+    );
+  }
 
   return (
     <section>
@@ -157,10 +195,13 @@ export function Observability() {
       ) : tab === "dashboard" && dashboard ? (
         <DashboardTab data={dashboard} />
       ) : tab === "traces" && traces ? (
-        <TracesTab data={traces} onOpenSession={openSession} />
+        <TracesTab data={traces} onOpenSession={openSession} onOpenTrace={openTrace} />
       ) : tab === "sessions" && sessions ? (
         <SessionsTab data={sessions} selected={selectedSession} onSelect={openSession} />
       ) : null}
+      {tab === "sessions" && selectedSession != null && (
+        <SessionDetailView sessionId={selectedSession} range={range} onOpenTrace={openTrace} />
+      )}
     </section>
   );
 }
