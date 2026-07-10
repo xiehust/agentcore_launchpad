@@ -64,6 +64,13 @@ export function Registry() {
   const [searching, setSearching] = useState(false);
   const [busy, setBusy] = useState(false);
   const [confirmDisable, setConfirmDisable] = useState<RegistryRecord | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<RegistryRecord | null>(null);
+  const [registering, setRegistering] = useState(false);
+  const [regType, setRegType] = useState<"MCP" | "AGENT_SKILLS">("MCP");
+  const [regName, setRegName] = useState("");
+  const [regDesc, setRegDesc] = useState("");
+  const [regUrl, setRegUrl] = useState("");
+  const [regMd, setRegMd] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -98,6 +105,7 @@ export function Registry() {
   };
 
   const select = async (record: RegistryRecord) => {
+    setRegistering(false);
     setSelected(record);
     try {
       const res = await fetch(`/api/registry/records/${record.record_id}`);
@@ -118,6 +126,68 @@ export function Registry() {
       if (res.ok) {
         const updated = (await res.json()) as RegistryRecord;
         setSelected(updated);
+        void load();
+      } else {
+        const env = (await res.json().catch(() => ({}))) as { message?: string };
+        toast(t("common.actionFailed", { msg: env.message ?? `HTTP ${res.status}` }));
+      }
+    } catch (err) {
+      toast(t("common.actionFailed", { msg: String(err) }));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const regValid =
+    /^[a-z][a-z0-9-]{2,63}$/.test(regName) &&
+    (regType === "MCP" ? /^https?:\/\/.+/.test(regUrl) : regMd.trim().length > 0);
+
+  const submitRegistration = async () => {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/registry/records", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: regType,
+          name: regName,
+          description: regDesc,
+          ...(regType === "MCP" ? { url: regUrl } : { skill_md: regMd }),
+        }),
+      });
+      const body = (await res.json().catch(() => ({}))) as RegistryRecord & {
+        message?: string;
+      };
+      if (!res.ok) {
+        toast(t("common.actionFailed", { msg: body.message ?? `HTTP ${res.status}` }));
+        return;
+      }
+      toast(t("registry.register.done", { name: regName }));
+      setRegistering(false);
+      setRegName("");
+      setRegDesc("");
+      setRegUrl("");
+      setRegMd("");
+      setTab(regType);
+      setSearching(false);
+      await load();
+      setSelected(body);
+    } catch (err) {
+      toast(t("common.actionFailed", { msg: String(err) }));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteRecord = async (record: RegistryRecord) => {
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/registry/records/${record.record_id}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        toast(t("registry.deleted", { name: record.name }));
+        setSelected(null);
         void load();
       } else {
         const env = (await res.json().catch(() => ({}))) as { message?: string };
@@ -210,6 +280,19 @@ export function Registry() {
             </button>
           ))}
           {searching && <span className="tab active">{t("registry.searchResults")}</span>}
+          <div style={{ marginLeft: "auto", alignSelf: "center" }}>
+            <Btn
+              primary={!registering}
+              onClick={() => {
+                setSelected(null);
+                setRegistering((v) => !v);
+                if (tab !== "A2A") setRegType(tab);
+              }}
+              data-testid="register-btn"
+            >
+              {registering ? `✕ ${t("common.cancel")}` : `+ ${t("registry.register.cta")}`}
+            </Btn>
+          </div>
         </div>
 
         <div className="reg-grid" style={{ padding: 14 }}>
@@ -275,8 +358,9 @@ export function Registry() {
 
           <Panel
             className="drawer"
-            title={selected?.name ?? "—"}
+            title={registering ? t("registry.register.title") : (selected?.name ?? "—")}
             end={
+              !registering &&
               selected &&
               (() => {
                 const chip = STATUS_CHIP[selected.status] ?? STATUS_CHIP.DRAFT;
@@ -286,7 +370,85 @@ export function Registry() {
             pad={false}
             style={{ borderColor: "var(--line-2)" }}
           >
-            {selected && (
+            {registering && (
+              <div className="sect" style={{ borderBottom: 0 }} data-testid="register-form">
+                <div className="field">
+                  <label>{t("registry.register.type")}</label>
+                  <div className="selchips">
+                    {(["MCP", "AGENT_SKILLS"] as const).map((k) => (
+                      <button
+                        key={k}
+                        type="button"
+                        className={`selchip${regType === k ? " on" : ""}`}
+                        style={{ cursor: "pointer" }}
+                        onClick={() => setRegType(k)}
+                      >
+                        {k === "MCP"
+                          ? t("registry.register.typeMcp")
+                          : t("registry.register.typeSkill")}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="field">
+                  <label htmlFor="reg-name">{t("registry.register.name")}</label>
+                  <input
+                    id="reg-name"
+                    className="input mono"
+                    value={regName}
+                    onChange={(e) => setRegName(e.target.value)}
+                    placeholder={regType === "MCP" ? "team-search-mcp" : "report-writer"}
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor="reg-desc">{t("registry.register.description")}</label>
+                  <input
+                    id="reg-desc"
+                    className="input"
+                    value={regDesc}
+                    onChange={(e) => setRegDesc(e.target.value)}
+                  />
+                </div>
+                {regType === "MCP" ? (
+                  <div className="field">
+                    <label htmlFor="reg-url">{t("registry.register.url")}</label>
+                    <input
+                      id="reg-url"
+                      className="input mono"
+                      value={regUrl}
+                      onChange={(e) => setRegUrl(e.target.value)}
+                      placeholder="https://mcp.example.com/sse"
+                    />
+                  </div>
+                ) : (
+                  <div className="field">
+                    <label htmlFor="reg-md">{t("registry.register.skillMd")}</label>
+                    <textarea
+                      id="reg-md"
+                      className="input mono"
+                      style={{ minHeight: 160, resize: "vertical" }}
+                      value={regMd}
+                      onChange={(e) => setRegMd(e.target.value)}
+                      placeholder={"---\nname: report-writer\ndescription: …\n---\n# Instructions"}
+                    />
+                  </div>
+                )}
+                <div className="note">
+                  <span className="i">[i]</span>
+                  <span>{t("registry.register.note")}</span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
+                  <Btn
+                    primary
+                    disabled={busy || !regValid}
+                    onClick={() => void submitRegistration()}
+                  >
+                    ▲ {t("registry.register.submit")}
+                  </Btn>
+                </div>
+              </div>
+            )}
+            {!registering && selected && (
               <>
                 <div className="sect">
                   <div className="kv">
@@ -327,9 +489,15 @@ export function Registry() {
                       {t("registry.drawer.submit")}
                     </Btn>
                   )}
-                  {selected.status === "PENDING_APPROVAL" && (
+                  {(selected.status === "PENDING_APPROVAL" ||
+                    selected.status === "REJECTED") && (
                     <Btn disabled={busy} onClick={() => void action(selected, "approve")}>
                       {t("registry.drawer.approve")}
+                    </Btn>
+                  )}
+                  {selected.status === "PENDING_APPROVAL" && (
+                    <Btn disabled={busy} onClick={() => void action(selected, "reject")}>
+                      {t("registry.drawer.reject")}
                     </Btn>
                   )}
                   {selected.status === "APPROVED" && (
@@ -337,6 +505,13 @@ export function Registry() {
                       {t("registry.drawer.disable")}
                     </Btn>
                   )}
+                  <Btn
+                    disabled={busy}
+                    style={{ color: "var(--crit)", borderColor: "var(--crit)" }}
+                    onClick={() => setConfirmDelete(selected)}
+                  >
+                    {t("registry.drawer.delete")}
+                  </Btn>
                 </div>
               </>
             )}
@@ -354,6 +529,17 @@ export function Registry() {
           setConfirmDisable(null);
         }}
         onCancel={() => setConfirmDisable(null)}
+      />
+      <ConfirmDialog
+        open={confirmDelete !== null}
+        title={t("registry.confirmDelete.title")}
+        body={t("registry.confirmDelete.body", { name: confirmDelete?.name ?? "" })}
+        confirmLabel={t("registry.drawer.delete")}
+        onConfirm={() => {
+          if (confirmDelete) void deleteRecord(confirmDelete);
+          setConfirmDelete(null);
+        }}
+        onCancel={() => setConfirmDelete(null)}
       />
     </section>
   );

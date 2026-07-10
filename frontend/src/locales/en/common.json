@@ -222,11 +222,32 @@
       "useInNewAgent": "USE IN NEW AGENT",
       "submit": "SUBMIT",
       "approve": "APPROVE · PUBLISH",
-      "disable": "DISABLE"
+      "disable": "DISABLE",
+      "reject": "REJECT",
+      "delete": "DELETE"
     },
     "confirmDisable": {
       "title": "Disable record",
       "body": "“{{name}}” will be set to DEPRECATED — a terminal state. To revive it later you must delete and recreate the record."
+    },
+    "register": {
+      "cta": "REGISTER",
+      "title": "REGISTER RECORD",
+      "type": "RECORD TYPE",
+      "typeMcp": "MCP · remote server",
+      "typeSkill": "AGENT_SKILLS · skill",
+      "name": "NAME",
+      "description": "DESCRIPTION",
+      "url": "MCP SERVER URL · streamable-http",
+      "skillMd": "SKILL.MD CONTENT",
+      "note": "New records start in DRAFT. Submit → approve to publish; only APPROVED records are attachable to agents. Skills are uploaded to the artifacts bucket; MCP records point at the remote server URL.",
+      "submit": "REGISTER",
+      "done": "“{{name}}” registered — now in DRAFT."
+    },
+    "deleted": "“{{name}}” deleted.",
+    "confirmDelete": {
+      "title": "Delete record",
+      "body": "This permanently removes “{{name}}” from the registry. Agents already deployed keep working; the record just leaves the catalog."
     }
   },
   "chat": {
@@ -285,7 +306,10 @@
     "http.404": "Resource not found",
     "http.500": "Internal server error",
     "agent.redeploy_immutable": "Name and method cannot change on re-publish — clone to a new agent instead.",
-    "agent.deploy_in_progress": "A deployment is already in progress for this agent."
+    "agent.deploy_in_progress": "A deployment is already in progress for this agent.",
+    "registry.name_exists": "A record with this name already exists.",
+    "registry.invalid_url": "MCP registration needs a http(s) server URL.",
+    "registry.skill_md_required": "Skill registration needs SKILL.md content."
   },
   "chatPage": {
     "noAgents": "no active agents — deploy one first",

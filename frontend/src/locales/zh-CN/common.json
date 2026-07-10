@@ -222,11 +222,32 @@
       "useInNewAgent": "在新 AGENT 中使用",
       "submit": "提交",
       "approve": "批准 · 发布",
-      "disable": "停用"
+      "disable": "停用",
+      "reject": "驳回",
+      "delete": "删除"
     },
     "confirmDisable": {
       "title": "停用记录",
       "body": "“{{name}}”将被置为 DEPRECATED——这是终态。若要恢复,只能删除后重新创建该记录。"
+    },
+    "register": {
+      "cta": "注册",
+      "title": "注册记录",
+      "type": "记录类型",
+      "typeMcp": "MCP · 远程服务器",
+      "typeSkill": "AGENT_SKILLS · 技能",
+      "name": "名称",
+      "description": "描述",
+      "url": "MCP 服务器 URL · streamable-http",
+      "skillMd": "SKILL.MD 内容",
+      "note": "新记录从 DRAFT 开始。提交 → 批准后发布；只有 APPROVED 的记录可挂载到 Agent。技能会上传到制品桶；MCP 记录指向远程服务器 URL。",
+      "submit": "注册",
+      "done": "“{{name}}”已注册——当前为 DRAFT。"
+    },
+    "deleted": "已删除“{{name}}”。",
+    "confirmDelete": {
+      "title": "删除记录",
+      "body": "这会把“{{name}}”从注册中心永久移除。已部署的 Agent 不受影响，只是该记录从目录中消失。"
     }
   },
   "chat": {
@@ -285,7 +306,10 @@
     "http.404": "资源不存在",
     "http.500": "服务器内部错误",
     "agent.redeploy_immutable": "重新发布时名称和方式不能变——如需变更请克隆为新 Agent。",
-    "agent.deploy_in_progress": "该 Agent 已有一个部署正在进行中。"
+    "agent.deploy_in_progress": "该 Agent 已有一个部署正在进行中。",
+    "registry.name_exists": "同名记录已存在。",
+    "registry.invalid_url": "注册 MCP 需要 http(s) 服务器 URL。",
+    "registry.skill_md_required": "注册技能需要 SKILL.md 内容。"
   },
   "chatPage": {
     "noAgents": "暂无运行中的 Agent — 请先部署",

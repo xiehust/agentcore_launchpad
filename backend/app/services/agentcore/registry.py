@@ -49,26 +49,35 @@ def build_a2a_descriptors(card: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_mcp_descriptors(
-    *, target: str, description: str, gateway_url: str, tools: list[dict[str, Any]]
+    *,
+    target: str,
+    description: str,
+    gateway_url: str,
+    tools: list[dict[str, Any]] | None,
 ) -> dict[str, Any]:
+    """MCP record descriptors. ``gateway_url`` is any streamable-http MCP
+    endpoint (the shared gateway or an external remote server); ``tools=None``
+    omits the tool listing (unknown for externally registered servers)."""
     server_json = {
         "name": f"io.launchpad/{target}",
         "description": description or f"launchpad gateway target {target}",
         "version": "1.0.0",
         "remotes": [{"type": "streamable-http", "url": gateway_url}],
     }
-    return {
+    out: dict[str, Any] = {
         "mcp": {
             "server": {
                 "schemaVersion": MCP_SERVER_SCHEMA_VERSION,
                 "inlineContent": json.dumps(server_json),
             },
-            "tools": {
-                "protocolVersion": MCP_PROTOCOL_VERSION,
-                "inlineContent": json.dumps({"tools": tools}),
-            },
         }
     }
+    if tools is not None:
+        out["mcp"]["tools"] = {
+            "protocolVersion": MCP_PROTOCOL_VERSION,
+            "inlineContent": json.dumps({"tools": tools}),
+        }
+    return out
 
 
 def build_skills_descriptors(
@@ -213,9 +222,22 @@ def approve_record(client: Any, registry_id: str, record_id: str) -> dict[str, A
 
 
 def disable_record(client: Any, registry_id: str, record_id: str) -> dict[str, Any]:
+    # NB: DEPRECATED is terminal — the service refuses any further status
+    # change (verified live); the only remaining operation is delete.
     return set_record_status(
         client, registry_id, record_id, "DEPRECATED", "disabled via launchpad console"
     )
+
+
+def reject_record(client: Any, registry_id: str, record_id: str) -> dict[str, Any]:
+    # REJECTED is recoverable: a later APPROVED status change is accepted.
+    return set_record_status(
+        client, registry_id, record_id, "REJECTED", "rejected via launchpad console"
+    )
+
+
+def delete_record(client: Any, registry_id: str, record_id: str) -> None:
+    client.delete_registry_record(registryId=registry_id, recordId=record_id)
 
 
 def search_records(

@@ -11,6 +11,7 @@ import boto3
 import yaml
 
 from app.core.config import REPO_ROOT, get_settings
+from app.core.errors import AppError
 from app.models.ledger import Agent
 from app.services import mcp_client
 from app.services.agentcore import registry as reg
@@ -177,6 +178,75 @@ def console_action(record_id: str, action: str) -> dict[str, Any]:
         return reg.submit_record(client, registry_id, record_id)
     if action in ("approve", "publish"):
         return reg.approve_record(client, registry_id, record_id)
+    if action == "reject":
+        return reg.reject_record(client, registry_id, record_id)
     if action == "disable":
         return reg.disable_record(client, registry_id, record_id)
     raise ValueError(f"unknown action '{action}'")
+
+
+def console_delete(record_id: str) -> None:
+    reg.delete_record(control_client(), _registry_id(), record_id)
+
+
+def _require_new_name(client: Any, registry_id: str, name: str, kind: str) -> None:
+    if reg.find_record(client, registry_id, name, kind):
+        raise AppError(
+            "registry.name_exists",
+            f"a {kind} record named '{name}' already exists",
+            status_code=409,
+        )
+
+
+def register_mcp_server(name: str, description: str, url: str) -> dict[str, Any]:
+    """Register an external remote MCP server (streamable-http URL) as an MCP
+    record. Starts in DRAFT — the console lifecycle (submit → approve) gates
+    when it becomes attachable to agents."""
+    client = control_client()
+    registry_id = _registry_id()
+    _require_new_name(client, registry_id, name, "MCP")
+    record, _ = reg.upsert_record(
+        client,
+        registry_id,
+        name=name,
+        description=description or f"remote MCP server · {url}",
+        descriptor_type="MCP",
+        descriptors=reg.build_mcp_descriptors(
+            target=name, description=description, gateway_url=url, tools=None
+        ),
+    )
+    return reg.wait_record_settled(client, registry_id, record["recordId"])
+
+
+def register_skill(name: str, description: str, skill_md: str) -> dict[str, Any]:
+    """Register a skill from raw SKILL.md content: upload the bundle to the
+    artifacts bucket (the path a harness attaches via skills[{path}]), then
+    create the AGENT_SKILLS record. Starts in DRAFT."""
+    client = control_client()
+    registry_id = _registry_id()
+    _require_new_name(client, registry_id, name, "AGENT_SKILLS")
+    settings = get_settings()
+    bucket = settings.resources.get("artifacts_bucket")
+    if not bucket:
+        raise RuntimeError("artifacts_bucket missing — run scripts/bootstrap.py")
+    boto3.client("s3", region_name=settings.region).put_object(
+        Bucket=bucket, Key=f"skills/{name}/SKILL.md",
+        Body=skill_md.encode("utf-8"), ContentType="text/markdown",
+    )
+    meta = _parse_frontmatter(skill_md)
+    definition = {
+        "name": name,
+        "description": description or meta.get("description", ""),
+        "version": str(meta.get("version", "1.0.0")),
+        "path": f"s3://{bucket}/skills/{name}/",
+        "files": ["SKILL.md"],
+    }
+    record, _ = reg.upsert_record(
+        client,
+        registry_id,
+        name=name,
+        description=definition["description"][:200],
+        descriptor_type="AGENT_SKILLS",
+        descriptors=reg.build_skills_descriptors(skill_md=skill_md, definition=definition),
+    )
+    return reg.wait_record_settled(client, registry_id, record["recordId"])
