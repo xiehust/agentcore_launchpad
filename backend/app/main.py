@@ -13,6 +13,7 @@ from app.core.db import init_db
 from app.core.errors import register_error_handlers
 from app.deployer.pipeline import resume_pending_jobs
 from app.evaluation.routers import router as evaluation_router
+from app.evaluation.service import resume_interrupted_runs
 from app.optimization.routers import router as experiments_router
 from app.routers.agents import router as agents_router
 from app.routers.apikeys import router as apikeys_router
@@ -69,6 +70,12 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
         if resumed:
             logging.getLogger("launchpad").info(
                 "resumed %d interrupted deploy job(s)", len(resumed)
+            )
+        resumed_evals = resume_interrupted_runs()
+        if resumed_evals:
+            logging.getLogger("launchpad").info(
+                "reconciling %d interrupted eval run(s): %s",
+                len(resumed_evals), ", ".join(resumed_evals),
             )
         start_auto_refresh()  # periodic model-price refresh (real server only)
 

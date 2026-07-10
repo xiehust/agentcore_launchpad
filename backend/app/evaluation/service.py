@@ -105,15 +105,69 @@ def execute_run(
         batch_id = response["batchEvaluationId"]
         _update(run_id, batch_eval_id=batch_id)
         result = ac.poll_batch_evaluation(data, batch_id=batch_id, max_polls=60)
-        status = result.get("status")
-        if status not in ("COMPLETED", "COMPLETED_WITH_ERRORS"):
-            raise RuntimeError(f"batch evaluation ended {status}")
-        if mode == "insights":
-            _update(run_id, status="completed", insights=ac.parse_insights(result))
-        else:
-            _update(run_id, status="completed", scores=ac.parse_eval_scores(result))
+        _finish_from_result(run_id, mode, result)
     except Exception as exc:
         _update(run_id, status="failed", error=f"{type(exc).__name__}: {exc}"[:500])
+
+
+def _finish_from_result(run_id: str, mode: str, result: dict[str, Any]) -> None:
+    """Write a terminal batch-evaluation result back onto the run row.
+
+    COMPLETED_WITH_ERRORS still completes the run, but the service's
+    errorDetails (e.g. "insufficient samples for clustering") are surfaced in
+    the error column so the UI can show why results are partial/empty."""
+    status = result.get("status")
+    if status not in ("COMPLETED", "COMPLETED_WITH_ERRORS"):
+        raise RuntimeError(f"batch evaluation ended {status}")
+    details = result.get("errorDetails") or []
+    error = "; ".join(str(d) for d in details)[:500] or None
+    if mode == "insights":
+        _update(run_id, status="completed", insights=ac.parse_insights(result),
+                error=error)
+    else:
+        _update(run_id, status="completed", scores=ac.parse_eval_scores(result),
+                error=error)
+
+
+def reconcile_run(run_id: str, *, mode: str, batch_id: str) -> None:
+    """Finish a run whose in-process poller died (restart / dev reload) while
+    the batch evaluation kept running server-side."""
+    try:
+        result = ac.poll_batch_evaluation(data_client(), batch_id=batch_id, max_polls=60)
+        _finish_from_result(run_id, mode, result)
+    except Exception as exc:
+        _update(run_id, status="failed", error=f"{type(exc).__name__}: {exc}"[:500])
+
+
+INTERRUPTED_STATUSES = ("queued", "invoking", "waiting", "evaluating")
+
+
+def resume_interrupted_runs() -> list[str]:
+    """Startup reconciliation. The account-lock worker and its pollers are
+    in-memory, so a backend restart orphans in-flight rows: runs that already
+    started a batch are re-polled to completion; runs killed before the batch
+    started lost their in-memory work and are failed honestly."""
+    db = SessionLocal()
+    try:
+        rows = db.query(EvalRun).filter(EvalRun.status.in_(INTERRUPTED_STATUSES)).all()
+        resumed: list[str] = []
+        for run in rows:
+            if run.status == "evaluating" and run.batch_eval_id:
+                account_lock.submit(
+                    run.id,
+                    lambda rid=run.id, m=run.mode, b=run.batch_eval_id: reconcile_run(
+                        rid, mode=m, batch_id=b
+                    ),
+                )
+                resumed.append(run.id)
+            else:
+                run.status = "failed"
+                run.error = ("interrupted by a backend restart before the batch "
+                             "evaluation started — submit the run again")
+        db.commit()
+        return resumed
+    finally:
+        db.close()
 
 
 def submit_run(
