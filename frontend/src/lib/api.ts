@@ -56,7 +56,7 @@ export interface AgentSpecInput {
   method: string;
   model_id?: string;
   system_prompt: string;
-  tools?: { type: string; name: string }[];
+  tools?: { type: string; name: string; config?: Record<string, unknown> }[];
   skills?: string[];
   memory?: { short_term: boolean; long_term: boolean };
 }

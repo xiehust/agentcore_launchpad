@@ -5,6 +5,7 @@ Sync direction is platform → registry, and ledger rows record their
 registryRecordId.
 """
 
+import json
 from typing import Any
 
 import boto3
@@ -187,6 +188,59 @@ def console_action(record_id: str, action: str) -> dict[str, Any]:
 
 def console_delete(record_id: str) -> None:
     reg.delete_record(control_client(), _registry_id(), record_id)
+
+
+def attachable_records() -> dict[str, Any]:
+    """Catalog entries an agent can mount, sourced ONLY from APPROVED records —
+    the registry lifecycle is the availability gate. MCP records split on the
+    remote URL: the shared gateway attaches as agentcore_gateway (OAuth), any
+    other URL attaches as remote_mcp. Skills carry the s3 path a harness
+    mounts via skills[{path}]."""
+    client = control_client()
+    registry_id = _registry_id()
+    gateway_url = get_settings().resources.get("gateway_url", "")
+    mcp_servers: list[dict[str, Any]] = []
+    skills: list[dict[str, Any]] = []
+    for summary in reg.list_records(client, registry_id, None, "APPROVED"):
+        kind = summary.get("descriptorType")
+        if kind not in ("MCP", "AGENT_SKILLS"):
+            continue
+        record = reg.get_record(client, registry_id, summary["recordId"])
+        try:
+            if kind == "MCP":
+                server = json.loads(
+                    record["descriptors"]["mcp"]["server"]["inlineContent"]
+                )
+                url = (server.get("remotes") or [{}])[0].get("url", "")
+                if not url:
+                    continue
+                mcp_servers.append(
+                    {
+                        "name": record["name"],
+                        "description": record.get("description", ""),
+                        "url": url,
+                        "gateway": bool(gateway_url) and url == gateway_url,
+                        "record_id": record["recordId"],
+                    }
+                )
+            else:
+                definition = json.loads(
+                    record["descriptors"]["agentSkills"]["skillDefinition"]["inlineContent"]
+                )
+                path = definition.get("path") or ""
+                if not path:
+                    continue
+                skills.append(
+                    {
+                        "name": record["name"],
+                        "description": definition.get("description", ""),
+                        "path": path,
+                        "record_id": record["recordId"],
+                    }
+                )
+        except (KeyError, ValueError, TypeError):
+            continue  # malformed descriptor — skip, never break the catalog
+    return {"mcp_servers": mcp_servers, "skills": skills}
 
 
 def _require_new_name(client: Any, registry_id: str, name: str, kind: str) -> None:

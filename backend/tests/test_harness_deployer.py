@@ -29,6 +29,20 @@ def test_build_params_basics():
     assert params["memory"] == {"agentCoreMemoryConfiguration": {"arn": MEM_ARN}}
 
 
+def test_build_params_remote_mcp():
+    """mcp-type ToolRefs (registry-picked remote servers) map to remote_mcp;
+    entries without a url are dropped rather than sent malformed."""
+    s = spec(tools=[
+        {"type": "mcp", "name": "deepwiki", "config": {"url": "https://mcp.deepwiki.com/mcp"}},
+        {"type": "mcp", "name": "no-url"},  # config empty → skipped
+    ])
+    params = build_create_params(s, ROLE_ARN, MEM_ARN)
+    assert params["tools"] == [
+        {"type": "remote_mcp", "name": "deepwiki",
+         "config": {"remoteMcp": {"url": "https://mcp.deepwiki.com/mcp"}}},
+    ]
+
+
 def test_build_params_tools_skills_env_no_memory():
     s = spec(
         tools=[

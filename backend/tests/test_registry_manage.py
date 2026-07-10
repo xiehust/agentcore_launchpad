@@ -85,6 +85,68 @@ def test_reject_action_routes(client, monkeypatch):
     assert actions == [("r-1", "reject")]
 
 
+def test_attachables_endpoint_caches_and_returns(client, monkeypatch):
+    calls = []
+
+    def fake_attachables():
+        calls.append(1)
+        return {"mcp_servers": [{"name": "deepwiki", "url": "https://mcp.deepwiki.com/mcp",
+                                 "gateway": False, "description": "", "record_id": "r1"}],
+                "skills": [{"name": "meeting-summarizer", "path": "s3://b/skills/meeting-summarizer/",
+                            "description": "", "record_id": "r2"}]}
+
+    monkeypatch.setattr(registry_router.console, "attachable_records", fake_attachables)
+    registry_router._attachables_cache.update(data=None, at=0.0)
+    first = client.get("/api/registry/attachables").json()
+    second = client.get("/api/registry/attachables").json()
+    assert first == second
+    assert first["mcp_servers"][0]["gateway"] is False
+    assert first["skills"][0]["path"].startswith("s3://")
+    assert calls == [1]  # second hit served from the 60s cache
+    registry_router._attachables_cache.update(data=None, at=0.0)
+
+
+def test_attachables_parsing_splits_gateway_and_remote(monkeypatch):
+    """APPROVED-only sourcing + gateway/remote split on the server URL."""
+    import app.services.registry_console as console_mod
+
+    gw_url = "https://gw.example/mcp"
+    records = {
+        "g1": {"recordId": "g1", "name": "hr-database", "description": "gw target",
+               "descriptors": {"mcp": {"server": {"inlineContent":
+                   json.dumps({"remotes": [{"url": gw_url}]})}}}},
+        "x1": {"recordId": "x1", "name": "deepwiki", "description": "public docs",
+               "descriptors": {"mcp": {"server": {"inlineContent":
+                   json.dumps({"remotes": [{"url": "https://mcp.deepwiki.com/mcp"}]})}}}},
+        "s1": {"recordId": "s1", "name": "meeting-summarizer", "description": "",
+               "descriptors": {"agentSkills": {"skillDefinition": {"inlineContent":
+                   json.dumps({"path": "s3://b/skills/meeting-summarizer/",
+                               "description": "summarize"})}}}},
+        "bad": {"recordId": "bad", "name": "broken", "descriptors": {}},
+    }
+    summaries = [
+        {"recordId": rid, "descriptorType": "AGENT_SKILLS" if rid == "s1" else "MCP"}
+        for rid in records
+    ]
+    monkeypatch.setattr(console_mod, "control_client", lambda: object())
+    monkeypatch.setattr(console_mod, "_registry_id", lambda: "reg")
+    monkeypatch.setattr(
+        console_mod, "get_settings",
+        lambda: type("S", (), {"resources": {"gateway_url": gw_url}})(),
+    )
+    monkeypatch.setattr(console_mod.reg, "list_records",
+                        lambda c, r, t, s: summaries if s == "APPROVED" else [])
+    monkeypatch.setattr(console_mod.reg, "get_record",
+                        lambda c, r, rid: records[rid])
+
+    out = console_mod.attachable_records()
+    by_name = {m["name"]: m for m in out["mcp_servers"]}
+    assert by_name["hr-database"]["gateway"] is True
+    assert by_name["deepwiki"]["gateway"] is False
+    assert out["skills"][0]["name"] == "meeting-summarizer"
+    assert "broken" not in by_name  # malformed descriptor skipped
+
+
 def test_mcp_descriptors_without_tools():
     """External servers register without a tool listing — the tools descriptor
     must be omitted entirely, not sent as an empty list."""

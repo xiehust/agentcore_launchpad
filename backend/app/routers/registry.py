@@ -1,6 +1,7 @@
 """Registry console API — records per type, register, lifecycle actions,
-search, defaults sync."""
+attachables catalog, search, defaults sync."""
 
+import time
 from typing import Any, Literal
 
 from fastapi import APIRouter
@@ -10,6 +11,8 @@ from app.core.errors import AppError
 from app.services import registry_console as console
 
 router = APIRouter(prefix="/api/registry", tags=["registry"])
+
+_attachables_cache: dict[str, Any] = {"data": None, "at": 0.0}
 
 
 def _record_out(record: dict[str, Any]) -> dict[str, Any]:
@@ -90,6 +93,21 @@ def register_record(req: RegisterRequest) -> dict[str, Any]:
 def delete_record(record_id: str) -> dict[str, Any]:
     console.console_delete(record_id)
     return {"deleted": True, "record_id": record_id}
+
+
+@router.get("/attachables")
+def attachables(refresh: bool = False) -> dict[str, Any]:
+    """APPROVED MCP servers + skills the create wizard offers for mounting.
+    Cached 60s — each call walks GetRegistryRecord per record."""
+    if (
+        not refresh
+        and _attachables_cache["data"] is not None
+        and time.time() - _attachables_cache["at"] < 60
+    ):
+        return _attachables_cache["data"]
+    data = console.attachable_records()
+    _attachables_cache.update(data=data, at=time.time())
+    return data
 
 
 @router.post("/sync-defaults")

@@ -26,10 +26,23 @@ type Method = "harness" | "zip_runtime" | "container";
 interface StoredSpec {
   model_id?: string;
   system_prompt?: string;
-  tools?: { type: string; name: string }[];
+  tools?: { type: string; name: string; config?: { url?: string } }[];
   skills?: string[];
   memory?: { long_term?: boolean };
   env?: Record<string, string>;
+}
+
+// APPROVED registry records the wizard offers for mounting.
+interface AttachableMcp {
+  name: string;
+  description: string;
+  url: string;
+  gateway: boolean;
+}
+interface AttachableSkill {
+  name: string;
+  description: string;
+  path: string;
 }
 
 export function CreateAgent() {
@@ -46,9 +59,12 @@ export function CreateAgent() {
   const [systemPrompt, setSystemPrompt] = useState("");
   const [tools, setTools] = useState<string[]>([]);
   const [gatewayTargets, setGatewayTargets] = useState<string[]>([]);
+  const [remoteMcp, setRemoteMcp] = useState<AttachableMcp[]>([]);
+  const [skillCatalog, setSkillCatalog] = useState<AttachableSkill[]>([]);
   const [selectedGateway, setSelectedGateway] = useState<string[]>(
     prefillGateway ? [prefillGateway] : [],
   );
+  const [selectedMcp, setSelectedMcp] = useState<string[]>([]);
   const [longTerm, setLongTerm] = useState(true);
   const [mcpServers, setMcpServers] = useState("");
   // when set, the wizard edits an existing agent and the launch button re-publishes it
@@ -56,18 +72,17 @@ export function CreateAgent() {
   const [detailsMode, setDetailsMode] = useState(false);
 
   useEffect(() => {
-    fetch("/api/tools")
-      .then((res) => (res.ok ? res.json() : { tools: [] }))
-      .then((d: { tools: { source: string; target?: string }[] }) => {
-        const targets = [
-          ...new Set(
-            d.tools.filter((x) => x.source === "gateway" && x.target).map((x) => x.target!),
-          ),
-        ];
-        setGatewayTargets(targets);
+    // Mountable assets come from the registry catalog: only APPROVED records
+    // are offered, so the registry lifecycle gates availability.
+    fetch("/api/registry/attachables")
+      .then((res) => (res.ok ? res.json() : { mcp_servers: [], skills: [] }))
+      .then((d: { mcp_servers: AttachableMcp[]; skills: AttachableSkill[] }) => {
+        setGatewayTargets(d.mcp_servers.filter((m) => m.gateway).map((m) => m.name));
+        setRemoteMcp(d.mcp_servers.filter((m) => !m.gateway));
+        setSkillCatalog(d.skills);
       })
       .catch(() => {
-        /* gateway not bootstrapped — chips stay hidden */
+        /* registry not bootstrapped — chips stay hidden */
       });
   }, []);
 
@@ -132,6 +147,7 @@ export function CreateAgent() {
     setSystemPrompt("");
     setTools([]);
     setSelectedGateway([]);
+    setSelectedMcp([]);
     setSkills([]);
     setLongTerm(true);
     setMcpServers("");
@@ -148,6 +164,10 @@ export function CreateAgent() {
         ? [
             ...tools.map((n) => ({ type: "builtin", name: n })),
             ...selectedGateway.map((n) => ({ type: "gateway", name: n })),
+            ...selectedMcp.flatMap((n) => {
+              const server = remoteMcp.find((m) => m.name === n);
+              return server ? [{ type: "mcp", name: n, config: { url: server.url } }] : [];
+            }),
           ]
         : [],
     memory: { short_term: true, long_term: longTerm },
@@ -187,6 +207,7 @@ export function CreateAgent() {
     setSystemPrompt(spec.system_prompt ?? "");
     setTools((spec.tools ?? []).filter((x) => x.type === "builtin").map((x) => x.name));
     setSelectedGateway((spec.tools ?? []).filter((x) => x.type === "gateway").map((x) => x.name));
+    setSelectedMcp((spec.tools ?? []).filter((x) => x.type === "mcp").map((x) => x.name));
     setSkills(spec.skills ?? []);
     setLongTerm(spec.memory?.long_term ?? true);
     setMcpServers(spec.env?.LAUNCHPAD_MCP_SERVERS ?? "");
@@ -410,6 +431,24 @@ export function CreateAgent() {
                         {target} · gateway {selectedGateway.includes(target) ? "✓" : "+"}
                       </button>
                     ))}
+                    {remoteMcp.map((server) => (
+                      <button
+                        key={server.name}
+                        type="button"
+                        className={`selchip${selectedMcp.includes(server.name) ? " on" : ""}`}
+                        style={{ cursor: "pointer" }}
+                        title={server.url}
+                        onClick={() =>
+                          setSelectedMcp((prev) =>
+                            prev.includes(server.name)
+                              ? prev.filter((x) => x !== server.name)
+                              : [...prev, server.name],
+                          )
+                        }
+                      >
+                        {server.name} · mcp {selectedMcp.includes(server.name) ? "✓" : "+"}
+                      </button>
+                    ))}
                   </>
                 ) : method === "container" ? (
                   <>
@@ -442,21 +481,41 @@ export function CreateAgent() {
                 />
               </div>
             )}
-            {method === "harness" && skills.length > 0 && (
+            {method === "harness" && (skillCatalog.length > 0 || skills.length > 0) && (
               <div className="field">
                 <label>{t("create.configure.skills")}</label>
                 <div className="selchips">
-                  {skills.map((skill) => (
+                  {skillCatalog.map((skill) => (
                     <button
-                      key={skill}
+                      key={skill.path}
                       type="button"
-                      className="selchip on"
+                      className={`selchip${skills.includes(skill.path) ? " on" : ""}`}
                       style={{ cursor: "pointer" }}
-                      onClick={() => setSkills((prev) => prev.filter((s) => s !== skill))}
+                      title={skill.description || skill.path}
+                      onClick={() =>
+                        setSkills((prev) =>
+                          prev.includes(skill.path)
+                            ? prev.filter((s) => s !== skill.path)
+                            : [...prev, skill.path],
+                        )
+                      }
                     >
-                      {skill} · registry ✕
+                      {skill.name} · skill {skills.includes(skill.path) ? "✓" : "+"}
                     </button>
                   ))}
+                  {skills
+                    .filter((path) => !skillCatalog.some((s) => s.path === path))
+                    .map((skill) => (
+                      <button
+                        key={skill}
+                        type="button"
+                        className="selchip on"
+                        style={{ cursor: "pointer" }}
+                        onClick={() => setSkills((prev) => prev.filter((s) => s !== skill))}
+                      >
+                        {skill} · registry ✕
+                      </button>
+                    ))}
                 </div>
               </div>
             )}

@@ -48,6 +48,17 @@ def build_create_params(
     for tool in spec.tools:
         if tool.type == "builtin" and tool.name in BUILTIN_TOOL_TYPES:
             tools.append({"type": BUILTIN_TOOL_TYPES[tool.name], "name": tool.name})
+        elif tool.type == "mcp" and tool.config.get("url"):
+            # External remote MCP server (streamable-http), typically picked
+            # from an APPROVED registry MCP record. Unauthenticated for now —
+            # header/Identity-based auth is a follow-up.
+            tools.append(
+                {
+                    "type": "remote_mcp",
+                    "name": tool.name,
+                    "config": {"remoteMcp": {"url": tool.config["url"]}},
+                }
+            )
     if gateway and any(t.type == "gateway" for t in spec.tools):
         tools.append(
             {
