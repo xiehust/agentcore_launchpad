@@ -397,7 +397,11 @@
       "empty": "RUN INSIGHTS ON A COMPLETED RUN'S SESSIONS",
       "runOnSessions": "INSIGHTS · THESE SESSIONS",
       "needSessions": "needs ≥3 sessions (clustering minimum)",
-      "partial": "PARTIAL RESULT — the evaluation service reported:"
+      "partial": "PARTIAL RESULT — the evaluation service reported:",
+      "secFailures": "FAILURES",
+      "secIntents": "USER INTENTS",
+      "secSummaries": "EXECUTION SUMMARIES",
+      "sessions": "{{count}} session(s)"
     },
     "runFailedToast": "Eval run failed — {{agent}}: {{msg}}",
     "backToRuns": "RUNS"

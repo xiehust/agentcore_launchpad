@@ -25,6 +25,28 @@ interface Score {
   score: number;
 }
 
+// One cluster of any of the three insight trees (fields verified against a
+// live get_batch_evaluation result — names/messages nest under
+// affectedSessions, NOT at the top level).
+interface InsightCluster {
+  clusterId?: number;
+  name?: string;
+  category?: string; // legacy fallback for failures
+  description?: string;
+  percentage?: number;
+  affectedSessionCount?: number;
+  affectedSessions?: {
+    sessionId?: string;
+    userMessages?: string[];
+    approachTaken?: string;
+    finalOutcome?: string;
+  }[];
+  subCategories?: {
+    name?: string;
+    rootCauses?: { name?: string; recommendation?: string }[];
+  }[];
+}
+
 interface RunInfo {
   id: string;
   agent_id: string;
@@ -36,8 +58,9 @@ interface RunInfo {
   queue_position: number | null;
   scores: Score[];
   insights: {
-    failures?: { category: string; percentage?: number; subCategories?: unknown[] }[];
-    userIntents?: { intent?: string; userMessages?: string[] }[];
+    failures?: InsightCluster[];
+    userIntents?: InsightCluster[];
+    executionSummaries?: InsightCluster[];
   };
   session_ids: string[];
   error: string | null;
@@ -290,6 +313,57 @@ interface ExperimentInfo {
     };
     cleanup?: { category: string; status: string }[];
   };
+}
+
+function InsightSection({
+  label,
+  tone,
+  icon,
+  clusters,
+  detail,
+}: {
+  label: string;
+  tone: "crit" | "aqua" | "good";
+  icon: string;
+  clusters: InsightCluster[];
+  detail: (c: InsightCluster) => string | undefined;
+}) {
+  const { t } = useTranslation();
+  if (!clusters.length) return null;
+  return (
+    <>
+      <div
+        className="mono dim"
+        style={{ fontSize: 9.5, letterSpacing: ".12em", margin: "10px 0 6px" }}
+      >
+        {label} · {clusters.length}
+      </div>
+      {clusters.slice(0, 3).map((c, i) => {
+        const extra = detail(c);
+        return (
+          <div className="insight" key={c.clusterId ?? i}>
+            <div className="ih">
+              <Chip tone={tone} icon={icon}> </Chip>
+              <b>{c.name ?? c.category ?? `#${i + 1}`}</b>
+              <span className="pct">
+                {typeof c.percentage === "number"
+                  ? `${Math.round(c.percentage)}%`
+                  : t("evalPage.insights.sessions", {
+                      count: c.affectedSessionCount ?? c.affectedSessions?.length ?? 0,
+                    })}
+              </span>
+            </div>
+            {c.description && <div className="fix">{c.description.slice(0, 220)}</div>}
+            {extra && (
+              <div className="fix mono" style={{ color: "var(--ink-3)" }}>
+                {extra.slice(0, 150)}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </>
+  );
 }
 
 export function Evaluation() {
@@ -717,31 +791,41 @@ export function Evaluation() {
           }
           style={{ "--i": 2 } as CSSProperties}
         >
-          {selectedRun?.insights?.failures?.length ? (
-            selectedRun.insights.failures.slice(0, 4).map((f, i) => (
-              <div className="insight" key={i}>
-                <div className="ih">
-                  <Chip tone="crit" icon="✕"> </Chip>
-                  <b>{f.category}</b>
-                  {typeof f.percentage === "number" && (
-                    <span className="pct">{Math.round(f.percentage)}%</span>
-                  )}
-                </div>
-                <div className="fix">{JSON.stringify(f).slice(0, 160)}</div>
-              </div>
-            ))
-          ) : selectedRun?.insights?.userIntents?.length ? (
-            selectedRun.insights.userIntents.slice(0, 4).map((intent, i) => (
-              <div className="insight" key={i}>
-                <div className="ih">
-                  <Chip tone="aqua" icon="◈"> </Chip>
-                  <b>{intent.intent ?? `intent ${i + 1}`}</b>
-                </div>
-                <div className="fix">
-                  {(intent.userMessages ?? []).slice(0, 2).join(" · ").slice(0, 160)}
-                </div>
-              </div>
-            ))
+          {selectedRun &&
+          ((selectedRun.insights?.failures?.length ?? 0) > 0 ||
+            (selectedRun.insights?.userIntents?.length ?? 0) > 0 ||
+            (selectedRun.insights?.executionSummaries?.length ?? 0) > 0) ? (
+            <div style={{ maxHeight: 460, overflowY: "auto" }}>
+              <InsightSection
+                label={t("evalPage.insights.secFailures")}
+                tone="crit"
+                icon="✕"
+                clusters={selectedRun.insights.failures ?? []}
+                detail={(c) => {
+                  const rec = c.subCategories
+                    ?.flatMap((s) => s.rootCauses ?? [])
+                    .find((r) => r.recommendation)?.recommendation;
+                  return rec ? `⌁ ${rec}` : undefined;
+                }}
+              />
+              <InsightSection
+                label={t("evalPage.insights.secIntents")}
+                tone="aqua"
+                icon="◈"
+                clusters={selectedRun.insights.userIntents ?? []}
+                detail={(c) => {
+                  const msg = c.affectedSessions?.flatMap((s) => s.userMessages ?? [])[0];
+                  return msg ? `“${msg}”` : undefined;
+                }}
+              />
+              <InsightSection
+                label={t("evalPage.insights.secSummaries")}
+                tone="good"
+                icon="●"
+                clusters={selectedRun.insights.executionSummaries ?? []}
+                detail={(c) => c.affectedSessions?.find((s) => s.finalOutcome)?.finalOutcome}
+              />
+            </div>
           ) : selectedRun?.error ? (
             // COMPLETED_WITH_ERRORS: the run finished but the service returned
             // no trees (e.g. under 3 sessions — clustering minimum). Show why.

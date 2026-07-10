@@ -397,7 +397,11 @@
       "empty": "对已完成运行的会话执行洞察",
       "runOnSessions": "洞察 · 这些会话",
       "needSessions": "至少需要 3 个会话（聚类下限）",
-      "partial": "部分结果——评估服务返回："
+      "partial": "部分结果——评估服务返回：",
+      "secFailures": "失败类别",
+      "secIntents": "用户意图",
+      "secSummaries": "执行摘要",
+      "sessions": "{{count}} 个会话"
     },
     "runFailedToast": "评估运行失败 — {{agent}}:{{msg}}",
     "backToRuns": "运行列表"
