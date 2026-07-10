@@ -742,6 +742,16 @@ export function Evaluation() {
                 </div>
               </div>
             ))
+          ) : selectedRun?.error ? (
+            // COMPLETED_WITH_ERRORS: the run finished but the service returned
+            // no trees (e.g. under 3 sessions — clustering minimum). Show why.
+            <div className="note" style={{ borderColor: "var(--warn)" }}>
+              <span className="i" style={{ color: "var(--warn)" }}>[!]</span>
+              <span>
+                {t("evalPage.insights.partial")}{" "}
+                <span className="mono">{selectedRun.error}</span>
+              </span>
+            </div>
           ) : (
             <div className="empty">{t("evalPage.insights.empty")}</div>
           )}

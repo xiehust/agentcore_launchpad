@@ -396,7 +396,8 @@
       "sub": "failure analysis · user intents",
       "empty": "RUN INSIGHTS ON A COMPLETED RUN'S SESSIONS",
       "runOnSessions": "INSIGHTS · THESE SESSIONS",
-      "needSessions": "needs ≥3 sessions (clustering minimum)"
+      "needSessions": "needs ≥3 sessions (clustering minimum)",
+      "partial": "PARTIAL RESULT — the evaluation service reported:"
     },
     "runFailedToast": "Eval run failed — {{agent}}: {{msg}}",
     "backToRuns": "RUNS"
