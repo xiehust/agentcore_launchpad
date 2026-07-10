@@ -6,18 +6,23 @@ import { useSearchParams } from "react-router-dom";
 import { Btn, Chip, ConfirmDialog, Panel, useToast, ViewHead } from "../components";
 import type { AgentInfo } from "../lib/api";
 import { api } from "../lib/api";
+import { DatasetsView } from "./EvaluationDatasets";
+import { EvaluatorsView } from "./EvaluationEvaluators";
 
 interface Dataset {
   id: string;
   name: string;
   locale: string;
   item_count: number;
+  has_ground_truth?: boolean;
 }
 
 interface EvaluatorInfo {
   id: string;
+  name?: string | null;
   level: string;
   source: "builtin" | "custom";
+  requires_ground_truth?: boolean;
 }
 
 interface Score {
@@ -67,6 +72,35 @@ interface RunInfo {
 }
 
 const DEFAULT_EVALUATORS = ["Builtin.Correctness", "Builtin.Helpfulness"];
+
+const INSIGHT_TYPES = [
+  "Builtin.Insight.FailureAnalysis",
+  "Builtin.Insight.UserIntent",
+  "Builtin.Insight.ExecutionSummary",
+];
+
+const INSIGHT_LABEL_KEYS: Record<string, string> = {
+  "Builtin.Insight.FailureAnalysis": "failureAnalysis",
+  "Builtin.Insight.UserIntent": "userIntent",
+  "Builtin.Insight.ExecutionSummary": "executionSummary",
+};
+
+const WINDOW_PRESETS = [1, 6, 24, 72, 168];
+
+const LEVEL_BADGE: Record<string, { label: string; color: string }> = {
+  SESSION: { label: "SESSION", color: "var(--warn)" },
+  TRACE: { label: "TRACE", color: "var(--aqua)" },
+  TOOL_CALL: { label: "TOOL", color: "var(--good)" },
+};
+
+// "window:24h" (backend scope encoding) → "window · 24h" for the runs table.
+function scopeLabel(run: RunInfo): string {
+  if (run.dataset_name?.startsWith("window:")) {
+    return `window · ${run.dataset_name.slice("window:".length)}`;
+  }
+  if (run.mode === "insights") return `insights · ${run.session_ids.length}`;
+  return run.dataset_name ?? "—";
+}
 
 function ExperimentPanel({
   experiments,
@@ -369,10 +403,11 @@ function InsightSection({
 export function Evaluation() {
   const { t } = useTranslation();
   const toast = useToast();
-  // "?view=new" renders the New Run sub-page instead of the dashboard —
+  // "?view=new|evaluators" renders a sub-page instead of the dashboard —
   // linkable, and the browser back button returns to the runs list.
   const [searchParams, setSearchParams] = useSearchParams();
-  const creating = searchParams.get("view") === "new";
+  const view = searchParams.get("view");
+  const creating = view === "new";
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [evaluators, setEvaluators] = useState<EvaluatorInfo[]>([]);
@@ -382,7 +417,10 @@ export function Evaluation() {
   const [agentId, setAgentId] = useState("");
   const [datasetId, setDatasetId] = useState("");
   const [mode, setMode] = useState<"evaluators" | "insights">("evaluators");
+  const [scope, setScope] = useState<"dataset" | "window">("dataset");
+  const [lookbackHours, setLookbackHours] = useState(24);
   const [chosenEvaluators, setChosenEvaluators] = useState<string[]>(DEFAULT_EVALUATORS);
+  const [chosenInsights, setChosenInsights] = useState<string[]>(INSIGHT_TYPES);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [experiments, setExperiments] = useState<ExperimentInfo[]>([]);
   const [expBusy, setExpBusy] = useState(false);
@@ -447,18 +485,31 @@ export function Evaluation() {
     return () => clearInterval(timer);
   }, [refresh]);
 
+  // Trajectory matchers score against expected_trajectory ground truth — only
+  // dataset runs whose selected dataset carries it can use them.
+  const selectedDataset = datasets.find((d) => d.id === datasetId);
+  const trajectoryAllowed = scope === "dataset" && !!selectedDataset?.has_ground_truth;
+  useEffect(() => {
+    if (!trajectoryAllowed) {
+      setChosenEvaluators((prev) => prev.filter((id) => !id.startsWith("Builtin.Trajectory")));
+    }
+  }, [trajectoryAllowed]);
+
   const startRun = async () => {
     setSubmitError(null);
+    const base = {
+      agent_id: agentId,
+      mode,
+      // window runs are passive (no invoke) — nothing to wait for
+      wait_seconds: scope === "window" ? 0 : 120,
+      ...(scope === "window"
+        ? { lookback_hours: lookbackHours }
+        : { dataset_id: datasetId }),
+    };
     const payload =
       mode === "insights"
-        ? { agent_id: agentId, mode, dataset_id: datasetId, wait_seconds: 120 }
-        : {
-            agent_id: agentId,
-            dataset_id: datasetId,
-            evaluators: chosenEvaluators,
-            mode,
-            wait_seconds: 120,
-          };
+        ? { ...base, insights: chosenInsights }
+        : { ...base, evaluators: chosenEvaluators };
     const res = await fetch("/api/eval/runs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -511,6 +562,16 @@ export function Evaluation() {
     const mean = run.scores.reduce((acc, s) => acc + s.score, 0) / run.scores.length;
     return mean.toFixed(2);
   };
+
+  // ── Evaluators management sub-page (?view=evaluators) ────────────────────
+  if (view === "evaluators") {
+    return <EvaluatorsView onBack={() => setSearchParams({}, { replace: true })} />;
+  }
+
+  // ── Datasets management sub-page (?view=datasets) ─────────────────────────
+  if (view === "datasets") {
+    return <DatasetsView onBack={() => setSearchParams({}, { replace: true })} />;
+  }
 
   // ── New Run sub-page (?view=new) ──────────────────────────────────────────
   if (creating) {
@@ -572,31 +633,125 @@ export function Evaluation() {
               </select>
             </div>
             <div className="field">
-              <label>{t("evalPage.newRun.dataset")}</label>
-              <select
-                className="input"
-                value={datasetId}
-                onChange={(e) => setDatasetId(e.target.value)}
-              >
-                {datasets.map((d) => (
-                  <option key={d.id} value={d.id} style={{ background: "#141816" }}>
-                    {d.name} · {d.item_count} ({d.locale})
-                  </option>
-                ))}
-              </select>
+              <label>{t("evalPage.newRun.scope")}</label>
+              <div className="selchips">
+                <button
+                  type="button"
+                  className={`selchip${scope === "dataset" ? " on" : ""}`}
+                  style={{ cursor: "pointer" }}
+                  onClick={() => setScope("dataset")}
+                >
+                  {t("evalPage.newRun.scopeDataset")}
+                </button>
+                <button
+                  type="button"
+                  className={`selchip${scope === "window" ? " on" : ""}`}
+                  style={{ cursor: "pointer" }}
+                  data-testid="scope-window"
+                  onClick={() => setScope("window")}
+                >
+                  {t("evalPage.newRun.scopeWindow")}
+                </button>
+              </div>
             </div>
+            {scope === "dataset" ? (
+              <div className="field">
+                <label>{t("evalPage.newRun.dataset")}</label>
+                <select
+                  className="input"
+                  value={datasetId}
+                  onChange={(e) => setDatasetId(e.target.value)}
+                >
+                  {datasets.map((d) => (
+                    <option key={d.id} value={d.id} style={{ background: "#141816" }}>
+                      {d.name} · {d.item_count} ({d.locale})
+                      {d.has_ground_truth ? " ◆" : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : (
+              <div className="field">
+                <label>{t("evalPage.newRun.window")}</label>
+                <div className="selchips" style={{ alignItems: "center" }}>
+                  {WINDOW_PRESETS.map((h) => (
+                    <button
+                      key={h}
+                      type="button"
+                      className={`selchip${lookbackHours === h ? " on" : ""}`}
+                      style={{ cursor: "pointer" }}
+                      onClick={() => setLookbackHours(h)}
+                    >
+                      {h}h
+                    </button>
+                  ))}
+                  <input
+                    className="input"
+                    type="number"
+                    min={1}
+                    max={336}
+                    value={lookbackHours}
+                    style={{ width: 92 }}
+                    aria-label={t("evalPage.newRun.windowCustom")}
+                    onChange={(e) =>
+                      setLookbackHours(
+                        Math.min(336, Math.max(1, Number(e.target.value) || 1)),
+                      )
+                    }
+                  />
+                </div>
+                <div className="note" style={{ marginTop: 8 }}>
+                  <span className="i">[i]</span>
+                  <span>{t("evalPage.newRun.windowHint")}</span>
+                </div>
+              </div>
+            )}
             {mode === "evaluators" ? (
               <div className="field">
-                <label>{t("evalPage.newRun.evaluators")}</label>
-                <div className="selchips" style={{ maxHeight: 140, overflowY: "auto" }}>
-                  {evaluators
-                    .filter((e) => e.source === "builtin")
-                    .map((e) => (
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "baseline",
+                  }}
+                >
+                  <label>{t("evalPage.newRun.evaluators")}</label>
+                  <button
+                    type="button"
+                    className="mono"
+                    style={{
+                      background: "none",
+                      border: "none",
+                      color: "var(--aqua)",
+                      cursor: "pointer",
+                      fontSize: 10,
+                      letterSpacing: ".08em",
+                      padding: 0,
+                    }}
+                    onClick={() => setSearchParams({ view: "evaluators" })}
+                  >
+                    {t("evalPage.newRun.manageEvaluators")} ▸
+                  </button>
+                </div>
+                <div className="selchips" style={{ maxHeight: 168, overflowY: "auto" }}>
+                  {evaluators.map((e) => {
+                    const gated = e.requires_ground_truth && !trajectoryAllowed;
+                    const badge = LEVEL_BADGE[e.level];
+                    return (
                       <button
                         key={e.id}
                         type="button"
                         className={`selchip${chosenEvaluators.includes(e.id) ? " on" : ""}`}
-                        style={{ cursor: "pointer" }}
+                        style={{ cursor: gated ? "not-allowed" : "pointer",
+                                 opacity: gated ? 0.4 : undefined }}
+                        disabled={gated}
+                        title={
+                          gated
+                            ? t("evalPage.newRun.trajectoryNeedsGt")
+                            : e.source === "custom"
+                              ? t("evalPage.newRun.customTitle")
+                              : undefined
+                        }
                         onClick={() =>
                           setChosenEvaluators((prev) =>
                             prev.includes(e.id)
@@ -605,16 +760,54 @@ export function Evaluation() {
                           )
                         }
                       >
-                        {e.id.replace("Builtin.", "")}
+                        {e.source === "custom" ? (e.name ?? e.id) : e.id.replace("Builtin.", "")}
+                        {(e.source === "custom" || e.requires_ground_truth) && badge && (
+                          <span
+                            className="mono"
+                            style={{ fontSize: 8.5, marginLeft: 6, color: badge.color,
+                                     letterSpacing: ".08em" }}
+                          >
+                            {e.source === "custom" ? `◆ ${badge.label}` : badge.label}
+                          </span>
+                        )}
                       </button>
-                    ))}
+                    );
+                  })}
                 </div>
               </div>
             ) : (
-              <div className="note" style={{ marginBottom: 10 }}>
-                <span className="i">[i]</span>
-                <span>{t("evalPage.newRun.insightsHint")}</span>
-              </div>
+              <>
+                <div className="field">
+                  <label>{t("evalPage.newRun.insightTypes")}</label>
+                  <div className="selchips">
+                    {INSIGHT_TYPES.map((id) => (
+                      <button
+                        key={id}
+                        type="button"
+                        className={`selchip${chosenInsights.includes(id) ? " on" : ""}`}
+                        style={{ cursor: "pointer" }}
+                        onClick={() =>
+                          setChosenInsights((prev) =>
+                            prev.includes(id)
+                              ? prev.filter((x) => x !== id)
+                              : [...prev, id],
+                          )
+                        }
+                      >
+                        {t(`evalPage.newRun.insightType.${INSIGHT_LABEL_KEYS[id]}`)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="note" style={{ marginBottom: 10 }}>
+                  <span className="i">[i]</span>
+                  <span>
+                    {scope === "window"
+                      ? t("evalPage.newRun.insightsWindowHint")
+                      : t("evalPage.newRun.insightsHint")}
+                  </span>
+                </div>
+              </>
             )}
             {submitError && (
               <div className="note" style={{ borderColor: "var(--crit)", marginBottom: 10 }}>
@@ -627,8 +820,9 @@ export function Evaluation() {
                 primary
                 disabled={
                   !agentId ||
-                  !datasetId ||
-                  (mode === "evaluators" && chosenEvaluators.length === 0)
+                  (scope === "dataset" && !datasetId) ||
+                  (mode === "evaluators" && chosenEvaluators.length === 0) ||
+                  (mode === "insights" && chosenInsights.length === 0)
                 }
                 onClick={() => void startRun()}
               >
@@ -681,6 +875,18 @@ export function Evaluation() {
               <Chip tone="good" icon="●">{t("evalPage.queueIdle")}</Chip>
             )}
             <Btn
+              onClick={() => setSearchParams({ view: "datasets" })}
+              data-testid="datasets-btn"
+            >
+              ▤ {t("evalPage.datasets.title")}
+            </Btn>
+            <Btn
+              onClick={() => setSearchParams({ view: "evaluators" })}
+              data-testid="evaluators-btn"
+            >
+              ◆ {t("evalPage.evaluators.title")}
+            </Btn>
+            <Btn
               primary
               onClick={() => setSearchParams({ view: "new" })}
               data-testid="new-run-btn"
@@ -716,14 +922,8 @@ export function Evaluation() {
               >
                 <td className="mono">run-{run.id.slice(0, 6)}</td>
                 <td className="pri">{run.agent_name}</td>
-                <td className="mono dim">
-                  {run.mode === "insights"
-                    ? `insights · ${run.session_ids.length}`
-                    : run.dataset_name ?? "—"}
-                </td>
-                <td className="mono dim">
-                  {run.mode === "insights" ? "3" : run.evaluators.length}
-                </td>
+                <td className="mono dim">{scopeLabel(run)}</td>
+                <td className="mono dim">{run.evaluators.length}</td>
                 <td
                   className="mono"
                   style={{ color: run.scores.length ? "var(--good)" : "var(--ink-3)" }}
