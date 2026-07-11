@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import { Btn } from "../../components";
 import type { RegistryRecord } from "../Registry";
+import { GitSourcePanel } from "./GitSourcePanel";
 
 export type RegSource = "inline" | "zip" | "git" | "url";
 
@@ -48,7 +49,7 @@ interface SkillSourceFormProps {
 const SOURCES: { key: RegSource; labelKey: string; enabled: boolean }[] = [
   { key: "inline", labelKey: "registry.register.sourceInline", enabled: true },
   { key: "zip", labelKey: "registry.register.sourceZip", enabled: true },
-  { key: "git", labelKey: "registry.register.sourceGit", enabled: false },
+  { key: "git", labelKey: "registry.register.sourceGit", enabled: true },
   { key: "url", labelKey: "registry.register.sourceUrl", enabled: false },
 ];
 
@@ -307,7 +308,9 @@ export function SkillSourceForm({
         </div>
       )}
 
-      {(source === "git" || source === "url") && (
+      {source === "git" && <GitSourcePanel onImported={onImported} />}
+
+      {source === "url" && (
         <div className="note" style={{ marginTop: 14 }} data-testid="source-placeholder">
           <span className="i">[i]</span>
           <span>{t("registry.register.comingSoonBody")}</span>

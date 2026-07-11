@@ -6,11 +6,13 @@ import time
 from dataclasses import asdict
 from typing import Any, Literal
 
-from fastapi import APIRouter, UploadFile
+from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
+from starlette.datastructures import UploadFile
 
 from app.core.errors import AppError
 from app.services import registry_console as console
+from app.services import skill_ingest as si
 from app.services.skill_ingest import (
     SKILL_BUNDLE_MAX_BYTES,
     SkillBundle,
@@ -142,26 +144,77 @@ def _skill_out(bundle: SkillBundle, errors: list[str], index: int) -> dict[str, 
 
 
 @router.post("/skills/inspect")
-async def inspect_skill(file: UploadFile) -> dict[str, Any]:
-    """Acquire + validate a skill bundle from an uploaded .zip without touching
-    S3, park it in staging, and return the parsed skills for preview. The whole
-    upload is refused (4xx) when no skill in it is importable."""
-    filename = (file.filename or "").lower()
-    if not filename.endswith(".zip"):
+async def inspect_skill(request: Request) -> dict[str, Any]:
+    """Acquire + validate skill bundles from a source without touching S3, park
+    them in staging, and return the parsed skills for preview. Accepts either a
+    multipart ``.zip`` upload or a JSON ``{"source": {...}}`` body (git for now);
+    a monorepo git source yields multiple skills. The whole request is refused
+    (4xx) when no skill is importable."""
+    content_type = request.headers.get("content-type", "")
+    if content_type.startswith("multipart/form-data"):
+        bundles = await _acquire_zip(request)
+    elif content_type.startswith("application/json"):
+        try:
+            body = await request.json()
+        except ValueError:  # malformed JSON body → clean 400, not an unhandled 500
+            raise AppError(
+                "registry.invalid_upload", "malformed JSON body", status_code=400
+            ) from None
+        if not isinstance(body, dict):
+            raise AppError(
+                "registry.invalid_upload", "expected a JSON object body", status_code=400
+            )
+        bundles = _acquire_source(body.get("source") or {})
+    else:
+        raise AppError(
+            "registry.invalid_upload",
+            "expected a multipart .zip upload or a JSON source",
+            status_code=400,
+        )
+    return _stage_and_respond(bundles)
+
+
+async def _acquire_zip(request: Request) -> list[SkillBundle]:
+    form = await request.form()
+    upload = form.get("file")
+    if not isinstance(upload, UploadFile):
         raise AppError("registry.invalid_upload", "expected a .zip file", status_code=400)
-    data = await file.read()
+    if not (upload.filename or "").lower().endswith(".zip"):
+        raise AppError("registry.invalid_upload", "expected a .zip file", status_code=400)
+    data = await upload.read()
     if len(data) > SKILL_BUNDLE_MAX_BYTES:
         raise AppError(
             "registry.upload_too_large",
             f"upload exceeds the {SKILL_BUNDLE_MAX_BYTES} byte limit",
             status_code=413,
         )
-    bundles = [bundle_from_zip(data)]  # archive-safety violations raise here (422)
+    return [bundle_from_zip(data)]  # archive-safety violations raise here (422)
+
+
+def _acquire_source(source: dict[str, Any]) -> list[SkillBundle]:
+    """Dispatch a JSON source descriptor to its acquirer. The token (git private
+    repos) is used transiently here and never stored on the bundle or logged."""
+    kind = source.get("kind")
+    if kind == "git":
+        return si.bundles_from_git(
+            url=source.get("url") or "",
+            ref=source.get("ref") or None,
+            subdir=source.get("subdir") or None,
+            token=source.get("token") or None,
+        )
+    raise AppError(
+        "registry.invalid_source",
+        f"unsupported skill source '{kind}'",
+        status_code=400,
+    )
+
+
+def _stage_and_respond(bundles: list[SkillBundle]) -> dict[str, Any]:
     staged = [(b, bundle_errors(b)) for b in bundles]
     if not any(not errs for _, errs in staged):
         for bundle, _ in staged:
             bundle.close()
-        first_errors = staged[0][1] if staged else ["no SKILL.md found in archive"]
+        first_errors = staged[0][1] if staged else ["no SKILL.md found in source"]
         raise AppError(
             "registry.skill_invalid",
             "; ".join(first_errors),
@@ -244,6 +297,21 @@ def import_skills(req: ImportRequest) -> dict[str, Any]:
     if all(r["ok"] for r in records):
         _drop_staging(req.staging_id)
     return {"records": records}
+
+
+@router.get("/skills/capabilities")
+def skill_capabilities() -> dict[str, Any]:
+    """Report git-import capability so the frontend's git branch can warn and
+    offer auto-install when the ``git`` CLI is missing."""
+    return {"git": si.git_capabilities()}
+
+
+@router.post("/skills/capabilities/git-install")
+def install_git() -> dict[str, Any]:
+    """Explicit, user-triggered best-effort install of the ``git`` CLI (changes
+    server state — only called from the capabilities UI button). No-ops with a
+    hint when the server lacks the privilege to install."""
+    return si.install_git()
 
 
 @router.delete("/records/{record_id}")

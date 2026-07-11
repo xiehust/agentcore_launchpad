@@ -16,17 +16,25 @@ only ``inline`` and ``zip`` are implemented here.
 """
 
 import io
+import logging
+import os
 import re
+import shutil
 import stat
+import subprocess
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from typing import Any, Literal
+from urllib.parse import urlparse, urlunparse
 
+import httpx
 import yaml
 
 from app.core.errors import AppError
+
+_logger = logging.getLogger("launchpad.registry")
 
 # Shared caps — the single source of truth for skill limits. The deploy-time
 # consumer (deployer/zip_runtime.py) imports SKILL_BUNDLE_MAX_BYTES so producer
@@ -40,6 +48,13 @@ _DEFAULT_VERSION = "0.1.0"
 _CHUNK = 1024 * 1024
 _EXCERPT_CHARS = 4000
 
+# Repo-scale caps for the git-missing archive fallback: the downloaded archive
+# is a WHOLE repository, not one skill bundle, so the per-bundle caps don't
+# apply at extraction time (validate_bundle enforces them per skill afterwards,
+# exactly like the git-clone path). Zip-bomb protection stays, just repo-sized.
+_REPO_FILE_COUNT_MAX = 20_000
+_REPO_MAX_BYTES = 500 * 1024 * 1024
+
 
 class SkillValidationError(AppError):
     """A bundle failed validation (bad content, unsafe archive, oversize …).
@@ -50,6 +65,36 @@ class SkillValidationError(AppError):
 
     def __init__(self, message: str, detail: Any = None):
         super().__init__("registry.skill_invalid", message, detail=detail, status_code=422)
+
+
+class GitUnavailableError(AppError):
+    """Raised when a git import needs the ``git`` CLI but it is not installed and
+    the host has no archive-download fallback. Carries the install hint so the
+    frontend can offer an auto-install action or show the manual command.
+    """
+
+    def __init__(self, host: str):
+        install = git_install_info()
+        super().__init__(
+            "registry.git_unavailable",
+            f"git is not installed on the server and '{host}' is not a known "
+            f"archive-download host — install git to import from it ({install['hint']})",
+            detail={"host": host, "install": install},
+            status_code=503,
+        )
+
+
+# Hosts whose HTTPS archive endpoint lets us import without the git CLI. Keep in
+# sync with _archive_request below and the capabilities.fallback_hosts field.
+GIT_ARCHIVE_HOSTS = ("github.com", "gitlab.com", "gitee.com", "bitbucket.org")
+
+# Restricting to https keeps token handling and SSRF surface simple. Tests widen
+# this to include file:// so a local repo fixture can exercise the clone path.
+_ALLOWED_GIT_SCHEMES = ("https://",)
+
+_GIT_CLONE_TIMEOUT_S = 60
+_GIT_INSTALL_TIMEOUT_S = 120
+_STDERR_TAIL_CHARS = 2000
 
 
 @dataclass
@@ -130,6 +175,44 @@ def bundle_from_zip(data: bytes) -> SkillBundle:
         raise
 
 
+def bundles_from_git(
+    url: str,
+    ref: str | None = None,
+    subdir: str | None = None,
+    token: str | None = None,
+) -> list[SkillBundle]:
+    """Acquire one or more skill bundles from an https git repository.
+
+    When the ``git`` CLI is present, shallow-clones the repo (``--depth 1``,
+    optional ``--branch ref``, ``GIT_TERMINAL_PROMPT=0``, 60s timeout); an
+    optional token is injected into the clone URL as
+    ``https://x-access-token:{token}@…`` and redacted from every error/log.
+    When git is missing, falls back to downloading the host's HTTPS archive zip
+    for the known hosts in :data:`GIT_ARCHIVE_HOSTS` (token via Authorization
+    header); any other host raises :class:`GitUnavailableError`.
+
+    The materialized tree is scanned (after applying ``subdir``) for every
+    ``SKILL.md``; each hit becomes a bundle rooted at that file's directory, so a
+    monorepo yields multiple bundles. All bundles share the one staging dir —
+    only the first owns it, so ``close()`` on it tears down the whole tree once.
+    """
+    if not url or not str(url).startswith(_ALLOWED_GIT_SCHEMES):
+        raise SkillValidationError("git import requires an https:// repository URL")
+
+    tmp = TemporaryDirectory(prefix="skill-git-")
+    try:
+        available, _ = git_available()
+        if available:
+            _git_clone(url, ref, token, Path(tmp.name))
+            base = Path(tmp.name)
+        else:
+            base = _archive_fallback(url, ref, token, Path(tmp.name))
+        return _scan_git_bundles(base, tmp, url, ref, subdir)
+    except BaseException:
+        tmp.cleanup()
+        raise
+
+
 # ---------- validation ----------
 
 def bundle_errors(bundle: SkillBundle) -> list[str]:
@@ -162,7 +245,9 @@ def validate_bundle(bundle: SkillBundle) -> None:
 
 # ---------- internals ----------
 
-def _bundle_from_dir(root: Path, source: SkillSource, tmp: TemporaryDirectory) -> SkillBundle:
+def _bundle_from_dir(
+    root: Path, source: SkillSource, tmp: TemporaryDirectory | None
+) -> SkillBundle:
     files = sorted(
         p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()
     )
@@ -197,11 +282,23 @@ def _unwrap_single_top_dir(root: Path) -> Path:
     return root
 
 
-def _extract_zip_safely(data: bytes, dest: Path) -> None:
+def _extract_zip_safely(
+    data: bytes,
+    dest: Path,
+    *,
+    max_files: int | None = None,
+    max_bytes: int | None = None,
+) -> None:
     """Extract every file entry into ``dest`` while enforcing archive safety:
     reject symlinks, absolute paths, and ``..`` traversal; cap file count; and
-    abort mid-stream once actually-decompressed bytes exceed the bundle cap
-    (defends against a zip bomb that lies about its declared sizes)."""
+    abort mid-stream once actually-decompressed bytes exceed ``max_bytes``
+    (defends against a zip bomb that lies about its declared sizes). Defaults
+    are the per-skill bundle caps; the repo archive fallback passes repo-scale
+    caps since per-skill limits are enforced later by validate_bundle."""
+    if max_files is None:
+        max_files = SKILL_FILE_COUNT_MAX
+    if max_bytes is None:
+        max_bytes = SKILL_BUNDLE_MAX_BYTES
     dest_root = dest.resolve()
     try:
         archive = zipfile.ZipFile(io.BytesIO(data))
@@ -222,10 +319,8 @@ def _extract_zip_safely(data: bytes, dest: Path) -> None:
             if not _is_within(target, dest_root):
                 raise SkillValidationError(f"zip entry '{name}' escapes the bundle root")
             count += 1
-            if count > SKILL_FILE_COUNT_MAX:
-                raise SkillValidationError(
-                    f"zip has more than {SKILL_FILE_COUNT_MAX} files"
-                )
+            if count > max_files:
+                raise SkillValidationError(f"zip has more than {max_files} files")
             target.parent.mkdir(parents=True, exist_ok=True)
             with zf.open(info) as src, open(target, "wb") as out:
                 while True:
@@ -233,9 +328,9 @@ def _extract_zip_safely(data: bytes, dest: Path) -> None:
                     if not chunk:
                         break
                     total += len(chunk)
-                    if total > SKILL_BUNDLE_MAX_BYTES:
+                    if total > max_bytes:
                         raise SkillValidationError(
-                            f"bundle exceeds the {SKILL_BUNDLE_MAX_BYTES} byte uncompressed limit"
+                            f"bundle exceeds the {max_bytes} byte uncompressed limit"
                         )
                     out.write(chunk)
 
@@ -260,3 +355,333 @@ def _is_within(target: Path, root: Path) -> bool:
 
 def _dir_size(root: Path) -> int:
     return sum(p.stat().st_size for p in root.rglob("*") if p.is_file())
+
+
+# ---------- git acquirer internals ----------
+
+def _git_clone(url: str, ref: str | None, token: str | None, dst: Path) -> None:
+    """Shallow-clone into ``dst`` (already an empty dir) and drop ``.git``.
+
+    Never prompts (``GIT_TERMINAL_PROMPT=0``); a non-zero exit or timeout raises
+    SkillValidationError with the token redacted from the message."""
+    clone_url = _inject_token(url, token)
+    cmd = ["git", "clone", "--depth", "1"]
+    if ref:
+        cmd += ["--branch", ref]
+    # '--' ends git option parsing so a crafted url can never be read as a git
+    # option (url is https-validated already; ref is consumed as --branch's
+    # value regardless of leading dashes — this is belt-and-suspenders).
+    cmd += ["--", clone_url, str(dst)]
+    env = {
+        **os.environ,
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_ASKPASS": "",
+        "GCM_INTERACTIVE": "never",
+    }
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=_GIT_CLONE_TIMEOUT_S, env=env
+        )
+    except subprocess.TimeoutExpired:
+        raise SkillValidationError(
+            f"git clone timed out after {_GIT_CLONE_TIMEOUT_S}s"
+        ) from None
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()
+        raise SkillValidationError(f"git clone failed: {_redact(detail, token)}")
+    shutil.rmtree(dst / ".git", ignore_errors=True)
+
+
+def _archive_fallback(url: str, ref: str | None, token: str | None, dst: Path) -> Path:
+    """git-missing path: download the host archive zip and extract into ``dst``.
+    Returns the tree root (the archive's single wrapper dir stripped). Raises
+    GitUnavailableError for hosts without a known archive endpoint."""
+    host, owner, repo = _parse_repo(url)
+    if host not in GIT_ARCHIVE_HOSTS:
+        raise GitUnavailableError(host)
+    archive_url, headers = _archive_request(host, owner, repo, ref, token)
+    # The archive is a WHOLE repo, so cap the download at repo scale too — using
+    # the per-skill 50MB cap here would reject large monorepos before extraction
+    # even though extraction allows repo scale (mirrors the per-skill/repo split).
+    try:
+        data = _download_archive(archive_url, headers, max_bytes=_REPO_MAX_BYTES)
+    except SkillValidationError as exc:
+        # HEAD.zip resolves the default branch reliably only on github; elsewhere
+        # a missing ref is the likely cause of a download failure — say so.
+        if ref is None and host != "github.com":
+            raise SkillValidationError(
+                f"{exc.message} — for {host} without the git CLI, specify a "
+                "branch or tag (ref)"
+            ) from exc
+        raise
+    _extract_zip_safely(data, dst, max_files=_REPO_FILE_COUNT_MAX, max_bytes=_REPO_MAX_BYTES)
+    return _strip_wrapper_dir(dst)
+
+
+def _scan_git_bundles(
+    base: Path,
+    tmp: TemporaryDirectory,
+    url: str,
+    ref: str | None,
+    subdir: str | None,
+) -> list[SkillBundle]:
+    """Find every SKILL.md under ``base`` (after applying ``subdir``) and build a
+    bundle per hit. Only the first bundle owns ``tmp`` so the shared staging dir
+    is cleaned up exactly once. Zero hits → SkillValidationError."""
+    base_root = base.resolve()
+    scan_root = base_root
+    if subdir:
+        scan_root = (base / subdir).resolve()
+        if not _is_within(scan_root, base_root) or not scan_root.is_dir():
+            raise SkillValidationError(f"subdir '{subdir}' not found in the repository")
+
+    hits = sorted(p for p in scan_root.rglob("SKILL.md") if p.is_file())
+    if not hits:
+        where = f" under '{subdir}'" if subdir else ""
+        raise SkillValidationError(f"no SKILL.md found in the repository{where}")
+
+    redacted_url = _redact_url(url)
+    bundles: list[SkillBundle] = []
+    for i, md_path in enumerate(hits):
+        root = md_path.parent
+        rel = root.relative_to(base_root).as_posix()
+        source = SkillSource(
+            kind="git",
+            url=redacted_url,
+            ref=ref,
+            subdir=None if rel == "." else rel,
+        )
+        bundles.append(_bundle_from_dir(root, source, tmp if i == 0 else None))
+    return bundles
+
+
+def _strip_wrapper_dir(base: Path) -> Path:
+    """A host archive wraps everything in a single ``repo-ref/`` dir; descend into
+    it so subdir/scan see repo contents at top level."""
+    entries = list(base.iterdir())
+    if len(entries) == 1 and entries[0].is_dir():
+        return entries[0]
+    return base
+
+
+def _parse_repo(url: str) -> tuple[str, str, str]:
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    parts = [p for p in parsed.path.split("/") if p]
+    if len(parts) < 2:
+        raise SkillValidationError("cannot parse owner/repo from the git URL")
+    owner, repo = parts[0], parts[1]
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+    return host, owner, repo
+
+
+def _archive_request(
+    host: str, owner: str, repo: str, ref: str | None, token: str | None
+) -> tuple[str, dict[str, str]]:
+    """Build the archive zip URL + headers per host. ``HEAD`` resolves to the
+    default branch on every supported host."""
+    r = ref or "HEAD"
+    if host == "github.com":
+        url = f"https://github.com/{owner}/{repo}/archive/{r}.zip"
+    elif host in ("gitlab.com", "gitee.com"):
+        url = f"https://{host}/{owner}/{repo}/-/archive/{r}/{repo}-{r}.zip"
+    elif host == "bitbucket.org":
+        url = f"https://bitbucket.org/{owner}/{repo}/get/{r}.zip"
+    else:  # unreachable: _archive_fallback filters unknown hosts first
+        raise GitUnavailableError(host)
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    return url, headers
+
+
+def _download_archive(
+    url: str, headers: dict[str, str], max_bytes: int = SKILL_BUNDLE_MAX_BYTES
+) -> bytes:
+    """Stream an archive with a 60s timeout, aborting once ``max_bytes`` bytes
+    have arrived (streamed cap, not post-hoc)."""
+    buf = bytearray()
+    try:
+        with httpx.stream(
+            "GET", url, headers=headers, timeout=60.0, follow_redirects=True
+        ) as resp:
+            resp.raise_for_status()
+            for chunk in resp.iter_bytes(_CHUNK):
+                buf.extend(chunk)
+                if len(buf) > max_bytes:
+                    raise SkillValidationError(
+                        f"archive exceeds the {max_bytes} byte limit"
+                    )
+    except httpx.HTTPError as exc:
+        raise SkillValidationError(f"failed to download archive: {exc}") from exc
+    return bytes(buf)
+
+
+def _inject_token(url: str, token: str | None) -> str:
+    if not token:
+        return url
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    if parsed.port:
+        host = f"{host}:{parsed.port}"
+    return urlunparse(parsed._replace(netloc=f"x-access-token:{token}@{host}"))
+
+
+_USERINFO_RE = re.compile(r"://[^/\s@]+@")
+
+
+def _redact(text: str, token: str | None) -> str:
+    """Mask the injected token AND any ``scheme://user:pass@`` credentials that a
+    user may have pasted into the URL field, so neither ends up in an error line
+    (git usually masks the password itself, but not every version/host does)."""
+    if not text:
+        return text
+    if token:
+        text = text.replace(token, "***")
+    return _USERINFO_RE.sub("://***@", text)
+
+
+def _redact_url(url: str) -> str:
+    """Strip any embedded userinfo (defensive — the token is passed separately,
+    not in the URL) so no credential is stamped into the stored source."""
+    parsed = urlparse(url)
+    if parsed.username or parsed.password:
+        host = parsed.hostname or ""
+        if parsed.port:
+            host = f"{host}:{parsed.port}"
+        parsed = parsed._replace(netloc=host)
+    return urlunparse(parsed)
+
+
+# ---------- git environment: probe, capabilities, install ----------
+
+# Cached git probe; None until first probed. install_git() invalidates it after a
+# successful install so the next capabilities read reflects the new binary.
+_git_probe: dict[str, Any] | None = None
+
+_PACKAGE_MANAGERS: tuple[tuple[str, list[str]], ...] = (
+    ("apt-get", ["apt-get", "install", "-y", "git"]),
+    ("dnf", ["dnf", "install", "-y", "git"]),
+    ("yum", ["yum", "install", "-y", "git"]),
+    ("apk", ["apk", "add", "git"]),
+    ("brew", ["brew", "install", "git"]),
+)
+
+
+def git_available(refresh: bool = False) -> tuple[bool, str | None]:
+    """(available, version) for the ``git`` CLI, memoized. ``version`` is the
+    numeric part of ``git --version`` (e.g. ``"2.43.0"``) or None."""
+    global _git_probe
+    if _git_probe is None or refresh:
+        path = shutil.which("git")
+        version: str | None = None
+        if path:
+            try:
+                out = subprocess.run(
+                    [path, "--version"], capture_output=True, text=True, timeout=10
+                )
+                raw = (out.stdout or "").strip()
+                version = raw.replace("git version ", "").strip() or None
+            except (OSError, subprocess.SubprocessError):
+                version = None
+        _git_probe = {"available": bool(path), "version": version}
+    return _git_probe["available"], _git_probe["version"]
+
+
+def invalidate_git_probe() -> None:
+    global _git_probe
+    _git_probe = None
+
+
+def _detect_package_manager() -> tuple[str | None, list[str] | None]:
+    for name, args in _PACKAGE_MANAGERS:
+        if shutil.which(name):
+            return name, args
+    return None, None
+
+
+def _has_root_or_sudo() -> bool:
+    if getattr(os, "geteuid", lambda: 1)() == 0:
+        return True
+    if not shutil.which("sudo"):
+        return False
+    try:
+        return subprocess.run(
+            ["sudo", "-n", "true"], capture_output=True, timeout=10
+        ).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _install_hint(pm: str | None, needs_root: bool) -> str:
+    if pm is None:
+        return (
+            "no supported package manager (apt-get/dnf/yum/apk/brew) found — "
+            "install git manually: https://git-scm.com/downloads"
+        )
+    args = dict(_PACKAGE_MANAGERS)[pm]
+    cmd = " ".join(args)
+    return f"sudo {cmd}" if needs_root else cmd
+
+
+def git_install_info() -> dict[str, Any]:
+    """The ``install`` sub-object shared by capabilities and GitUnavailableError.
+    ``auto_installable`` is true only when a package manager is present AND we
+    have the privilege to use it (root, passwordless sudo, or brew which needs
+    neither)."""
+    pm, _ = _detect_package_manager()
+    needs_root = pm not in (None, "brew")
+    has_priv = _has_root_or_sudo() if needs_root else pm is not None
+    return {
+        "auto_installable": pm is not None and has_priv,
+        "package_manager": pm,
+        "hint": _install_hint(pm, needs_root),
+    }
+
+
+def git_capabilities() -> dict[str, Any]:
+    available, version = git_available()
+    return {
+        "available": available,
+        "version": version,
+        "fallback_hosts": list(GIT_ARCHIVE_HOSTS),
+        "install": git_install_info(),
+    }
+
+
+def install_git() -> dict[str, Any]:
+    """Explicit, user-triggered best-effort install via the detected package
+    manager (non-interactive, ``sudo -n`` when not root, 120s timeout). Never
+    attempts when not auto_installable — returns the manual hint instead. On
+    success invalidates the probe cache and returns the new version."""
+    info = git_install_info()
+    pm = info["package_manager"]
+    if not info["auto_installable"]:
+        _logger.info("git-install requested but not auto-installable (pm=%s)", pm)
+        return {"ok": False, "hint": info["hint"], "package_manager": pm}
+
+    args = dict(_PACKAGE_MANAGERS)[pm]
+    is_root = getattr(os, "geteuid", lambda: 1)() == 0
+    cmd = args if (pm == "brew" or is_root) else ["sudo", "-n", *args]
+    _logger.info("git-install invoked: %s", " ".join(cmd))
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=_GIT_INSTALL_TIMEOUT_S
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": f"install timed out after {_GIT_INSTALL_TIMEOUT_S}s",
+                "hint": info["hint"]}
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"ok": False, "error": str(exc)[-_STDERR_TAIL_CHARS:], "hint": info["hint"]}
+
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout or "").strip()[-_STDERR_TAIL_CHARS:]
+        _logger.warning("git-install failed (rc=%s)", proc.returncode)
+        return {"ok": False, "error": tail, "hint": info["hint"]}
+
+    available, version = git_available(refresh=True)
+    if not available:
+        tail = (proc.stdout or "").strip()[-_STDERR_TAIL_CHARS:]
+        return {"ok": False, "error": tail or "git still not found after install",
+                "hint": info["hint"]}
+    _logger.info("git-install succeeded: git %s", version)
+    return {"ok": True, "git_version": version}
