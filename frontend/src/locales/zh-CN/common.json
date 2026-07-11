@@ -819,7 +819,7 @@
       "kicker": "Agent 管理 · Strands Studio",
       "title": "Strands Studio",
       "titleEdit": "编辑 {{name}}",
-      "editFallback": "studio agent",
+      "editFallback": "Studio Agent",
       "meta": "在画布上编排 Strands agent,再经统一流水线发布",
       "publishingTitle": "正在发布 Agent",
       "republishingTitle": "正在重新发布 {{name}}",
