@@ -539,12 +539,31 @@
       "TrajectoryExactOrderMatch": "轨迹完全顺序匹配",
       "TrajectoryInOrderMatch": "轨迹有序匹配",
       "TrajectoryAnyOrderMatch": "轨迹任意顺序匹配"
+    },
+    "experiment": {
+      "title": "实验",
+      "meta": "提示词 A/B 循环 · 会创建真实 AWS 资源",
+      "open": "查看",
+      "none": "暂无实验——启动一个 ▸",
+      "how": {
+        "title": "实验循环是如何执行的",
+        "sub": "10 个阶段 · recommend → cleanup",
+        "recommend": "RECOMMEND——AI 起草改进版系统提示词",
+        "bundles": "BUNDLES——生成 control 与 treatment 配置包",
+        "gateway": "GATEWAY——专用网关路由实验流量",
+        "abtest": "ABTEST——A/B 测试按 50/50 分流",
+        "traffic": "TRAFFIC——采样调用同时流经两个分组",
+        "verdict": "VERDICT——在线评估器为两组打分并对比",
+        "promote": "PROMOTE——将流量切换到胜出提示词",
+        "canary": "CANARY——挑战者 Agent 以 90/10 加入",
+        "ramp": "RAMP——挑战者流量按 10 → 50 → 100 递增",
+        "cleanup": "CLEANUP——删除实验的 AWS 资源",
+        "note": "实验会创建真实 AWS 资源(配置包、网关、A/B 测试、在线评估器);verdict 之前的流量阶段最长约 15 分钟。"
+      }
     }
   },
   "expPage": {
-    "title": "实验",
     "sub": "config-bundle A/B · 经 gateway 路由",
-    "none": "暂无实验",
     "startHint": "AI 建议 → 配置包 → A/B 50/50 → 判定",
     "start": "启动实验",
     "running": "流程运行中 — 建议 → 配置包 → gateway → A/B → 流量 → 判定……",

@@ -539,12 +539,31 @@
       "TrajectoryExactOrderMatch": "Trajectory Exact-Order Match",
       "TrajectoryInOrderMatch": "Trajectory In-Order Match",
       "TrajectoryAnyOrderMatch": "Trajectory Any-Order Match"
+    },
+    "experiment": {
+      "title": "EXPERIMENT",
+      "meta": "prompt A/B loop · real AWS resources",
+      "open": "OPEN",
+      "none": "NO EXPERIMENT — START ONE ▸",
+      "how": {
+        "title": "HOW A LOOP WORKS",
+        "sub": "10 stages · recommend → cleanup",
+        "recommend": "RECOMMEND — AI drafts an improved system prompt",
+        "bundles": "BUNDLES — control & treatment configuration bundles",
+        "gateway": "GATEWAY — dedicated gateway routes experiment traffic",
+        "abtest": "ABTEST — A/B test splits traffic 50/50 between arms",
+        "traffic": "TRAFFIC — sample invocations flow through both arms",
+        "verdict": "VERDICT — online evaluators score and compare the arms",
+        "promote": "PROMOTE — shift traffic to the winning prompt",
+        "canary": "CANARY — a challenger agent joins at 90/10",
+        "ramp": "RAMP — challenger traffic steps 10 → 50 → 100",
+        "cleanup": "CLEANUP — delete the experiment's AWS resources",
+        "note": "Experiments create real AWS resources (config bundles, a gateway, A/B tests, online evaluators). Traffic stages before the verdict can take ~15 minutes."
+      }
     }
   },
   "expPage": {
-    "title": "EXPERIMENTS",
     "sub": "config-bundle A/B · gateway routed",
-    "none": "no experiments yet",
     "startHint": "AI recommendations → bundles → A/B 50/50 → verdict",
     "start": "START EXPERIMENT",
     "running": "loop running — recommend → bundles → gateway → A/B → traffic → verdict…",
