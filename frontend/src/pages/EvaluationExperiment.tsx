@@ -1,6 +1,8 @@
+import type { TFunction } from "i18next";
 import type { CSSProperties } from "react";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useSearchParams } from "react-router-dom";
 
 import { Btn, Chip, ConfirmDialog, Panel, useToast, ViewHead } from "../components";
 import type { AgentInfo } from "../lib/api";
@@ -53,6 +55,17 @@ const LOOP_STAGES = [
 // "0.0310" reads worse than "0.031"; tiny values collapse to a bound.
 function fmtP(p: number): string {
   return p < 0.001 ? "<0.001" : p.toFixed(3);
+}
+
+// A non-significant "winner" is noise — the label stays neutral wherever a
+// verdict is displayed (detail headline, list rows, terminal summary).
+function verdictLabel(
+  t: TFunction,
+  v: ExperimentInfo["artifacts"]["verdict"] | undefined,
+): string {
+  if (!v) return "—";
+  if (v.significant === false) return t("evalPage.experiment.nonsig.title");
+  return v.verdict.toUpperCase();
 }
 
 // status → chip tone, shared by the sub-page header and the dashboard row.
@@ -166,7 +179,24 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
     return () => clearInterval(timer);
   }, [refresh]);
 
-  const exp = experiments[0] ?? null;
+  // "?exp=<id>" selects a row from the list (linkable, back-button friendly);
+  // "?exp=new" opens the start form even while other experiments exist.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const expParam = searchParams.get("exp");
+  const creatingNew = expParam === "new";
+  const exp = creatingNew
+    ? null
+    : (experiments.find((e) => e.id === expParam) ?? experiments[0] ?? null);
+  const selectExp = (id: string | null) => {
+    setSearchParams(id ? { view: "experiment", exp: id } : { view: "experiment" });
+  };
+  // per-experiment control state must not leak across row switches
+  useEffect(() => {
+    setChallengerId("");
+    setConfirmCleanup(false);
+    setConfirmPromote(false);
+  }, [exp?.id]);
+
   const verdict = exp?.artifacts.verdict;
   const canary = exp?.artifacts.canary;
   const canaryWeights = canary?.after_weights ?? canary?.weights;
@@ -175,11 +205,7 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
   // within noise — announcing a winner would be misleading, so the verdict
   // headline turns neutral and PROMOTE demands an explicit override.
   const nonSignificant = verdict?.significant === false;
-  const verdictHeadline = verdict
-    ? nonSignificant
-      ? t("evalPage.experiment.nonsig.title")
-      : verdict.verdict.toUpperCase()
-    : "—";
+  const verdictHeadline = verdictLabel(t, verdict);
   // cleaned/failed experiments are over — controls that would fire actions
   // against torn-down resources collapse into a read-only summary.
   const terminal = exp?.status === "cleaned" || exp?.status === "failed";
@@ -199,6 +225,7 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
         return;
       }
       void refresh();
+      if (creatingNew) selectExp(null); // jump to the freshly created (newest) one
     } catch (err) {
       setStartError(String(err));
     } finally {
@@ -275,6 +302,74 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
       <div style={{ marginBottom: 14 }}>
         <Btn onClick={onBack}>◂ {t("evalPage.backToRuns")}</Btn>
       </div>
+
+      <Panel
+        brk
+        pad={false}
+        title={t("evalPage.experiment.list.title")}
+        sub={t("evalPage.experiment.list.sub")}
+        end={
+          <Btn
+            primary
+            data-testid="new-experiment-btn"
+            onClick={() => selectExp("new")}
+          >
+            + {t("evalPage.experiment.list.new")}
+          </Btn>
+        }
+        style={{ "--i": 0, marginBottom: 14 } as CSSProperties}
+      >
+        <table>
+          <thead>
+            <tr>
+              <th>{t("evalPage.experiment.list.name")}</th>
+              <th>{t("evalPage.experiment.list.agent")}</th>
+              <th>{t("evalPage.experiment.list.stage")}</th>
+              <th>{t("evalPage.experiment.list.verdict")}</th>
+              <th>{t("evalPage.experiment.list.created")}</th>
+              <th>{t("evalPage.experiment.list.status")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {experiments.map((e) => (
+              <tr
+                key={e.id}
+                data-testid="experiment-list-row"
+                onClick={() => selectExp(e.id)}
+                style={{
+                  cursor: "pointer",
+                  background:
+                    !creatingNew && exp?.id === e.id ? "rgba(255,176,0,.045)" : undefined,
+                }}
+              >
+                <td className="pri">{e.name}</td>
+                <td>{e.agent_name}</td>
+                <td className="mono dim">{e.stage.toUpperCase()}</td>
+                <td className="mono dim">{verdictLabel(t, e.artifacts.verdict)}</td>
+                <td className="mono dim">
+                  {e.created_at ? new Date(e.created_at).toLocaleString() : "—"}
+                </td>
+                <td>
+                  <Chip
+                    tone={experimentTone(e.status)}
+                    icon={e.status === "running" ? "◐" : "●"}
+                  >
+                    {e.status.toUpperCase()}
+                  </Chip>
+                </td>
+              </tr>
+            ))}
+            {experiments.length === 0 && (
+              <tr>
+                <td colSpan={6} className="dim mono" style={{ textAlign: "center" }}>
+                  {t("evalPage.experiment.list.empty")}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </Panel>
+
       <div className="eval-grid">
         <Panel
           brk
@@ -290,17 +385,8 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
               </Chip>
             )
           }
-          style={{ "--i": 0 } as CSSProperties}
+          style={{ "--i": 1 } as CSSProperties}
         >
-          {experiments.length > 1 && (
-            <div
-              className="mono dim"
-              data-testid="more-experiments"
-              style={{ fontSize: 10, marginBottom: 8 }}
-            >
-              {t("evalPage.experiment.moreCount", { count: experiments.length })}
-            </div>
-          )}
           {!exp && startForm(t("expPage.start"))}
 
           {exp && terminal && (
@@ -680,7 +766,7 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
         <Panel
           title={t("evalPage.experiment.how.title")}
           sub={t("evalPage.experiment.how.sub")}
-          style={{ "--i": 1 } as CSSProperties}
+          style={{ "--i": 2 } as CSSProperties}
         >
           {LOOP_STAGES.map((stage, i) => (
             <div className="kv" key={stage}>

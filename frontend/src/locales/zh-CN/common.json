@@ -595,7 +595,6 @@
         "a3": "或 CLEANUP 放弃实验并清除资源。",
         "promotedContext": "已在样本不足时手动放量——上方判定早于该操作"
       },
-      "moreCount": "共 {{count}} 个实验记录——当前显示最新一个",
       "significant": "统计显著",
       "notSignificant": "未达统计显著",
       "nonsig": {
@@ -610,6 +609,20 @@
           "title": "在未达统计显著时放量",
           "body": "该判定未达统计显著——领先可能只是噪声。继续放量会把生产流量切给它。确定继续?"
         }
+      },
+      "latest": "最新",
+      "rowMore": "另有 {{count}} 个",
+      "list": {
+        "title": "实验列表",
+        "sub": "优化实验 · 最新在前",
+        "new": "新建实验",
+        "name": "实验",
+        "agent": "AGENT",
+        "stage": "阶段",
+        "verdict": "判定",
+        "created": "创建时间",
+        "status": "状态",
+        "empty": "还没有实验——启动一个 ▸"
       }
     }
   },

@@ -848,6 +848,9 @@ export function Evaluation() {
             style={{ display: "flex", gap: 10, alignItems: "center", cursor: "pointer" }}
             onClick={() => setSearchParams({ view: "experiment" })}
           >
+            <span className="mono dim" style={{ fontSize: 9.5, letterSpacing: ".12em" }}>
+              {t("evalPage.experiment.latest")}
+            </span>
             <span className="pri">{experiments[0].name}</span>
             <Chip
               tone={experimentTone(experiments[0].status)}
@@ -858,6 +861,11 @@ export function Evaluation() {
             <span className="mono dim" style={{ fontSize: 11 }}>
               {experiments[0].stage.toUpperCase()}
             </span>
+            {experiments.length > 1 && (
+              <span className="mono dim" style={{ fontSize: 10.5 }}>
+                {t("evalPage.experiment.rowMore", { count: experiments.length - 1 })}
+              </span>
+            )}
             <Btn style={{ marginLeft: "auto" }}>{t("evalPage.experiment.open")} ▸</Btn>
           </div>
         ) : (

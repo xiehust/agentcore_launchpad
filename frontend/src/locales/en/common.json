@@ -595,7 +595,6 @@
         "a3": "CLEANUP to abandon the experiment and remove its resources.",
         "promotedContext": "promoted manually despite insufficient data — the verdict above predates the promotion"
       },
-      "moreCount": "{{count}} experiments on record — showing the latest",
       "significant": "statistically significant",
       "notSignificant": "not statistically significant",
       "nonsig": {
@@ -610,6 +609,20 @@
           "title": "Promote without statistical significance",
           "body": "This verdict is not statistically significant — the leader's edge may be noise. Promoting shifts production traffic to it anyway. Continue?"
         }
+      },
+      "latest": "LATEST",
+      "rowMore": "+{{count}} more",
+      "list": {
+        "title": "EXPERIMENTS",
+        "sub": "optimization loops · newest first",
+        "new": "NEW EXPERIMENT",
+        "name": "EXPERIMENT",
+        "agent": "AGENT",
+        "stage": "STAGE",
+        "verdict": "VERDICT",
+        "created": "CREATED",
+        "status": "STATUS",
+        "empty": "NO EXPERIMENTS YET — START ONE ▸"
       }
     }
   },
