@@ -135,6 +135,7 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
   const [startError, setStartError] = useState<string | null>(null);
   const [challengerId, setChallengerId] = useState("");
   const [confirmCleanup, setConfirmCleanup] = useState(false);
+  const [confirmPromote, setConfirmPromote] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -170,6 +171,15 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
   const canary = exp?.artifacts.canary;
   const canaryWeights = canary?.after_weights ?? canary?.weights;
   const insufficient = !!verdict?.verdict.includes("insufficient");
+  // significant:false means the service compared the arms and the delta is
+  // within noise — announcing a winner would be misleading, so the verdict
+  // headline turns neutral and PROMOTE demands an explicit override.
+  const nonSignificant = verdict?.significant === false;
+  const verdictHeadline = verdict
+    ? nonSignificant
+      ? t("evalPage.experiment.nonsig.title")
+      : verdict.verdict.toUpperCase()
+    : "—";
   // cleaned/failed experiments are over — controls that would fire actions
   // against torn-down resources collapse into a read-only summary.
   const terminal = exp?.status === "cleaned" || exp?.status === "failed";
@@ -313,11 +323,9 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
                 <div className="kv">
                   <span className="k mono">{t("evalPage.experiment.summary.verdict")}</span>
                   <span className="v mono">
-                    {verdict ? verdict.verdict.toUpperCase() : "—"}
-                    {verdict?.significant != null &&
-                      ` · ${verdict.significant
-                        ? `✓ ${t("evalPage.experiment.significant")}`
-                        : t("evalPage.experiment.notSignificant")}`}
+                    {verdictHeadline}
+                    {verdict?.significant === true &&
+                      ` · ✓ ${t("evalPage.experiment.significant")}`}
                     {exp.artifacts.promote &&
                       ` · ${t("expPage.promoted")} T1 ${
                         exp.artifacts.promote.after_weights?.T1 ?? 100}%`}
@@ -329,13 +337,15 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
                     {exp.created_at ? new Date(exp.created_at).toLocaleString() : "—"}
                   </span>
                 </div>
-                {exp.artifacts.promote && insufficient && (
+                {exp.artifacts.promote && (insufficient || nonSignificant) && (
                   <div
                     className="mono dim"
                     data-testid="promoted-context"
                     style={{ fontSize: 10.5, margin: "4px 0" }}
                   >
-                    ⚠ {t("evalPage.experiment.insufficient.promotedContext")}
+                    ⚠ {insufficient
+                      ? t("evalPage.experiment.insufficient.promotedContext")
+                      : t("evalPage.experiment.nonsig.promotedContext")}
                   </div>
                 )}
                 <div className="note" style={{ marginTop: 8 }}>
@@ -451,7 +461,7 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
                   <div
                     className="verdict"
                     style={
-                      insufficient
+                      insufficient || nonSignificant
                         ? { background: "rgba(250,178,25,.08)",
                             border: "1px solid rgba(250,178,25,.35)" }
                         : undefined
@@ -459,36 +469,55 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
                   >
                     <span
                       className="vt"
-                      style={insufficient ? { color: "var(--warn)" } : undefined}
+                      style={insufficient || nonSignificant
+                        ? { color: "var(--warn)" } : undefined}
                     >
-                      ◎ {verdict.verdict.toUpperCase()}
+                      ◎ {verdictHeadline}
                     </span>
                     <span className="vm">
                       {verdict.avg_delta != null && `Δ ${verdict.avg_delta}`} · n={verdict.n ?? 0}
-                      {verdict.significant != null && (
+                      {verdict.significant === true && (
                         <span
                           data-testid="verdict-significance"
-                          style={{
-                            color: verdict.significant ? "var(--good)" : "var(--warn)",
-                          }}
+                          style={{ color: "var(--good)" }}
+                        >
+                          {" · "}✓ {t("evalPage.experiment.significant")}
+                        </span>
+                      )}
+                      {nonSignificant && (
+                        <span
+                          data-testid="verdict-significance"
+                          style={{ color: "var(--warn)" }}
                         >
                           {" · "}
-                          {verdict.significant
-                            ? `✓ ${t("evalPage.experiment.significant")}`
-                            : t("evalPage.experiment.notSignificant")}
+                          {t("evalPage.experiment.nonsig.observed",
+                            { verdict: verdict.verdict })}
                         </span>
                       )}
                     </span>
                     {exp.status === "ready" && !exp.artifacts.promote && (
-                      <Btn
-                        primary
-                        style={{ marginLeft: "auto" }}
-                        disabled={busy}
-                        data-testid="promote-btn"
-                        onClick={() => void onAction(exp.id, "promote")}
-                      >
-                        {t("expPage.promote")} ▸
-                      </Btn>
+                      // weak evidence (non-significant or no samples at all)
+                      // demotes PROMOTE to a secondary, confirm-gated action
+                      insufficient || nonSignificant ? (
+                        <Btn
+                          style={{ marginLeft: "auto" }}
+                          disabled={busy}
+                          data-testid="promote-btn"
+                          onClick={() => setConfirmPromote(true)}
+                        >
+                          {t("expPage.promote")} ▸
+                        </Btn>
+                      ) : (
+                        <Btn
+                          primary
+                          style={{ marginLeft: "auto" }}
+                          disabled={busy}
+                          data-testid="promote-btn"
+                          onClick={() => void onAction(exp.id, "promote")}
+                        >
+                          {t("expPage.promote")} ▸
+                        </Btn>
+                      )
                     )}
                     {exp.artifacts.promote && (
                       <Chip tone="good" icon="✓" style={{ marginLeft: "auto" }}>
@@ -497,13 +526,15 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
                       </Chip>
                     )}
                   </div>
-                  {insufficient && exp.artifacts.promote && (
+                  {(insufficient || nonSignificant) && exp.artifacts.promote && (
                     <div
                       className="mono dim"
                       data-testid="promoted-context"
                       style={{ fontSize: 10.5, margin: "4px 0 8px" }}
                     >
-                      ⚠ {t("evalPage.experiment.insufficient.promotedContext")}
+                      ⚠ {insufficient
+                        ? t("evalPage.experiment.insufficient.promotedContext")
+                        : t("evalPage.experiment.nonsig.promotedContext")}
                     </div>
                   )}
                   {insufficient && !exp.artifacts.promote && (
@@ -518,6 +549,21 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
                         <br />· {t("evalPage.experiment.insufficient.a1")}
                         <br />· {t("evalPage.experiment.insufficient.a2")}
                         <br />· {t("evalPage.experiment.insufficient.a3")}
+                      </span>
+                    </div>
+                  )}
+                  {nonSignificant && !exp.artifacts.promote && (
+                    <div
+                      className="note"
+                      style={{ borderColor: "var(--warn)", marginTop: 8 }}
+                      data-testid="nonsig-note"
+                    >
+                      <span className="i" style={{ color: "var(--warn)" }}>[!]</span>
+                      <span>
+                        {t("evalPage.experiment.nonsig.reason")}
+                        <br />· {t("evalPage.experiment.nonsig.a1")}
+                        <br />· {t("evalPage.experiment.nonsig.a2")}
+                        <br />· {t("evalPage.experiment.nonsig.a3")}
                       </span>
                     </div>
                   )}
@@ -604,17 +650,30 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
             </>
           )}
           {exp && (
-            <ConfirmDialog
-              open={confirmCleanup}
-              title={t("expPage.confirmCleanup.title")}
-              body={t("expPage.confirmCleanup.body")}
-              confirmLabel={t("expPage.cleanup")}
-              onConfirm={() => {
-                setConfirmCleanup(false);
-                void onAction(exp.id, "cleanup");
-              }}
-              onCancel={() => setConfirmCleanup(false)}
-            />
+            <>
+              <ConfirmDialog
+                open={confirmCleanup}
+                title={t("expPage.confirmCleanup.title")}
+                body={t("expPage.confirmCleanup.body")}
+                confirmLabel={t("expPage.cleanup")}
+                onConfirm={() => {
+                  setConfirmCleanup(false);
+                  void onAction(exp.id, "cleanup");
+                }}
+                onCancel={() => setConfirmCleanup(false)}
+              />
+              <ConfirmDialog
+                open={confirmPromote}
+                title={t("evalPage.experiment.nonsig.confirmPromote.title")}
+                body={t("evalPage.experiment.nonsig.confirmPromote.body")}
+                confirmLabel={t("expPage.promote")}
+                onConfirm={() => {
+                  setConfirmPromote(false);
+                  void onAction(exp.id, "promote");
+                }}
+                onCancel={() => setConfirmPromote(false)}
+              />
+            </>
           )}
         </Panel>
 

@@ -597,7 +597,20 @@
       },
       "moreCount": "{{count}} experiments on record — showing the latest",
       "significant": "statistically significant",
-      "notSignificant": "not statistically significant"
+      "notSignificant": "not statistically significant",
+      "nonsig": {
+        "title": "NO SIGNIFICANT DIFFERENCE",
+        "observed": "observed: {{verdict}}",
+        "reason": "The difference between the arms is not statistically significant at this sample size — the apparent winner may just be noise.",
+        "a1": "Keep gathering evidence: send both variants more traffic, then start a fresh experiment (the verdict is computed once).",
+        "a2": "PROMOTE stays available, but treat it as a judgment call — the data alone doesn't support it.",
+        "a3": "Or CLEANUP and keep the current champion — no change is also a valid outcome.",
+        "promotedContext": "promoted manually despite a non-significant result — the verdict above predates the promotion",
+        "confirmPromote": {
+          "title": "Promote without statistical significance",
+          "body": "This verdict is not statistically significant — the leader's edge may be noise. Promoting shifts production traffic to it anyway. Continue?"
+        }
+      }
     }
   },
   "expPage": {
