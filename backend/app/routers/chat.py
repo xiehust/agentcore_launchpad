@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import exists
 from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal, get_db
@@ -107,9 +108,15 @@ def chat(agent_id: str, req: ChatRequest, db: Session = Depends(get_db)) -> Stre
 
 @router.get("/chat/{agent_id}/sessions")
 def list_sessions(agent_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    # Only sessions with a replayable transcript: rows that predate the
+    # ChatMessage ledger have nothing to open (clicking them showed an empty
+    # thread with an id-only preview), so they are filtered out here.
     rows = (
         db.query(ChatSession)
-        .filter(ChatSession.agent_id == agent_id)
+        .filter(
+            ChatSession.agent_id == agent_id,
+            exists().where(ChatMessage.session_id == ChatSession.session_id),
+        )
         .order_by(ChatSession.last_at.desc())
         .limit(50)
         .all()

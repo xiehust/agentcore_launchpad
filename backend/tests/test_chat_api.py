@@ -143,6 +143,30 @@ def test_chat_history_persists_and_replays(client, monkeypatch):
     assert sessions[0]["turns"] == 2
 
 
+def test_sessions_without_transcript_hidden(client, monkeypatch):
+    """Sessions that predate the ChatMessage ledger have nothing to replay —
+    the sessions list must not offer them (they opened as empty threads)."""
+    from app.models.ledger import ChatSession
+
+    agent_id = make_active_agent(name="chat-legacy-agent")
+    db = SessionLocal()
+    db.add(ChatSession(agent_id=agent_id, session_id="legacy" + "x" * 40, turns=3))
+    db.commit()
+    db.close()
+    assert client.get(f"/api/chat/{agent_id}/sessions").json()["sessions"] == []
+
+    monkeypatch.setattr(
+        chat_service,
+        "invoke_agent_text",
+        lambda a, p, session_id=None, actor_id="river": {"text": "ok", "session_id": "s" * 40},
+    )
+    client.post(f"/api/chat/{agent_id}", json={"prompt": "hi"})
+    sessions = client.get(f"/api/chat/{agent_id}/sessions").json()["sessions"]
+    assert len(sessions) == 1  # the legacy row stays hidden
+    assert not sessions[0]["session_id"].startswith("legacy")
+    assert sessions[0]["preview"] == "hi"
+
+
 def test_chat_history_records_errors(client, monkeypatch):
     """A failed turn keeps the user prompt and stores the error row."""
     agent_id = make_active_agent(name="chat-hist-err")
