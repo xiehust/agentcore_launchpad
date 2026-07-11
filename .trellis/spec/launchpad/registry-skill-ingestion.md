@@ -1,0 +1,155 @@
+# Registry Skill Ingestion — Multi-Source Pipeline
+
+## Scenario: adding/maintaining skill sources (inline / zip / git / url)
+
+### 1. Scope / Trigger
+
+Cross-layer contract between `frontend/src/pages/registry/*` and
+`backend/app/routers/registry.py` + `backend/app/services/skill_ingest.py`.
+Touch this spec whenever you add a skill source kind, change the staging flow,
+or alter validation caps. Introduced by task `07-11-registry-skill-multi-source`
+(commits 2b7f47f / 2d39ca3 / cbbb8e6).
+
+**Load-bearing AWS facts** (verified 2026-07-11 against botocore model + docs):
+- AGENT_SKILLS registry records carry ONLY inline descriptors:
+  `skillMd.inlineContent` (required) and `skillDefinition.inlineContent`,
+  each ≤ **102,400** bytes. No zip/git/S3 source exists AWS-side.
+- `synchronizationType: URL` is MCP/A2A-only — **not available for skills**.
+  All source diversity therefore lives in the Launchpad layer.
+- Multi-file bundle bytes live at `s3://{artifacts_bucket}/skills/{name}/`;
+  the deploy-time consumer (`deployer/zip_runtime.py:bundle_skills_into`)
+  downloads the whole prefix, so producer-side changes need no consumer edits.
+
+### 2. Signatures
+
+Backend service (`app/services/skill_ingest.py`) — every acquirer returns the
+same `SkillBundle` (staging `TemporaryDirectory` + name/description/version/
+files/skill_md/`SkillSource` provenance); callers MUST `close()` bundles:
+
+```python
+bundle_from_inline(skill_md: str) -> SkillBundle
+bundle_from_zip(data: bytes) -> SkillBundle
+bundles_from_git(url, ref=None, subdir=None, token=None) -> list[SkillBundle]  # monorepo → many
+bundle_from_url(url: str) -> SkillBundle          # zip or raw SKILL.md by detection
+bundle_from_source(source: dict) -> SkillBundle   # reimport re-acquire (git/url only)
+```
+
+Registry console (`app/services/registry_console.py`):
+
+```python
+register_skill_bundle(bundle, *, name_override=None, description_override=None) -> record
+register_skill(name, description, skill_md) -> record   # thin inline wrapper
+reimport_skill(record_id) -> record                     # git/url sources only
+```
+
+HTTP API:
+
+| Endpoint | Method | Body |
+|---|---|---|
+| `/api/registry/skills/inspect` | POST | multipart `file` (.zip) **or** JSON `{"source":{"kind":"git"\|"url",...}}` (content-type dispatch) |
+| `/api/registry/skills/import` | POST | `{staging_id, selections:[{index?, name?, name_override?, description_override?}]}` |
+| `/api/registry/skills/capabilities` | GET | — |
+| `/api/registry/skills/capabilities/git-install` | POST | empty (explicit user action; mutates the host) |
+| `/api/registry/records/{id}/reimport` | POST | empty |
+
+### 3. Contracts
+
+`inspect` 200: `{staging_id, skills:[{index, name, description, version,
+files[], skill_md_excerpt, source{kind,url,ref,subdir,imported_at}, valid,
+errors[]}]}`. Staging is an **in-process** dict, TTL 10 min (single-process
+uvicorn assumption — revisit if the deploy shape ever adds workers).
+
+`import` 200 (always 200; per-item results): `{records:[{name, ok,
+record?: <record_out>, error?: str, error_code?: str}]}`. Staging is dropped
+**only when every item succeeded** — kept on failure so the user can rename
+and retry without re-uploading.
+
+`capabilities` 200: `{git:{available, version, fallback_hosts[],
+install:{auto_installable, package_manager, hint}}}`.
+
+`reimport` 200: updated `<record_out>` — `version` minor-bumped
+(`1.0.0→1.1.0`), descriptor `source.imported_at` refreshed, registered `name`
+preserved even if the upstream frontmatter name changed (S3 prefix + record
+identity are keyed by name).
+
+`skillDefinition.inlineContent` JSON (stored on the AWS record):
+`{name, description, version, path: "s3://…/skills/{name}/", files: [real
+list], source: {kind, url, ref, subdir, imported_at}}`. Old records may lack
+`files`/`source` — readers must treat both as optional.
+
+Shared caps (single source of truth in `skill_ingest.py`; consumer imports
+them): `SKILL_MD_MAX_BYTES=102_400`, `SKILL_BUNDLE_MAX_BYTES=50MB`,
+`SKILL_FILE_COUNT_MAX=200`; repo-archive extraction uses repo-scale caps
+(`_REPO_*`) because per-skill caps apply per bundle AFTER discovery.
+
+### 4. Validation & Error Matrix
+
+| Condition | Error |
+|---|---|
+| non-.zip upload / bad JSON / unknown source kind | 400 `registry.invalid_upload` / `registry.invalid_source` |
+| upload > 50MB | 413 `registry.upload_too_large` |
+| unsafe archive (traversal/symlink/zip-bomb), missing SKILL.md, SKILL.md > 100KB, descriptor JSON > 100KB, bad name | 422 `registry.skill_invalid` |
+| unknown/expired staging_id | 410 `registry.staging_expired` |
+| name already registered | per-item `registry.name_exists` (409-origin) |
+| git missing + host not in fallback list | 503 `registry.git_unavailable` (+ `detail.install.hint`) |
+| reimport on inline/zip source or DEPRECATED record | 400 `registry.not_reimportable` |
+| non-https or non-public host (SSRF guard) | 422 `registry.skill_invalid` |
+
+Envelope everywhere: `{code, message, detail}` (`app/core/errors.py`);
+frontend reads `body.message`.
+
+### 5. Good/Base/Bad Cases
+
+- **Good**: zip with `SKILL.md + scripts/ + references/` → inspect preview →
+  import → S3 prefix holds all files, `definition.files` lists them.
+- **Base**: git monorepo (e.g. anthropics/skills, 18 skills) → one staging,
+  multi-select import by `index`; git absent → github archive fallback yields
+  identical discovery.
+- **Bad**: zip whose entry is `../../etc/passwd` → 422, zero S3 writes; import
+  retried after one item's 409 → staging still alive, only failed rows resent.
+
+### 6. Tests Required
+
+`backend/tests/test_skill_ingest.py` (zip safety: traversal/symlink/bomb/
+unwrap), `test_skill_ingest_git.py` (local-repo clone fixture, token
+redaction incl. URL-embedded creds, archive fallback incl. >200-file repo,
+SSRF host rejection), `test_skill_ingest_url.py` (zip-vs-md detection, public
+-address guard + redirect-hop guard), `test_registry_skill_ingest.py`
+(S3 funnel, cleanup-on-failure, staging lifecycle), `test_registry_reimport.py`
+(delete-before-upload ordering, version bump, name preservation, gating).
+Assertion points: S3 keys uploaded/deleted, descriptor JSON contents,
+staging survival semantics, error codes.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+```python
+# per-skill caps applied to a whole-repo archive (live bug, fixed):
+_extract_zip_safely(repo_archive, dst)          # 200-file cap kills monorepos
+# rollback deleting fresh files under a live record on reimport failure:
+_delete_keys(uploaded)                          # strands the record over an empty prefix
+# binding caps at def-time breaks test monkeypatching:
+def _extract_zip_safely(data, dest, max_files=SKILL_FILE_COUNT_MAX): ...
+```
+
+#### Correct
+```python
+_extract_zip_safely(repo_archive, dst, max_files=_REPO_FILE_COUNT_MAX,
+                    max_bytes=_REPO_MAX_BYTES)  # per-skill caps enforced later per bundle
+# reimport: delete old prefix BEFORE upload; keep fresh files on late failure
+def _extract_zip_safely(data, dest, *, max_files=None, max_bytes=None):
+    max_files = SKILL_FILE_COUNT_MAX if max_files is None else max_files
+```
+
+### Design Decisions
+
+- **inspect→import two-step with server staging** (not one-shot): required for
+  monorepo multi-select; zip/url reuse it so there is ONE interaction model.
+- **git CLI subprocess over GitPython**; archive download is the *fallback*
+  when git is missing (github/gitlab/gitee/bitbucket), not the primary path.
+- **Tokens are transient**: injected into clone URL / Authorization header,
+  redacted (`_redact`: token + `://user:pass@` userinfo) from every error/log,
+  never persisted — so reimport of a private repo intentionally fails.
+- **SSRF guard** (`_assert_public_url` + `_GuardingTransport`) applies to url
+  fetch, archive fallback, AND git clone; every redirect hop re-checked.
+  DNS-rebinding TOCTOU accepted for this lab deployment.
