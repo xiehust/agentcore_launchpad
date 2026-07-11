@@ -124,3 +124,39 @@ Four asks: aws-knowledge MCP sample (live-verified public server); system-prompt
 ### Next Steps
 
 - None - task complete
+
+
+## Session 4: Registry skill multi-source ingestion (zip/git/url + reimport)
+
+**Date**: 2026-07-11
+**Task**: Registry skill multi-source ingestion (zip/git/url + reimport)
+**Package**: lab4-interactive
+**Branch**: `main`
+
+### Summary
+
+Registry /registry skill registration extended from inline-only to four sources converging on one SkillBundle pipeline (skill_ingest.py): P0 zip upload via inspect->import staging (TTL 10min, kept on failure for retry) with multi-file S3 bundles + real definition.files + source provenance, fixing the hardcoded files list and the 200k>AWS-102400 cap; P1 git import (https-only shallow clone, token redaction incl URL-embedded creds, monorepo SKILL.md discovery w/ multi-select batch import) plus git env detection: capabilities + explicit git-install endpoints and github/gitlab/gitee/bitbucket archive-zip fallback when git is missing (repo-scale extraction caps — live bug found against anthropics/skills); P2 url source (zip-vs-raw-md detection) + reimport-from-source (delete-old-prefix-then-upload, recordVersion minor bump, name preserved, git/url only). Check agents found+fixed: descriptor>100KB pre-upload guard, SSRF guard (public-addr check on every redirect hop, extended to git clone), reimport rollback stranding a live record over an empty prefix. Live-verified: AC1 zip e2e, AC3 anthropics/skills 18-skill scan + batch import, AC7 raw-md/zip URLs, AC9 git-missing fallback, reimport 1.0.0->1.1.0, AC2 real packager pulled full prefix. Backend 337 pytest + ruff clean; frontend tsc/lint/build clean. Spec: .trellis/spec/launchpad/registry-skill-ingestion.md (new layer).
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2b7f47f` | (see git log) |
+| `2d39ca3` | (see git log) |
+| `cbbb8e6` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

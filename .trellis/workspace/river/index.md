@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 3
+- **Total Sessions**: 4
 - **Last Active**: 2026-07-11
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~126 | Active |
+| `journal-1.md` | ~162 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 4 | 2026-07-11 | Registry skill multi-source ingestion (zip/git/url + reimport) | `2b7f47f`, `2d39ca3`, `cbbb8e6` | `main` |
 | 3 | 2026-07-11 | Studio local debug + AI fix, caching triad, effort tiers, defaults | `ef68b20`, `ca4bbd3`, `f2fe07f`, `8385c6e`, `9326372`, `748ea9f`, `ee4f07a`, `b82cf15` | `main` |
 | 2 | 2026-07-11 | Sync native Strands Studio canvas to upstream PR #31 | `c06c022`, `79e0977`, `6067779`, `470c8d6`, `610b45a`, `12f642a` | `main` |
 | 1 | 2026-07-11 | Native Strands Studio canvas in Agent management | `8e3a92b`, `4c927d5`, `856cfbd`, `1c12403`, `80f2e3d`, `96466e0` | `main` |
