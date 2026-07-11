@@ -52,6 +52,10 @@ export function ChatDrawer({
   const abortRef = useRef<AbortController | null>(null);
   const sessionCodeRef = useRef(code);
   const endRef = useRef<HTMLDivElement | null>(null);
+  // In-flight guard for session creation. MUST be a ref, not the `creating`
+  // state: with `creating` in the effect deps, setCreating(true) re-ran the
+  // effect, whose cleanup cancelled its own fetch — every attempt self-cancelled.
+  const creatingRef = useRef(false);
   // Latest props for the init effect without churning its dependency list.
   const latest = useRef({ code, flowData, apiKeys });
   latest.current = { code, flowData, apiKeys };
@@ -83,8 +87,13 @@ export function ChatDrawer({
   // Create a session the first time the tab is shown (kept until New session or
   // page unload — the backend session is in-memory).
   useEffect(() => {
-    if (!active || session || creating || !latest.current.code.trim()) return;
-    let cancelled = false;
+    if (!active || session || creatingRef.current || !latest.current.code.trim()) return;
+    // NO cancelled/cleanup gating here: the session must survive StrictMode's
+    // mount→cleanup→mount cycle, and every earlier cancellation scheme either
+    // self-cancelled (creating in deps) or wedged the guard. The ref dedupes
+    // concurrent attempts; a resolve after a real unmount is a harmless no-op
+    // setState, leaving at worst one orphaned in-memory backend session.
+    creatingRef.current = true;
     setCreating(true);
     setInitError(null);
     createConversationSession({
@@ -93,21 +102,18 @@ export function ChatDrawer({
       ...latest.current.apiKeys,
     })
       .then((s) => {
-        if (cancelled) return;
         setSession(s);
         setMessages([]);
         sessionCodeRef.current = latest.current.code;
       })
       .catch((err) => {
-        if (!cancelled) {
-          setInitError(t("studio.chat.sessionErr", { msg: err instanceof Error ? err.message : String(err) }));
-        }
+        setInitError(t("studio.chat.sessionErr", { msg: err instanceof Error ? err.message : String(err) }));
       })
-      .finally(() => !cancelled && setCreating(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [active, session, creating, t]);
+      .finally(() => {
+        creatingRef.current = false;
+        setCreating(false);
+      });
+  }, [active, session, t]);
 
   useEffect(() => {
     if (active) endRef.current?.scrollIntoView({ behavior: "smooth" });
