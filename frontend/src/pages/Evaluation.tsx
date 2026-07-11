@@ -6,6 +6,7 @@ import { useSearchParams } from "react-router-dom";
 import { Btn, Chip, ConfirmDialog, Panel, useToast, ViewHead } from "../components";
 import type { AgentInfo } from "../lib/api";
 import { api } from "../lib/api";
+import { evaluatorLabel } from "../lib/evaluators";
 import { DatasetsView } from "./EvaluationDatasets";
 import { EvaluatorsView } from "./EvaluationEvaluators";
 
@@ -163,7 +164,7 @@ function ExperimentPanel({
               return (
                 <div className="ab-metric" key={metric.label}>
                   <div className="am-h">
-                    <span>{metric.label.replace("Builtin.", "")}</span>
+                    <span>{evaluatorLabel(t, metric.label)}</span>
                     {delta != null && (
                       <span className="d">{delta >= 0 ? "+" : ""}{delta.toFixed(2)}</span>
                     )}
@@ -750,7 +751,7 @@ export function Evaluation() {
                             ? t("evalPage.newRun.trajectoryNeedsGt")
                             : e.source === "custom"
                               ? t("evalPage.newRun.customTitle")
-                              : undefined
+                              : e.id
                         }
                         onClick={() =>
                           setChosenEvaluators((prev) =>
@@ -760,7 +761,7 @@ export function Evaluation() {
                           )
                         }
                       >
-                        {e.source === "custom" ? (e.name ?? e.id) : e.id.replace("Builtin.", "")}
+                        {e.source === "custom" ? (e.name ?? e.id) : evaluatorLabel(t, e.id)}
                         {(e.source === "custom" || e.requires_ground_truth) && badge && (
                           <span
                             className="mono"
@@ -954,7 +955,9 @@ export function Evaluation() {
             <>
               {selectedRun.scores.map((score) => (
                 <div className="hbar" key={score.evaluatorId}>
-                  <span className="hn">{score.evaluatorId.replace("Builtin.", "")}</span>
+                  <span className="hn" title={score.evaluatorId}>
+                    {evaluatorLabel(t, score.evaluatorId)}
+                  </span>
                   <div className="track">
                     <div className="fill" style={{ width: `${score.score * 100}%` }} />
                   </div>

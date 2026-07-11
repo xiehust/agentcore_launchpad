@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Btn, Chip, ConfirmDialog, Panel, useToast, ViewHead } from "../components";
+import { evaluatorLabel } from "../lib/evaluators";
 
 type Level = "TOOL_CALL" | "TRACE" | "SESSION";
 
@@ -313,8 +314,8 @@ export function EvaluatorsView({ onBack }: { onBack: () => void }) {
                   borderBottom: "1px solid rgba(255,255,255,.04)",
                 }}
               >
-                <span className="mono" style={{ fontSize: 11.5 }}>
-                  {row.id.replace("Builtin.", "")}
+                <span className="mono" style={{ fontSize: 11.5 }} title={row.id}>
+                  {evaluatorLabel(t, row.id)}
                 </span>
                 {row.requires_ground_truth && (
                   <span className="mono dim" style={{ fontSize: 8.5 }} title={t("evalPage.newRun.trajectoryNeedsGt")}>

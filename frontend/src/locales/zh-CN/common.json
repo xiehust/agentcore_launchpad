@@ -521,6 +521,24 @@
         "title": "删除云端数据集",
         "body": "删除 AWS 数据集“{{name}}”?云端数据集不可变——此操作将从账户中移除该资源。"
       }
+    },
+    "evaluatorNames": {
+      "GoalSuccessRate": "目标达成率",
+      "Helpfulness": "有用性",
+      "Correctness": "正确性",
+      "Faithfulness": "忠实性",
+      "ResponseRelevance": "回复相关性",
+      "Conciseness": "简洁性",
+      "Coherence": "连贯性",
+      "InstructionFollowing": "指令遵循",
+      "Refusal": "拒答",
+      "Harmfulness": "有害性",
+      "Stereotyping": "刻板印象",
+      "ToolSelectionAccuracy": "工具选择准确率",
+      "ToolParameterAccuracy": "工具参数准确率",
+      "TrajectoryExactOrderMatch": "轨迹完全顺序匹配",
+      "TrajectoryInOrderMatch": "轨迹有序匹配",
+      "TrajectoryAnyOrderMatch": "轨迹任意顺序匹配"
     }
   },
   "expPage": {

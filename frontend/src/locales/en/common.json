@@ -521,6 +521,24 @@
         "title": "Delete cloud dataset",
         "body": "Delete AWS dataset “{{name}}”? Cloud datasets are immutable — this removes the resource from the account."
       }
+    },
+    "evaluatorNames": {
+      "GoalSuccessRate": "Goal Success Rate",
+      "Helpfulness": "Helpfulness",
+      "Correctness": "Correctness",
+      "Faithfulness": "Faithfulness",
+      "ResponseRelevance": "Response Relevance",
+      "Conciseness": "Conciseness",
+      "Coherence": "Coherence",
+      "InstructionFollowing": "Instruction Following",
+      "Refusal": "Refusal",
+      "Harmfulness": "Harmfulness",
+      "Stereotyping": "Stereotyping",
+      "ToolSelectionAccuracy": "Tool Selection Accuracy",
+      "ToolParameterAccuracy": "Tool Parameter Accuracy",
+      "TrajectoryExactOrderMatch": "Trajectory Exact-Order Match",
+      "TrajectoryInOrderMatch": "Trajectory In-Order Match",
+      "TrajectoryAnyOrderMatch": "Trajectory Any-Order Match"
     }
   },
   "expPage": {
