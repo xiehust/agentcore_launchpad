@@ -1,0 +1,498 @@
+/* ================= Strands Studio canvas =================
+   Dark-theme restyle of the vendored strands_studio_ui canvas onto launchpad's
+   design tokens (theme/tokens.css). Everything here is namespaced: either a
+   `.studio-` prefixed class, or nested under `.studio-flow` for React Flow's
+   own library classes — nothing leaks into the global namespace. */
+
+/* ---- 3-column page layout (palette rail | canvas | property panel) ---- */
+.studio-layout {
+  display: grid;
+  grid-template-columns: 216px 1fr 340px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  height: calc(100vh - 232px);
+  min-height: 560px;
+}
+.studio-layout.no-prop {
+  grid-template-columns: 216px 1fr;
+}
+
+/* ---- node palette (left rail) ---- */
+.studio-palette {
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+  padding: 14px 12px;
+  background: var(--panel);
+}
+.studio-palette-cat {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.22em;
+  color: var(--ink-3);
+  margin: 14px 4px 8px;
+}
+.studio-palette-cat:first-child {
+  margin-top: 2px;
+}
+.studio-palette-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 10px;
+  margin-bottom: 7px;
+  border: 1px solid var(--line-2);
+  background: #0e1210;
+  cursor: grab;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.studio-palette-item:hover {
+  border-color: var(--ink-3);
+  background: var(--panel-2);
+}
+.studio-palette-item:active {
+  cursor: grabbing;
+}
+.studio-palette-ic {
+  color: var(--amber);
+  flex: none;
+  margin-top: 1px;
+}
+.studio-palette-nm {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.studio-palette-desc {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--ink-3);
+  line-height: 1.45;
+  margin-top: 3px;
+}
+
+/* ---- canvas surface ---- */
+.studio-canvas {
+  position: relative;
+  background: var(--bg);
+  min-width: 0;
+}
+.studio-flow {
+  height: 100%;
+  width: 100%;
+  position: relative;
+}
+
+/* graph-mode toggle (floats top-right of the canvas) */
+.studio-graphmode {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 11px;
+  background: var(--panel);
+  border: 1px solid var(--line-2);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.studio-graphmode-ic {
+  color: var(--ink-3);
+}
+.studio-graphmode.on .studio-graphmode-ic {
+  color: var(--s5);
+}
+.studio-graphmode-lbl {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  color: var(--ink-2);
+}
+.studio-switch {
+  position: relative;
+  width: 34px;
+  height: 18px;
+  border-radius: 9px;
+  border: 0;
+  cursor: pointer;
+  background: var(--line-2);
+  transition: background 0.15s ease;
+  padding: 0;
+}
+.studio-switch.on {
+  background: var(--s5);
+}
+.studio-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--ink);
+  transition: transform 0.15s ease;
+}
+.studio-switch.on::after {
+  transform: translateX(16px);
+}
+
+/* ---- node cards ---- */
+.studio-node {
+  --node-accent: var(--ink-2);
+  min-width: 200px;
+  background: var(--panel);
+  border: 1px solid var(--line-2);
+  font-family: var(--sans);
+  box-shadow: 0 6px 20px -10px rgba(0, 0, 0, 0.6);
+}
+.studio-node.sel {
+  border-color: var(--amber);
+  box-shadow: 0 0 0 1px var(--amber), 0 12px 36px -16px rgba(255, 176, 0, 0.35);
+}
+.studio-node.t-amber { --node-accent: var(--amber); }
+.studio-node.t-llm { --node-accent: var(--s5); }
+.studio-node.t-blue { --node-accent: var(--s1); }
+.studio-node.t-tool { --node-accent: var(--s2); }
+.studio-node.t-gw { --node-accent: var(--s3); }
+.studio-node.t-aqua { --node-accent: var(--s2); }
+.studio-node.t-muted { --node-accent: var(--ink-3); }
+
+.studio-node-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 11px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-2);
+}
+.studio-node-ic {
+  color: var(--node-accent);
+  flex: none;
+}
+.studio-node-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--node-accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.studio-node-tools {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-3);
+}
+.studio-node-del {
+  display: grid;
+  place-items: center;
+  padding: 1px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+.studio-node-del:hover {
+  color: var(--crit-text);
+}
+.studio-node-body {
+  padding: 10px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.studio-node-row {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-2);
+}
+.studio-node-k {
+  color: var(--ink-3);
+}
+.studio-node-desc {
+  font-size: 10.5px;
+  color: var(--ink-3);
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.studio-node-params {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+.studio-node-param {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--ink-2);
+  border: 1px solid var(--line-2);
+  padding: 1px 6px;
+  background: #0e1210;
+}
+.studio-codeprev {
+  max-height: 92px;
+  overflow-y: auto;
+  margin-top: 2px;
+  font-size: 9.5px;
+  line-height: 1.5;
+  padding: 8px;
+}
+
+/* ---- React Flow chrome (scoped so library styles never leak) ---- */
+.studio-flow .react-flow__handle {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1px solid var(--bg);
+  background: var(--ink-3);
+}
+.studio-flow .react-flow__handle.h-in { background: var(--good); }
+.studio-flow .react-flow__handle.h-tool { background: var(--s3); }
+.studio-flow .react-flow__handle.h-out { background: var(--s5); }
+.studio-flow .react-flow__handle.h-sub { background: var(--s1); }
+.studio-flow .react-flow__handle.h-cfg { background: var(--ink-3); }
+.studio-flow .react-flow__handle:hover {
+  background: var(--amber);
+  box-shadow: 0 0 0 3px var(--amber-soft);
+}
+.studio-flow .react-flow__handle.connectingfrom,
+.studio-flow .react-flow__handle.connectingto {
+  background: var(--amber);
+}
+
+.studio-flow .react-flow__edge-path {
+  stroke: var(--ink-3);
+  stroke-width: 1.5;
+}
+.studio-flow .react-flow__edge.selected .react-flow__edge-path,
+.studio-flow .react-flow__edge:hover .react-flow__edge-path {
+  stroke: var(--amber);
+}
+.studio-flow .react-flow__connectionline path,
+.studio-flow .react-flow__connection-path {
+  stroke: var(--amber);
+  stroke-width: 1.5;
+}
+
+.studio-flow .react-flow__controls {
+  border: 1px solid var(--line);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.studio-flow .react-flow__controls-button {
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--line);
+  color: var(--ink);
+  fill: var(--ink-2);
+}
+.studio-flow .react-flow__controls-button:hover {
+  background: var(--line);
+}
+.studio-flow .react-flow__controls-button svg {
+  fill: var(--ink-2);
+}
+
+.studio-flow .react-flow__minimap {
+  background-color: var(--panel);
+  border: 1px solid var(--line);
+}
+.studio-flow .react-flow__minimap-mask {
+  fill: rgba(11, 14, 13, 0.6);
+}
+.studio-flow .react-flow__attribution {
+  background: transparent;
+  color: var(--ink-3);
+}
+.studio-flow .react-flow__attribution a {
+  color: var(--ink-3);
+}
+
+/* ---- property panel (right column) ---- */
+.studio-prop {
+  border-left: 1px solid var(--line);
+  overflow-y: auto;
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+}
+.studio-prop-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.studio-prop-head h3 {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+}
+.studio-prop-x {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 2px;
+}
+.studio-prop-x:hover {
+  color: var(--ink);
+}
+.studio-prop-body {
+  padding: 14px;
+}
+.studio-prop-type {
+  margin-bottom: 14px;
+}
+.studio-prop-type .studio-prop-typev {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink);
+  text-transform: capitalize;
+}
+.studio-prop-sect {
+  border-top: 1px solid var(--line);
+  margin-top: 16px;
+  padding-top: 14px;
+}
+.studio-prop-hint {
+  font-size: 10.5px;
+  color: var(--ink-3);
+  line-height: 1.5;
+  margin-top: 5px;
+}
+.studio-prop-empty {
+  text-align: center;
+  padding: 34px 12px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-3);
+  letter-spacing: 0.06em;
+}
+.studio-check {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+}
+.studio-check input {
+  accent-color: var(--amber);
+}
+.studio-check span {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  color: var(--ink-2);
+}
+.studio-range {
+  width: 100%;
+  accent-color: var(--amber);
+}
+.studio-range:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.studio-range-ends {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--ink-3);
+  margin-top: 3px;
+}
+.studio-warn {
+  font-size: 10.5px;
+  color: var(--warn);
+  margin-top: 5px;
+}
+.studio-prop select.input {
+  cursor: pointer;
+}
+
+/* ---- code panel (bottom drawer) ---- */
+.studio-codepanel {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  height: 420px;
+}
+.studio-code-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.studio-code-head h3 {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+}
+.studio-code-head .studio-code-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+.studio-code-errs {
+  padding: 11px 14px;
+  border-bottom: 1px solid rgba(208, 59, 59, 0.35);
+  background: rgba(208, 59, 59, 0.06);
+}
+.studio-code-errs-h {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: var(--crit-text);
+  margin-bottom: 7px;
+}
+.studio-code-errs ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.studio-code-errs li {
+  font-size: 11.5px;
+  color: var(--ink-2);
+  padding-left: 12px;
+  position: relative;
+}
+.studio-code-errs li::before {
+  content: "•";
+  position: absolute;
+  left: 0;
+  color: var(--crit-text);
+}
+.studio-code-monaco {
+  flex: 1;
+  min-height: 0;
+}
+.studio-code-foot {
+  display: flex;
+  justify-content: space-between;
+  padding: 9px 14px;
+  border-top: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-3);
+}
+
+@media (max-width: 1180px) {
+  .studio-layout,
+  .studio-layout.no-prop {
+    grid-template-columns: 180px 1fr;
+  }
+  .studio-prop {
+    display: none;
+  }
+}
