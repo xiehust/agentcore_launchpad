@@ -67,6 +67,7 @@ class StubRuntimeControl:
     def __init__(self, statuses):
         self.statuses = list(statuses)
         self.created_with = None
+        self.updated_with = None
         self.deleted = []
 
     def create_agent_runtime(self, **kwargs):
@@ -76,6 +77,15 @@ class StubRuntimeControl:
             "agentRuntimeArn": "arn:rt-1",
             "agentRuntimeVersion": "1",
             "status": "CREATING",
+        }
+
+    def update_agent_runtime(self, **kwargs):
+        self.updated_with = kwargs
+        return {
+            "agentRuntimeId": kwargs["agentRuntimeId"],
+            "agentRuntimeArn": "arn:rt-1",
+            "agentRuntimeVersion": "2",
+            "status": "UPDATING",
         }
 
     def get_agent_runtime(self, agentRuntimeId):
@@ -152,3 +162,227 @@ def test_invoke_runtime_text_surfaces_error():
     stub = StubDataPlane(b'{"error": "payload must include a non-empty prompt"}')
     with pytest.raises(RuntimeError, match="non-empty"):
         rt.invoke_runtime_text(stub, "arn:rt-1", "x")
+
+
+# --- Studio skill bundling ------------------------------------------------
+
+from types import SimpleNamespace  # noqa: E402
+
+from app.deployer.zip_runtime import bundle_skills, extract_skill_names  # noqa: E402
+from app.schemas.agent import AgentSpec  # noqa: E402
+
+STUDIO_CODE_TWO_SKILLS = '''
+import os
+from pathlib import Path
+_skills_dir = os.environ.get("STUDIO_SKILLS_DIR") or str(Path(__file__).parent / "skills")
+agent = Agent(
+    plugins=[AgentSkills(skills=[
+        os.path.join(_skills_dir, "pirate-speak"),
+        os.path.join(_skills_dir, "haiku-writer"),
+    ])]
+)
+'''
+
+
+class StubS3:
+    """Serves list_objects_v2 (via a paginator) + download_file from in-memory maps."""
+
+    def __init__(self, objects_by_prefix: dict, bodies: dict):
+        self.objects_by_prefix = objects_by_prefix  # (bucket, prefix) -> [{"Key","Size"}]
+        self.bodies = bodies  # key -> bytes
+        self.downloaded: list[str] = []
+
+    def get_paginator(self, op):
+        assert op == "list_objects_v2"
+        return self
+
+    def paginate(self, Bucket, Prefix):
+        return [{"Contents": self.objects_by_prefix.get((Bucket, Prefix), [])}]
+
+    def download_file(self, Bucket, Key, Filename):
+        Path(Filename).write_bytes(self.bodies[Key])
+        self.downloaded.append(Key)
+
+
+def test_extract_skill_names_unique_ordered_and_near_misses():
+    code = (
+        'os.path.join(_skills_dir, "alpha-one")\n'
+        'os.path.join(_skills_dir, "beta")\n'
+        'os.path.join(_skills_dir, "alpha-one")\n'  # duplicate → deduped
+        'os.path.join(other_dir, "gamma")\n'  # wrong var → no match
+        'os.path.join(_skills_dir, "../evil")\n'  # path traversal → no match
+        'os.path.join(_skills_dir, "UPPER")\n'  # uppercase → no match
+    )
+    assert extract_skill_names(code) == ["alpha-one", "beta"]
+    assert extract_skill_names("no skills referenced here") == []
+
+
+def test_bundle_skills_puts_referenced_skills_in_zip(tmp_path):
+    spec = AgentSpec(
+        name="studio-skills", method="studio", system_prompt="s",
+        code=STUDIO_CODE_TWO_SKILLS,
+    )
+    stub_s3 = StubS3(
+        {
+            ("bkt", "skills/pirate-speak/"): [
+                {"Key": "skills/pirate-speak/SKILL.md", "Size": 12},
+            ],
+            ("bkt", "skills/haiku-writer/"): [
+                {"Key": "skills/haiku-writer/SKILL.md", "Size": 20},
+                {"Key": "skills/haiku-writer/refs/notes.txt", "Size": 5},
+            ],
+        },
+        {
+            "skills/pirate-speak/SKILL.md": b"pirate skill",
+            "skills/haiku-writer/SKILL.md": b"haiku skill def....",
+            "skills/haiku-writer/refs/notes.txt": b"notes",
+        },
+    )
+    records = {
+        "pirate-speak": "s3://bkt/skills/pirate-speak/",
+        "haiku-writer": "s3://bkt/skills/haiku-writer/",
+    }
+    logs: list[str] = []
+    zip_path = build_zip(
+        STUDIO_CODE_TWO_SKILLS,
+        ["strands-agents[otel]>=1.0,<2"],
+        tmp_path / "build",
+        pip_runner=fake_pip_ok,
+        on_pkg_ready=lambda pkg: bundle_skills(
+            spec, STUDIO_CODE_TWO_SKILLS, pkg, logs.append,
+            skill_records=records, s3_client=stub_s3,
+        ),
+    )
+    names = zipfile.ZipFile(zip_path).namelist()
+    assert "skills/pirate-speak/SKILL.md" in names
+    assert "skills/haiku-writer/SKILL.md" in names
+    assert "skills/haiku-writer/refs/notes.txt" in names  # nested path preserved
+    assert any("skills bundled: pirate-speak, haiku-writer" in m for m in logs)
+
+
+def test_bundle_skills_skips_missing_record_without_failing(tmp_path):
+    code = 'os.path.join(_skills_dir, "ghost-skill")'
+    spec = AgentSpec(name="studio-miss", method="studio", system_prompt="s", code=code)
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    logs: list[str] = []
+    result = bundle_skills(
+        spec, code, pkg, logs.append, skill_records={}, s3_client=StubS3({}, {})
+    )
+    assert result["bundled"] == []
+    assert any("ghost-skill' not found in registry" in m for m in logs)
+    assert not (pkg / "skills").exists()
+
+
+def test_bundle_skills_enforces_size_cap(tmp_path):
+    code = 'os.path.join(_skills_dir, "huge-skill")'
+    spec = AgentSpec(name="studio-big", method="studio", system_prompt="s", code=code)
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    stub_s3 = StubS3(
+        {("bkt", "skills/huge-skill/"): [
+            {"Key": "skills/huge-skill/blob.bin", "Size": 60 * 1024 * 1024},
+        ]},
+        {},  # never downloaded — cap trips first
+    )
+    logs: list[str] = []
+    result = bundle_skills(
+        spec, code, pkg, logs.append,
+        skill_records={"huge-skill": "s3://bkt/skills/huge-skill/"},
+        s3_client=stub_s3,
+    )
+    assert result["bundled"] == []
+    assert stub_s3.downloaded == []
+    assert any("exceeds 50MB cap" in m for m in logs)
+
+
+def test_bundle_skills_noop_for_non_studio_method(tmp_path):
+    """Non-studio agents never touch the registry or S3 (no injection given)."""
+    code = 'os.path.join(_skills_dir, "pirate-speak")'
+    spec = AgentSpec(name="tmpl-x", method="zip_runtime", system_prompt="s")
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    result = bundle_skills(spec, code, pkg, lambda _m: None)
+    assert result == {"bundled": [], "files": 0, "bytes": 0}
+    assert not (pkg / "skills").exists()
+
+
+# --- spec.env → runtime environment passthrough ---------------------------
+
+def _fake_settings():
+    return SimpleNamespace(
+        region="us-west-2",
+        resources={
+            "memory_id": "platform-mem-id",
+            "artifacts_bucket": "bkt",
+            "execution_role_arn": "arn:role",
+        },
+    )
+
+
+def test_deploy_stage_passes_spec_env_platform_key_wins(monkeypatch):
+    from app.core.db import SessionLocal
+    from app.deployer import zip_runtime as zr
+    from app.deployer.pipeline import StageContext
+    from app.models.ledger import Agent
+
+    spec = AgentSpec(
+        name="studio-env-x", method="studio", system_prompt="s", code="print('x')",
+        env={"OPENAI_API_KEY": "sk-user", "LAUNCHPAD_MEMORY_ID": "user-supplied"},
+        memory={"short_term": True, "long_term": False},
+    )
+    db = SessionLocal()
+    agent = Agent(name="studio-env-x", method="studio", status="deploying",
+                  spec=spec.model_dump())
+    db.add(agent)
+    db.commit()
+    agent_id = agent.id
+    db.close()
+
+    stub = StubRuntimeControl(["READY"])
+    monkeypatch.setattr(zr, "control_client", lambda: stub)
+    monkeypatch.setattr(zr, "get_settings", _fake_settings)
+
+    ctx = StageContext(agent_id=agent_id, deployment_id="d1", job_id="j1")
+    db = SessionLocal()
+    agent = db.get(Agent, agent_id)
+    db.close()
+    zr._stage_deploy(ctx, agent)
+
+    env = stub.created_with["environmentVariables"]
+    assert env["OPENAI_API_KEY"] == "sk-user"  # user env reaches the runtime
+    assert env["LAUNCHPAD_MEMORY_ID"] == "platform-mem-id"  # platform wins the conflict
+
+
+def test_deploy_stage_update_mode_passes_spec_env(monkeypatch):
+    from app.core.db import SessionLocal
+    from app.deployer import zip_runtime as zr
+    from app.deployer.pipeline import StageContext
+    from app.models.ledger import Agent
+
+    spec = AgentSpec(
+        name="studio-env-upd", method="studio", system_prompt="s", code="print('x')",
+        env={"BEDROCK_API_KEY": "bk-user"},
+        memory={"short_term": False, "long_term": False},
+    )
+    db = SessionLocal()
+    agent = Agent(name="studio-env-upd", method="studio", status="active",
+                  resource_id="rt-1", arn="arn:rt-1", version="1", spec=spec.model_dump())
+    db.add(agent)
+    db.commit()
+    agent_id = agent.id
+    db.close()
+
+    stub = StubRuntimeControl(["READY"])
+    monkeypatch.setattr(zr, "control_client", lambda: stub)
+    monkeypatch.setattr(zr, "get_settings", _fake_settings)
+
+    ctx = StageContext(agent_id=agent_id, deployment_id="d2", job_id="j2")
+    ctx.scratch["mode"] = "update"
+    db = SessionLocal()
+    agent = db.get(Agent, agent_id)
+    db.close()
+    zr._stage_deploy(ctx, agent)
+
+    assert stub.updated_with is not None and stub.created_with is None
+    assert stub.updated_with["environmentVariables"] == {"BEDROCK_API_KEY": "bk-user"}

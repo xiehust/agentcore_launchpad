@@ -45,8 +45,14 @@ def build_zip(
     requirements: list[str],
     build_dir: Path,
     pip_runner: Callable[..., Any] = subprocess.run,
+    on_pkg_ready: Callable[[Path], None] | None = None,
 ) -> Path:
-    """pip-install ARM64 wheels + template code into a deployment zip."""
+    """pip-install ARM64 wheels + template code into a deployment zip.
+
+    ``on_pkg_ready`` is invoked with the assembled package directory after the
+    entrypoint is written but before zipping — the hook studio uses to drop
+    skill bundles under ``pkg/skills/`` (the recursive walk below picks them up).
+    """
     if build_dir.exists():
         shutil.rmtree(build_dir)
     pkg_dir = build_dir / "pkg"
@@ -72,6 +78,9 @@ def build_zip(
     (pkg_dir / "main.py").write_text(code, encoding="utf-8")
     (pkg_dir / "requirements.txt").write_text("\n".join(requirements) + "\n", encoding="utf-8")
 
+    if on_pkg_ready is not None:
+        on_pkg_ready(pkg_dir)
+
     zip_path = build_dir / "deployment_package.zip"
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for root, _, files in os.walk(pkg_dir):
@@ -81,6 +90,131 @@ def build_zip(
                 full = Path(root) / name
                 zf.write(full, full.relative_to(pkg_dir))
     return zip_path
+
+
+# Studio's generated code references skills as os.path.join(_skills_dir, "<name>");
+# the runtime resolves that to Path(__file__).parent/"skills"/<name>. This is the
+# same emission pattern upstream extracts (agentcore_deployment_service.py).
+_SKILL_REF_RE = re.compile(r'os\.path\.join\(\s*_skills_dir\s*,\s*"([a-z0-9-]+)"\s*\)')
+_SKILL_BUNDLE_MAX_BYTES = 50 * 1024 * 1024  # per-skill cap (mirror upstream)
+
+
+def extract_skill_names(code: str) -> list[str]:
+    """Studio skill names the generated code references — unique, source order."""
+    names: list[str] = []
+    for name in _SKILL_REF_RE.findall(code):
+        if name not in names:
+            names.append(name)
+    return names
+
+
+def _parse_s3_uri(uri: str) -> tuple[str, str]:
+    """s3://bucket/prefix/ → (bucket, prefix)."""
+    rest = uri[len("s3://"):] if uri.startswith("s3://") else uri
+    bucket, _, prefix = rest.partition("/")
+    return bucket, prefix
+
+
+def _approved_skill_paths(log: Callable[[str], None]) -> dict[str, str]:
+    """{skill name → s3 prefix uri} for every APPROVED AGENT_SKILLS record."""
+    try:
+        from app.services.registry_console import attachable_records
+
+        return {s["name"]: s["path"] for s in attachable_records().get("skills", [])}
+    except Exception as exc:  # registry lookup must never break a deploy
+        log(f"skill registry lookup failed ({type(exc).__name__}) — skills skipped")
+        return {}
+
+
+def _download_skill_prefix(
+    s3_client: Any,
+    bucket: str,
+    prefix: str,
+    dest: Path,
+    name: str,
+    log: Callable[[str], None],
+) -> tuple[int, int]:
+    """Download every object under s3://bucket/prefix into dest/, preserving the
+    relative path. Returns (file_count, byte_count); skips the whole skill when
+    its cumulative size exceeds the per-skill cap."""
+    objects: list[dict] = []
+    paginator = s3_client.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        objects.extend(page.get("Contents", []))
+    total = sum(obj.get("Size", 0) for obj in objects)
+    if total > _SKILL_BUNDLE_MAX_BYTES:
+        log(f"skill '{name}' is {total / 1e6:.1f}MB — exceeds 50MB cap, skipped")
+        return 0, 0
+    dest_root = dest.resolve()
+    count = 0
+    for obj in objects:
+        key = obj["Key"]
+        rel = key[len(prefix):].lstrip("/") if key.startswith(prefix) else key
+        if not rel or key.endswith("/"):
+            continue
+        target = (dest / rel).resolve()
+        if not str(target).startswith(str(dest_root) + os.sep):
+            log(f"skill '{name}' object '{key}' escapes bundle dir — skipped")
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        s3_client.download_file(bucket, key, str(target))
+        count += 1
+    return count, total
+
+
+def bundle_skills(
+    spec: AgentSpec,
+    code: str,
+    pkg_dir: Path,
+    log: Callable[[str], None],
+    *,
+    skill_records: dict[str, str] | None = None,
+    s3_client: Any = None,
+) -> dict[str, Any]:
+    """Download every APPROVED skill the studio-generated code references into
+    ``pkg_dir/skills/{name}/`` so the runtime's ``Path(__file__).parent/"skills"``
+    fallback resolves them. Non-studio agents are a no-op. Any skill issue
+    (missing record, oversize, download error) logs + skips — never raises."""
+    empty = {"bundled": [], "files": 0, "bytes": 0}
+    if spec.method != "studio":
+        return empty
+    names = extract_skill_names(code)
+    if not names:
+        return empty
+    if skill_records is None:
+        skill_records = _approved_skill_paths(log)
+    if s3_client is None:
+        s3_client = boto3.client("s3", region_name=get_settings().region)
+
+    bundled: list[str] = []
+    total_files = 0
+    total_bytes = 0
+    for name in names:
+        path = skill_records.get(name)
+        if not path:
+            log(f"skill '{name}' not found in registry — skipped")
+            continue
+        bucket, prefix = _parse_s3_uri(path)
+        dest = pkg_dir / "skills" / name
+        try:
+            files, size = _download_skill_prefix(s3_client, bucket, prefix, dest, name, log)
+        except Exception as exc:  # a bad skill can't sink the whole deploy
+            log(f"skill '{name}' download failed ({type(exc).__name__}) — skipped")
+            shutil.rmtree(dest, ignore_errors=True)
+            continue
+        if files == 0:
+            shutil.rmtree(dest, ignore_errors=True)
+            continue
+        bundled.append(name)
+        total_files += files
+        total_bytes += size
+
+    if bundled:
+        log(
+            f"skills bundled: {', '.join(bundled)} "
+            f"({total_files} files, {total_bytes / 1024:.1f} KB)"
+        )
+    return {"bundled": bundled, "files": total_files, "bytes": total_bytes}
 
 
 def _generate_code(spec: AgentSpec) -> tuple[str, str]:
@@ -124,7 +258,12 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
 
     build_dir = Path(f"/tmp/launchpad_build_{agent.name}")
     t0 = time.monotonic()
-    zip_path = build_zip(code, requirements, build_dir)
+    bundled: dict[str, Any] = {}
+
+    def _on_pkg_ready(pkg_dir: Path) -> None:
+        bundled.update(bundle_skills(spec, code, pkg_dir, ctx.log))
+
+    zip_path = build_zip(code, requirements, build_dir, on_pkg_ready=_on_pkg_ready)
     pip_secs = time.monotonic() - t0
     size_mb = zip_path.stat().st_size / 1e6
 
@@ -132,7 +271,10 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
     boto3.client("s3", region_name=settings.region).upload_file(str(zip_path), bucket, s3_key)
     ctx.scratch["s3_bucket"], ctx.scratch["s3_key"] = bucket, s3_key
     ctx.log(f"pip+zip {pip_secs:.1f}s · {size_mb:.1f}MB → s3://{bucket}/{s3_key}")
-    return StageResult(detail=f"pip+zip {pip_secs:.1f}s · {size_mb:.1f}MB · s3 ✓")
+    detail = f"pip+zip {pip_secs:.1f}s · {size_mb:.1f}MB · s3 ✓"
+    if bundled.get("bundled"):
+        detail += f" · skills: {', '.join(bundled['bundled'])}"
+    return StageResult(detail=detail)
 
 
 def _stage_provision(ctx: StageContext, agent: Agent) -> StageResult:
@@ -153,11 +295,12 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
 
         def _kwargs() -> dict:
             spec = AgentSpec(**row.spec)
-            environment = dict(spec.env)
+            environment = dict(spec.env)  # user env (studio maps OPENAI/BEDROCK API keys here)
             if (spec.memory.short_term or spec.memory.long_term) and settings.resources.get(
                 "memory_id"
             ):
-                environment.setdefault("LAUNCHPAD_MEMORY_ID", settings.resources["memory_id"])
+                # platform-injected keys win over any same-named user env value
+                environment["LAUNCHPAD_MEMORY_ID"] = settings.resources["memory_id"]
             return {
                 "s3_bucket": ctx.scratch.get("s3_bucket")
                 or settings.resources.get("artifacts_bucket", ""),
