@@ -96,9 +96,11 @@ export function SampleGallery({ onClose, onLoadSample }: Props) {
   const [registeringId, setRegisteringId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const refreshSkills = useCallback(async () => {
+  // bust=true forces the backend past its 60s attachables cache — required right
+  // after register→approve, or a freshly approved skill stays "missing" for a minute.
+  const refreshSkills = useCallback(async (bust = false) => {
     try {
-      const res = await fetch("/api/registry/attachables");
+      const res = await fetch(bust ? "/api/registry/attachables?refresh=1" : "/api/registry/attachables");
       const data = res.ok
         ? ((await res.json()) as { skills?: AttachableSkill[] })
         : { skills: [] };
@@ -124,7 +126,7 @@ export function SampleGallery({ onClose, onLoadSample }: Props) {
       for (const skill of missingSkills(sample)) {
         await approveSkill(skill);
       }
-      await refreshSkills();
+      await refreshSkills(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

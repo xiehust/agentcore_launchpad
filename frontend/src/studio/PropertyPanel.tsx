@@ -107,10 +107,11 @@ function SkillNodeProperties({
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const loadSkills = useCallback(() => {
+  // bust=true skips the backend's 60s attachables cache (explicit refresh button).
+  const loadSkills = useCallback((bust = false) => {
     setLoading(true);
     setLoadError(null);
-    fetch('/api/registry/attachables')
+    fetch(bust ? '/api/registry/attachables?refresh=1' : '/api/registry/attachables')
       .then((res) => (res.ok ? res.json() : { mcp_servers: [], skills: [] }))
       .then((d: { skills?: AttachableSkill[] }) => setSkills(d.skills || []))
       .catch(() => {
@@ -177,7 +178,7 @@ function SkillNodeProperties({
           <button
             type="button"
             className="btn"
-            onClick={loadSkills}
+            onClick={() => loadSkills(true)}
             disabled={loading}
             title={t('studio.prop.skillRefresh')}
           >
