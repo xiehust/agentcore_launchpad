@@ -11,6 +11,9 @@ import { FlowEditor } from "../studio/FlowEditor";
 import { NodePalette } from "../studio/NodePalette";
 import { PropertyPanel } from "../studio/PropertyPanel";
 import { generateStrandsAgentCode } from "../studio/lib/code-generator";
+import { MANTLE_PROVIDER } from "../studio/lib/models";
+import { SampleGallery } from "../studio/SampleGallery";
+import type { SampleFlow } from "../studio/lib/sample-flows";
 
 const DRAFT_KEY = "launchpad_studio_draft";
 const NAME_RE = /^[a-z][a-z0-9-]{2,47}$/;
@@ -50,6 +53,8 @@ export function CreateAgentStudio() {
   const [graphMode, setGraphMode] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [codeOpen, setCodeOpen] = useState(false);
+  const [showSamples, setShowSamples] = useState(false);
+  const [pendingSample, setPendingSample] = useState<SampleFlow | null>(null);
 
   // Edit-mode state
   const [editAgent, setEditAgent] = useState<AgentInfo | null>(null);
@@ -74,13 +79,48 @@ export function CreateAgentStudio() {
     [nodes, edges, graphMode],
   );
   const fullCode = genResult.imports.join("\n") + "\n\n" + genResult.code;
+  // OpenAI and Mantle both import `openai` at the top level (only in the
+  // [openai] extra); the extra also pulls the Bedrock token generator Mantle
+  // auth needs. Caching / thinking / skills need no extra requirement.
   const extraReqs = useMemo(
     () =>
-      nodes.some((n) => (n.data as { modelProvider?: string })?.modelProvider === "OpenAI")
+      nodes.some((n) => {
+        const p = (n.data as { modelProvider?: string })?.modelProvider;
+        return p === "OpenAI" || p === MANTLE_PROVIDER;
+      })
         ? ["strands-agents[openai]"]
         : [],
     [nodes],
   );
+
+  // Generated code reads OPENAI_API_KEY / BEDROCK_API_KEY from the runtime env.
+  // Map the first non-empty apiKey per provider onto spec.env; flag when a node
+  // needs a key but none was entered (publish is still allowed — the key may be
+  // provisioned another way).
+  const { env: publishEnv, missingApiKey } = useMemo(() => {
+    let openaiKey = "";
+    let bedrockKey = "";
+    let needsOpenaiKey = false;
+    let needsBedrockKey = false;
+    for (const n of nodes) {
+      const d = n.data as { modelProvider?: string; apiKey?: string };
+      const key = (d?.apiKey ?? "").trim();
+      if (d?.modelProvider === "OpenAI") {
+        needsOpenaiKey = true;
+        if (key && !openaiKey) openaiKey = key;
+      } else if (d?.modelProvider === MANTLE_PROVIDER) {
+        needsBedrockKey = true;
+        if (key && !bedrockKey) bedrockKey = key;
+      }
+    }
+    const env: Record<string, string> = {};
+    if (openaiKey) env.OPENAI_API_KEY = openaiKey;
+    if (bedrockKey) env.BEDROCK_API_KEY = bedrockKey;
+    return {
+      env,
+      missingApiKey: (needsOpenaiKey && !openaiKey) || (needsBedrockKey && !bedrockKey),
+    };
+  }, [nodes]);
 
   // ── edit mode: load the stored flow (or fall back for external-app agents) ──
   useEffect(() => {
@@ -202,6 +242,25 @@ export function CreateAgentStudio() {
     }
   };
 
+  const applySample = (sample: SampleFlow) => {
+    setNodes(sample.nodes);
+    setEdges(sample.edges);
+    setGraphMode(sample.graphMode);
+    setSelectedId(null);
+    setShowSamples(false);
+    setPendingSample(null);
+    toast(t("studio.samples.loaded", { name: sample.name }));
+  };
+
+  const onLoadSample = (sample: SampleFlow) => {
+    // Replacing a non-empty canvas is destructive — confirm first.
+    if (nodes.length > 0 || edges.length > 0) {
+      setPendingSample(sample);
+    } else {
+      applySample(sample);
+    }
+  };
+
   const openPublish = () => {
     if (genResult.errors.length > 0) {
       toast(t("studio.toast.fixErrors"));
@@ -239,6 +298,7 @@ export function CreateAgentStudio() {
       memory: { short_term: false, long_term: false },
       studio_flow: { nodes, edges, graphMode },
       ...(extraReqs.length ? { requirements: extraReqs } : {}),
+      ...(Object.keys(publishEnv).length ? { env: publishEnv } : {}),
     };
     try {
       const res =
@@ -336,6 +396,7 @@ export function CreateAgentStudio() {
           </Chip>
         )}
         <div style={{ marginLeft: "auto", display: "flex", gap: 10 }}>
+          <Btn onClick={() => setShowSamples(true)}>▦ {t("studio.toolbar.samples")}</Btn>
           <Btn onClick={() => setCodeOpen((v) => !v)}>
             {codeOpen ? t("studio.toolbar.hideCode") : t("studio.toolbar.generateCode")}
           </Btn>
@@ -455,6 +516,15 @@ export function CreateAgentStudio() {
               <span className="v">{t("studio.publish.memoryValue")}</span>
             </div>
 
+            {missingApiKey && (
+              <div className="note" style={{ borderColor: "var(--amber)", marginTop: 12 }}>
+                <span className="i" style={{ color: "var(--amber)" }}>
+                  [i]
+                </span>
+                <span>{t("studio.publish.missingApiKey")}</span>
+              </div>
+            )}
+
             {publishErr && (
               <div className="note" style={{ borderColor: "var(--crit)", marginTop: 12 }}>
                 <span className="i" style={{ color: "var(--crit)" }}>
@@ -481,6 +551,19 @@ export function CreateAgentStudio() {
         confirmLabel={t("studio.confirmClear.confirm")}
         onConfirm={clearCanvas}
         onCancel={() => setConfirmClear(false)}
+      />
+
+      {showSamples && (
+        <SampleGallery onClose={() => setShowSamples(false)} onLoadSample={onLoadSample} />
+      )}
+
+      <ConfirmDialog
+        open={!!pendingSample}
+        title={t("studio.samples.replaceTitle")}
+        body={t("studio.samples.replaceBody")}
+        confirmLabel={t("studio.samples.replaceConfirm")}
+        onConfirm={() => pendingSample && applySample(pendingSample)}
+        onCancel={() => setPendingSample(null)}
       />
     </section>
   );

@@ -831,8 +831,29 @@
       "generateCode": "Generate code",
       "hideCode": "Hide code",
       "clearCanvas": "Clear canvas",
+      "samples": "Samples",
       "publish": "Publish",
       "rePublish": "Re-publish"
+    },
+    "samples": {
+      "title": "Sample gallery",
+      "sub": "Preset flows you can load onto the canvas as a starting point.",
+      "basic": "Basic",
+      "advanced": "Advanced",
+      "level": {
+        "basic": "basic",
+        "advanced": "advanced"
+      },
+      "counts": "{{nodes}} nodes · {{edges}} edges",
+      "graphMode": "graph mode",
+      "requiresSkill": "Requires registry skill: {{names}}",
+      "registerSkill": "Register skill",
+      "load": "Load",
+      "loaded": "Loaded sample \"{{name}}\" onto the canvas.",
+      "openRegistry": "Open Registry",
+      "replaceTitle": "Replace canvas",
+      "replaceBody": "Loading this sample replaces the current canvas and clears the saved draft. Continue?",
+      "replaceConfirm": "Load sample"
     },
     "noFlow": {
       "notice": "This agent was created in the standalone studio, so no canvas graph is stored. Build a flow below to enable re-publish; the current deployed code is shown read-only until then."
@@ -860,6 +881,7 @@
       "none": "none",
       "memory": "Memory",
       "memoryValue": "short_term off · long_term off",
+      "missingApiKey": "An OpenAI or Mantle node has no API key. Publish is still allowed — the key can be provisioned another way — but the agent will fail at runtime without it.",
       "errHasErrors": "Code generation has errors. Close and fix the flow.",
       "errTooLarge": "Generated code is {{size}} chars, over the {{limit}} limit."
     },

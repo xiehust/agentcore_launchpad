@@ -831,8 +831,29 @@
       "generateCode": "生成代码",
       "hideCode": "隐藏代码",
       "clearCanvas": "清空画布",
+      "samples": "示例",
       "publish": "发布",
       "rePublish": "重新发布"
+    },
+    "samples": {
+      "title": "示例画廊",
+      "sub": "可加载到画布上作为起点的预置流程。",
+      "basic": "基础",
+      "advanced": "进阶",
+      "level": {
+        "basic": "基础",
+        "advanced": "进阶"
+      },
+      "counts": "{{nodes}} 个节点 · {{edges}} 条连线",
+      "graphMode": "图模式",
+      "requiresSkill": "需要注册表技能:{{names}}",
+      "registerSkill": "注册技能",
+      "load": "加载",
+      "loaded": "已将示例「{{name}}」加载到画布。",
+      "openRegistry": "打开注册表",
+      "replaceTitle": "替换画布",
+      "replaceBody": "加载该示例将替换当前画布并清除已保存的草稿。是否继续?",
+      "replaceConfirm": "加载示例"
     },
     "noFlow": {
       "notice": "该 Agent 由独立 Studio 创建,未存储画布图。请在下方搭建流程以启用重新发布;在此之前仅以只读方式展示当前已部署的代码。"
@@ -860,6 +881,7 @@
       "none": "无",
       "memory": "记忆",
       "memoryValue": "short_term 关 · long_term 关",
+      "missingApiKey": "存在未填写 API 密钥的 OpenAI 或 Mantle 节点。仍允许发布(密钥可通过其他方式配置),但缺少密钥时 Agent 将在运行时失败。",
       "errHasErrors": "代码生成存在错误。请关闭并修正流程。",
       "errTooLarge": "生成的代码为 {{size}} 字符,超出 {{limit}} 上限。"
     },
