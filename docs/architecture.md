@@ -48,7 +48,7 @@ real, runnable code in this repo.
 | **1. Build Core** | Create Agent (方式A/B/C), unified pipeline, Chat memory | Runtime, Harness, Memory |
 | **2. Build Tools** | Tool catalog, builtin-tool demos | Gateway (REST + Lambda → MCP), Builtin Tools (Code Interpreter, Browser) |
 | **3. Governance** | Governance page, Registry console, trace rail | Observability (Transaction Search), Registry, Policy (Cedar) |
-| **4. Evaluation & Optimization** | Evaluation page, Experiments | Evaluation (batch + online, LLM-judge, insights), Optimization (config bundles, A/B, canary) |
+| **4. Evaluation & Optimization** | Evaluation page, Experiments (`?view=experiment` sub-page: stage pipeline + verdict semantics) | Evaluation (batch + online, LLM-judge, insights), Optimization (config bundles, A/B, canary) |
 
 ## Platform ↔ AgentCore service mapping
 

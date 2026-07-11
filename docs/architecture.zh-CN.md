@@ -47,7 +47,7 @@ English: [architecture.md](architecture.md)
 | **1. 构建核心(Build Core)** | Create Agent(方式A/B/C)、统一管道、Chat 记忆 | Runtime、Harness、Memory |
 | **2. 构建工具(Build Tools)** | 工具目录、内置工具演示 | Gateway(REST + Lambda → MCP)、内置工具(Code Interpreter、Browser) |
 | **3. 治理(Governance)** | Governance 页面、Registry 控制台、trace 面板 | Observability(Transaction Search)、Registry、Policy(Cedar) |
-| **4. 评估与优化(Evaluation & Optimization)** | Evaluation 页面、Experiments | Evaluation(batch + online、LLM-judge、insights)、Optimization(config bundles、A/B、canary) |
+| **4. 评估与优化(Evaluation & Optimization)** | Evaluation 页面、Experiments(`?view=experiment` 子页:阶段流水线 + 判定语义化) | Evaluation(batch + online、LLM-judge、insights)、Optimization(config bundles、A/B、canary) |
 
 ## 平台 ↔ AgentCore 服务映射
 
