@@ -36,9 +36,19 @@ interface EvaluatorDetail {
 const NAME_RE = /^[a-zA-Z][a-zA-Z0-9_]{0,47}$/;
 const PLACEHOLDER_RE = /\{[a-zA-Z_][a-zA-Z0-9_]*\}/;
 
+// Judge models CreateEvaluator accepted in a live probe (us-west-2,
+// 2026-07-11) — the service validates modelId per region and rejects the
+// rest with ValidationException. An evaluator loaded for editing with a
+// model outside this list still renders (its id is prepended dynamically).
 const MODEL_OPTIONS = [
   "global.anthropic.claude-sonnet-4-6",
+  "global.anthropic.claude-sonnet-5",
+  "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+  "global.anthropic.claude-opus-4-8",
+  "global.anthropic.claude-opus-4-6-v1",
   "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+  "global.amazon.nova-2-lite-v1:0",
+  "us.amazon.nova-pro-v1:0",
 ];
 
 const LEVELS: Level[] = ["TRACE", "SESSION", "TOOL_CALL"];
