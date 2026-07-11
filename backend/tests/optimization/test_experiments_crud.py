@@ -48,6 +48,20 @@ def _make_exp(agent_row):
     return exp
 
 
+def test_second_experiment_blocked_while_one_runs(client):
+    db = SessionLocal()
+    agent = Agent(name="exp-agent-2", method="zip_runtime", status="active",
+                  arn="arn:rt", resource_id="rt-2", spec={})
+    db.add(agent)
+    db.add(Experiment(name="EXP-busy", agent_id="other", agent_name="other",
+                      status="running", stage="traffic"))
+    db.commit()
+    res = client.post("/api/experiments", json={"agent_id": agent.id})
+    assert res.status_code == 409
+    assert res.json()["code"] == "experiment.already_running"
+    db.close()
+
+
 def test_harness_agents_rejected_for_experiments(client):
     db = SessionLocal()
     agent = Agent(name="h-agent", method="harness", status="active", arn="arn:h",

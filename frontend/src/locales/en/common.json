@@ -623,7 +623,8 @@
         "created": "CREATED",
         "status": "STATUS",
         "empty": "NO EXPERIMENTS YET — START ONE ▸"
-      }
+      },
+      "runningGuard": "An experiment is already running — the shared experiment gateway supports one active A/B test at a time. Wait for its verdict or clean it up first."
     }
   },
   "expPage": {

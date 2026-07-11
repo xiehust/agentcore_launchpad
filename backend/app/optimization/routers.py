@@ -50,6 +50,17 @@ class ExperimentCreate(BaseModel):
 
 @router.post("", status_code=201)
 def create_experiment(req: ExperimentCreate, db: Session = Depends(get_db)) -> dict[str, Any]:
+    # experiments share one gateway (EXP_GATEWAY_NAME) and the AB service
+    # allows a single active test per gateway — a concurrent loop would fail
+    # at the abtest stage, so reject up front.
+    running = db.query(Experiment).filter(Experiment.status == "running").first()
+    if running is not None:
+        raise AppError(
+            "experiment.already_running",
+            f"experiment {running.name} is still running — "
+            "wait for its verdict or clean it up first",
+            status_code=409,
+        )
     agent = db.get(Agent, req.agent_id)
     if agent is None or agent.status != "active":
         raise AppError("agent.not_active", "agent must be active", status_code=400)

@@ -209,6 +209,9 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
   // cleaned/failed experiments are over — controls that would fire actions
   // against torn-down resources collapse into a read-only summary.
   const terminal = exp?.status === "cleaned" || exp?.status === "failed";
+  // one active A/B test per shared gateway — the backend rejects a second
+  // concurrent loop (409 experiment.already_running), so gate START up front.
+  const hasRunning = experiments.some((e) => e.status === "running");
 
   const onStart = async () => {
     setStartError(null);
@@ -273,6 +276,12 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
           ))}
         </select>
       </div>
+      {hasRunning && (
+        <div className="note" style={{ marginBottom: 10 }} data-testid="running-guard">
+          <span className="i">[i]</span>
+          <span>{t("evalPage.experiment.runningGuard")}</span>
+        </div>
+      )}
       {startError && (
         <div className="note" style={{ borderColor: "var(--crit)", marginBottom: 10 }}>
           <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
@@ -282,7 +291,7 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
       <div style={{ display: "flex", justifyContent: "flex-end" }}>
         <Btn
           primary
-          disabled={busy || !startAgentId}
+          disabled={busy || !startAgentId || hasRunning}
           data-testid="exp-start-btn"
           onClick={() => void onStart()}
         >
@@ -311,6 +320,8 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
         end={
           <Btn
             primary
+            disabled={hasRunning}
+            title={hasRunning ? t("evalPage.experiment.runningGuard") : undefined}
             data-testid="new-experiment-btn"
             onClick={() => selectExp("new")}
           >
