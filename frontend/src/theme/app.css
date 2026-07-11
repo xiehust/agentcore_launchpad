@@ -15,6 +15,12 @@ body::after{ /* film grain */
 }
 ::selection{background:var(--amber);color:#141210}
 
+/* universal press feedback — every <button> eases its colors and dips 1px
+   while held, so a registered click is always visible */
+button{transition:background .15s ease,border-color .15s ease,color .15s ease,opacity .15s ease,transform .06s ease}
+button:active:not(:disabled){transform:translateY(1px)}
+button:disabled{cursor:not-allowed}
+
 /* ================= chrome ================= */
 .topbar{
   height:52px;display:flex;align-items:center;gap:20px;padding:0 20px;
@@ -94,9 +100,12 @@ main{padding:26px 28px 60px;max-width:1460px;width:100%;margin:0 auto}
 .chip.aqua{color:var(--s2);border-color:rgba(25,158,112,.4)}
 
 .btn{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;letter-spacing:.08em;padding:8px 16px;cursor:pointer;border:1px solid var(--line-2);color:var(--ink);background:transparent}
-.btn:hover{border-color:var(--ink-3)}
+.btn:hover:not(:disabled){border-color:var(--ink-3)}
+.btn:active:not(:disabled){background:rgba(255,255,255,.06)}
+.btn:disabled{opacity:.45}
 .btn.primary{background:var(--amber);border-color:var(--amber);color:#161207;font-weight:600}
-.btn.primary:hover{background:#ffc23d}
+.btn.primary:hover:not(:disabled){background:#ffc23d}
+.btn.primary:active:not(:disabled){background:#d99600}
 
 table{width:100%;border-collapse:collapse;font-size:12.5px}
 th{font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;color:var(--ink-3);text-align:left;font-weight:500;padding:9px 14px;border-bottom:1px solid var(--line)}

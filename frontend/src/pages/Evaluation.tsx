@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
-import { Btn, Chip, Panel, useToast, ViewHead } from "../components";
+import { Btn, Chip, ConfirmDialog, Panel, useToast, ViewHead } from "../components";
 import type { AgentInfo } from "../lib/api";
 import { api } from "../lib/api";
 import { evaluatorLabel } from "../lib/evaluators";
@@ -179,6 +179,8 @@ export function Evaluation() {
   const [chosenInsights, setChosenInsights] = useState<string[]>(INSIGHT_TYPES);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [experiments, setExperiments] = useState<ExperimentInfo[]>([]);
+  const [insightsBusy, setInsightsBusy] = useState(false);
+  const [confirmInsights, setConfirmInsights] = useState(false);
 
   const failedSeen = useRef<Set<string> | null>(null);
   const refresh = useCallback(async () => {
@@ -283,23 +285,41 @@ export function Evaluation() {
   // Contextual re-run from the dashboard: insights over the sessions a
   // completed run already produced (no re-invoke, so wait_seconds 0).
   const startInsightsOnRun = async (run: RunInfo) => {
-    const res = await fetch("/api/eval/runs", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        agent_id: run.agent_id,
-        mode: "insights",
-        session_ids: run.session_ids,
-        wait_seconds: 0,
-      }),
-    });
-    if (!res.ok) {
-      const body = (await res.json().catch(() => ({}))) as { message?: string };
-      toast(t("common.actionFailed", { msg: body.message ?? `HTTP ${res.status}` }));
-      return;
+    setInsightsBusy(true);
+    try {
+      const res = await fetch("/api/eval/runs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agent_id: run.agent_id,
+          mode: "insights",
+          session_ids: run.session_ids,
+          wait_seconds: 0,
+        }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { message?: string };
+        toast(t("common.actionFailed", { msg: body.message ?? `HTTP ${res.status}` }));
+        return;
+      }
+      toast(t("evalPage.newRun.submitted"));
+      void refresh();
+    } finally {
+      setInsightsBusy(false);
     }
-    toast(t("evalPage.newRun.submitted"));
-    void refresh();
+  };
+
+  // An insights run over this exact session set that hasn't settled yet —
+  // re-clicking would only enqueue a duplicate behind the account lock.
+  const insightsPending = (run: RunInfo): boolean => {
+    const key = [...(run.session_ids ?? [])].sort().join(",");
+    return runs.some(
+      (r) =>
+        r.mode === "insights" &&
+        r.status !== "completed" &&
+        r.status !== "failed" &&
+        [...(r.session_ids ?? [])].sort().join(",") === key,
+    );
   };
 
   const statusChip = (run: RunInfo) => {
@@ -745,13 +765,20 @@ export function Evaluation() {
           end={
             selectedRun && (
               <Btn
-                disabled={(selectedRun.session_ids?.length ?? 0) < 3}
+                disabled={
+                  (selectedRun.session_ids?.length ?? 0) < 3 ||
+                  insightsBusy ||
+                  insightsPending(selectedRun)
+                }
                 title={
                   (selectedRun.session_ids?.length ?? 0) < 3
                     ? t("evalPage.insights.needSessions")
-                    : undefined
+                    : insightsPending(selectedRun)
+                      ? t("evalPage.insights.pendingDup")
+                      : undefined
                 }
-                onClick={() => void startInsightsOnRun(selectedRun)}
+                data-testid="insights-on-sessions-btn"
+                onClick={() => setConfirmInsights(true)}
               >
                 ↻ {t("evalPage.insights.runOnSessions")}
               </Btn>
@@ -843,6 +870,21 @@ export function Evaluation() {
           </div>
         )}
       </Panel>
+
+      <ConfirmDialog
+        open={confirmInsights && !!selectedRun}
+        title={t("evalPage.insights.confirmRun.title")}
+        body={t("evalPage.insights.confirmRun.body", {
+          run: selectedRun ? `run-${selectedRun.id.slice(0, 6)}` : "",
+          count: selectedRun?.session_ids?.length ?? 0,
+        })}
+        confirmLabel={t("evalPage.insights.confirmRun.confirm")}
+        onConfirm={() => {
+          setConfirmInsights(false);
+          if (selectedRun) void startInsightsOnRun(selectedRun);
+        }}
+        onCancel={() => setConfirmInsights(false)}
+      />
     </section>
   );
 }

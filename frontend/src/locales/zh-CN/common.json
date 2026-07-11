@@ -417,7 +417,13 @@
       "secFailures": "失败类别",
       "secIntents": "用户意图",
       "secSummaries": "执行摘要",
-      "sessions": "{{count}} 个会话"
+      "sessions": "{{count}} 个会话",
+      "pendingDup": "相同会话的洞察运行已在排队或进行中",
+      "confirmRun": {
+        "title": "对这些会话运行洞察",
+        "body": "将基于 {{run}} 的 {{count}} 个会话新建一个洞察运行。账户同一时间只处理一个批次,重复提交只会在其后排队。",
+        "confirm": "运行洞察"
+      }
     },
     "runFailedToast": "评估运行失败 — {{agent}}:{{msg}}",
     "backToRuns": "运行列表",

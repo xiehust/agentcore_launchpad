@@ -417,7 +417,13 @@
       "secFailures": "FAILURES",
       "secIntents": "USER INTENTS",
       "secSummaries": "EXECUTION SUMMARIES",
-      "sessions": "{{count}} session(s)"
+      "sessions": "{{count}} session(s)",
+      "pendingDup": "an identical insights run is already queued or running",
+      "confirmRun": {
+        "title": "Run insights on these sessions",
+        "body": "This creates a new insights run over the {{count}} sessions of {{run}}. The account processes one batch at a time, so duplicate submissions just queue up behind it.",
+        "confirm": "RUN INSIGHTS"
+      }
     },
     "runFailedToast": "Eval run failed — {{agent}}: {{msg}}",
     "backToRuns": "RUNS",
