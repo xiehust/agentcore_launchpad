@@ -21,11 +21,11 @@ uv venv "${VENV_DIR}" --python 3.12
 echo "==> installing strands runtime deps"
 uv pip install --python "${PY_BIN}" \
   'strands-agents[openai]>=1.46,<2' \
-  'strands-agents-tools' \
+  'strands-agents-tools[mem0_memory]' \
   'mcp' \
   'bedrock-agentcore'
 
 echo "==> verifying imports"
-"${PY_BIN}" -c "import strands, strands_tools, mcp; from importlib.metadata import version; print('strands-agents', version('strands-agents'))"
+"${PY_BIN}" -c "import strands, strands_tools, mcp; from strands_tools import mem0_memory; from importlib.metadata import version; print('strands-agents', version('strands-agents'))"
 
 echo "==> done. studio_exec_python = ${PY_BIN}"
