@@ -4,6 +4,7 @@ import { ToastProvider } from "./components";
 import { Shell } from "./layout/Shell";
 import { Chat } from "./pages/Chat";
 import { CreateAgent } from "./pages/CreateAgent";
+import { CreateAgentStudio } from "./pages/CreateAgentStudio";
 import { Evaluation } from "./pages/Evaluation";
 import { Governance } from "./pages/Governance";
 import { Observability } from "./pages/Observability";
@@ -18,6 +19,7 @@ export default function App() {
           <Route element={<Shell />}>
             <Route index element={<Overview />} />
             <Route path="create" element={<CreateAgent />} />
+            <Route path="create/studio" element={<CreateAgentStudio />} />
             <Route path="registry" element={<Registry />} />
             <Route path="chat" element={<Chat />} />
             <Route path="observability" element={<Observability />} />

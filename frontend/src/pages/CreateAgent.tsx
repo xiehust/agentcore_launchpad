@@ -1,17 +1,14 @@
 import type { CSSProperties } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
-import { Btn, Chip, ConfirmDialog, Panel, useToast, ViewHead } from "../components";
-import type { AgentInfo, DeploymentInfo, JobInfo, StageInfo } from "../lib/api";
+import { Btn, Chip, ConfirmDialog, LaunchSequence, Panel, useToast, ViewHead } from "../components";
+import type { AgentInfo, DeploymentInfo, JobInfo } from "../lib/api";
 import { api, ApiError } from "../lib/api";
 
 const DEFAULT_MODEL = "global.anthropic.claude-sonnet-4-6";
-const STUDIO_URL =
-  (import.meta.env.VITE_STUDIO_URL as string | undefined) ?? "http://localhost:5273";
 const BUILTIN_TOOLS = ["code-interpreter", "browser"] as const;
-type StageKey = "generate" | "package" | "provision" | "deploy" | "register";
 
 type Step = 1 | 2 | 3;
 
@@ -48,6 +45,7 @@ interface AttachableSkill {
 export function CreateAgent() {
   const { t } = useTranslation();
   const toast = useToast();
+  const navigate = useNavigate();
   const [params] = useSearchParams();
   const prefillGateway = params.get("gateway");
   const prefillSkill = params.get("skill");
@@ -306,15 +304,13 @@ export function CreateAgent() {
                 <span>{t("create.methods.studio.spec2")}</span>
                 <span>{t("create.methods.studio.spec3")}</span>
               </div>
-              <a
+              <Link
                 className="studio-link"
-                href={STUDIO_URL}
-                target="_blank"
-                rel="noreferrer"
+                to="/create/studio"
                 onClick={(e) => e.stopPropagation()}
               >
                 {t("create.methods.studio.open")}
-              </a>
+              </Link>
             </div>
           </div>
           <div style={{ display: "flex", justifyContent: "flex-end" }}>
@@ -326,7 +322,9 @@ export function CreateAgent() {
           <div style={{ height: 18 }} />
           <AgentList
             agents={agents}
-            onEdit={startEdit}
+            onEdit={(a) =>
+              a.method === "studio" ? navigate(`/create/studio?agent=${a.id}`) : startEdit(a)
+            }
             onDetails={openDetails}
             onDelete={(id, name) => setConfirm({ kind: "delete", id, name })}
           />
@@ -729,104 +727,3 @@ function AgentList({
   );
 }
 
-function stageClass(stage: StageInfo): string {
-  if (stage.status === "succeeded" || stage.status === "skipped") return " done";
-  if (stage.status === "running") return " now";
-  if (stage.status === "failed") return " fail";
-  return "";
-}
-
-function stageNode(stage: StageInfo, index: number): string {
-  if (stage.status === "succeeded" || stage.status === "skipped") return "✓";
-  if (stage.status === "running") return "●";
-  if (stage.status === "failed") return "✕";
-  return String(index + 1);
-}
-
-function LaunchSequence({
-  deployment,
-  job,
-  agentStatus,
-  detailsMode,
-  onRestart,
-}: {
-  deployment: DeploymentInfo | null;
-  job: JobInfo | null;
-  agentStatus: string;
-  detailsMode: boolean;
-  onRestart: () => void;
-}) {
-  const { t } = useTranslation();
-  const stages = deployment?.stages ?? [];
-  return (
-    <div className="cfg-grid">
-      <Panel
-        brk
-        title={t(detailsMode ? "create.sequence.detailsTitle" : "create.sequence.title")}
-        sub={job ? `job #${job.id.slice(0, 8)}` : undefined}
-        end={
-          agentStatus === "active" ? (
-            <Chip tone="good" icon="●">
-              {t("status.active")}
-            </Chip>
-          ) : agentStatus === "failed" ? (
-            <Chip tone="crit" icon="✕">
-              {t("status.failed")}
-            </Chip>
-          ) : (
-            <Chip tone="warn" icon="◐">
-              {t("status.deploying")}
-            </Chip>
-          )
-        }
-        pad={false}
-      >
-        <div className="pipeline">
-          {stages.map((s, i) => (
-            <div key={s.name} className={`pstage${stageClass(s)}`}>
-              <div className="node">{stageNode(s, i)}</div>
-              <div className="pn">{t(`create.stages.${s.name as StageKey}`)}</div>
-              <div className="pt">{s.detail || "—"}</div>
-            </div>
-          ))}
-        </div>
-        {job?.error && (
-          <div className="pbody" style={{ paddingTop: 0 }}>
-            <div className="note" style={{ borderColor: "var(--crit)" }}>
-              <span className="i" style={{ color: "var(--crit)" }}>
-                [✕]
-              </span>
-              <span className="mono">{job.error}</span>
-            </div>
-          </div>
-        )}
-      </Panel>
-
-      <div>
-        <Panel title={t("create.sequence.logTitle")} pad={false}>
-          <div
-            className="code"
-            style={{ border: 0, maxHeight: 320, overflowY: "auto", margin: 0 }}
-            data-testid="job-log"
-          >
-            {(job?.events ?? []).map((e, i) => (
-              <div key={i}>
-                <span className="cm">{e.ts.slice(11, 19)}</span>{" "}
-                <span className={e.level === "error" ? "k1" : "k2"}>{e.stage}</span> {e.msg}
-              </div>
-            ))}
-            {!job?.events?.length && <span className="cm">{t("create.sequence.waiting")}</span>}
-          </div>
-        </Panel>
-        <div style={{ height: 14 }} />
-        <Panel>
-          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-            <Btn onClick={onRestart}>
-              {t(detailsMode ? "create.sequence.backToList" : "create.sequence.newAgent")}
-            </Btn>
-          </div>
-        </Panel>
-      </div>
-    </div>
-  );
-}
