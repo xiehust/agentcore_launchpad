@@ -19,8 +19,19 @@ def create_harness(client: Any, params: dict[str, Any]) -> dict[str, Any]:
 def update_harness(client: Any, params: dict[str, Any]) -> dict[str, Any]:
     """UpdateHarness — publishes a new harness version in place. Same harnessId
     and ARN; ``params`` carries ``harnessId`` plus the edited config (model,
-    systemPrompt, tools, memory…), i.e. the create params minus ``harnessName``."""
+    systemPrompt, tools, memory…), i.e. ``wrap_params_for_update`` output."""
     return client.update_harness(**params)["harness"]
+
+
+def wrap_params_for_update(params: dict[str, Any]) -> dict[str, Any]:
+    """Create-style params → UpdateHarness kwargs (same pattern as the registry's
+    ``wrap_descriptors_for_update``). Update reuses the create shapes except
+    ``memory``, whose value must sit in {"optionalValue": …}. Omitting memory
+    means "keep the old config", so a spec without memory sends the explicit
+    ``disabled`` variant to detach it. Drops the immutable ``harnessName``."""
+    update = {k: v for k, v in params.items() if k != "harnessName"}
+    update["memory"] = {"optionalValue": update.get("memory") or {"disabled": {}}}
+    return update
 
 
 def get_harness(client: Any, harness_id: str) -> dict[str, Any]:

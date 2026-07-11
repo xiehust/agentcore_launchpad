@@ -147,7 +147,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
 
         if mode == "update" and row.resource_id:  # in-place re-publish → UpdateHarness
             harness_id = row.resource_id
-            update_params = {k: v for k, v in _params().items() if k != "harnessName"}
+            update_params = hc.wrap_params_for_update(_params())
             update_params["harnessId"] = harness_id
             harness = hc.update_harness(client, update_params)
             row.version = str(harness.get("harnessVersion", row.version or "1"))

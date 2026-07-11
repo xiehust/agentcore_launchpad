@@ -64,6 +64,28 @@ def test_build_params_tools_skills_env_no_memory():
     assert "memory" not in params
 
 
+def test_wrap_params_for_update_wraps_memory():
+    """UpdateHarness's memory shape is {"optionalValue": …}, unlike create —
+    sending the create shape raises ParamValidationError (unknown parameter
+    agentCoreMemoryConfiguration)."""
+    params = build_create_params(spec(), ROLE_ARN, MEM_ARN)
+    update = hc.wrap_params_for_update(params)
+    assert "harnessName" not in update
+    assert update["memory"] == {
+        "optionalValue": {"agentCoreMemoryConfiguration": {"arn": MEM_ARN}}
+    }
+    assert update["systemPrompt"] == params["systemPrompt"]  # create shapes reused
+    assert "memory" in params  # input not mutated into the wrapped shape
+
+
+def test_wrap_params_for_update_disables_absent_memory():
+    """No memory in the params (spec memory off) must DETACH the old config —
+    omitting the key would mean "keep it"."""
+    s = spec(memory={"short_term": False, "long_term": False})
+    update = hc.wrap_params_for_update(build_create_params(s, ROLE_ARN, MEM_ARN))
+    assert update["memory"] == {"optionalValue": {"disabled": {}}}
+
+
 class StubControl:
     """Captures create kwargs; walks a scripted status sequence on get."""
 
@@ -128,6 +150,8 @@ def test_deploy_stage_update_mode_uses_update_harness(monkeypatch):
     assert stub.updated_with["harnessId"] == "h-123"
     assert "harnessName" not in stub.updated_with  # update drops the immutable name
     assert stub.updated_with["systemPrompt"] == [{"text": "You are an HR assistant."}]
+    # memory is ALWAYS sent update-shaped: {"optionalValue": config-or-disabled}
+    assert set(stub.updated_with["memory"]) == {"optionalValue"}
     assert "READY" in result.detail
     db = SessionLocal()
     assert db.get(Agent, agent_id).version == "2"  # new version recorded
