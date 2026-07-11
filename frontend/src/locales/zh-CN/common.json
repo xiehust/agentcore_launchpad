@@ -559,15 +559,43 @@
         "ramp": "RAMP——挑战者流量按 10 → 50 → 100 递增",
         "cleanup": "CLEANUP——删除实验的 AWS 资源",
         "note": "实验会创建真实 AWS 资源(配置包、网关、A/B 测试、在线评估器);verdict 之前的流量阶段最长约 15 分钟。"
-      }
+      },
+      "startNew": "启动新实验",
+      "metricsPending": "分组指标待产生——在线评估相对实时流量有数分钟延迟",
+      "stageHint": {
+        "recommend": "AI 正在起草改进版系统提示词(约 1 分钟)",
+        "bundles": "正在创建 control 与 treatment 配置包(约 1 分钟)",
+        "gateway": "正在开通实验网关与 runtime 目标(约 1–2 分钟)",
+        "abtest": "正在注册 50/50 A/B 测试(不到 1 分钟)",
+        "traffic": "正在向两个分组发送采样流量(约 2 分钟)",
+        "verdict": "等待在线评估产生每臂样本——判定最长约 15 分钟后出炉",
+        "ready": "判定已出——PROMOTE 胜出方,或 CLEANUP 放弃",
+        "promote": "流量已切向胜出方——可选启动挑战者金丝雀",
+        "canary": "挑战者以 90/10 运行中——有信心即可 RAMP 放量",
+        "ramp": "挑战者流量按 10 → 50 → 100 递增",
+        "cleanup": "正在删除实验的 AWS 资源"
+      },
+      "summary": {
+        "agent": "AGENT",
+        "verdict": "判定",
+        "created": "创建时间",
+        "cleaned": "实验已结束,AWS 资源已清理——此记录仅供回顾。",
+        "failed": "流程在该阶段失败。CLEANUP 可清除遗留的资源。"
+      },
+      "insufficient": {
+        "reason": "在线评估在约 15 分钟流量窗口内未产生每臂样本,暂时无法对比两组。",
+        "a1": "在 Chat Playground 给两个变体继续打流量后,重新启动一个实验——判定只计算一次。",
+        "a2": "如已有把握,可直接手动 PROMOTE。",
+        "a3": "或 CLEANUP 放弃实验并清除资源。",
+        "promotedContext": "已在样本不足时手动放量——上方判定早于该操作"
+      },
+      "moreCount": "共 {{count}} 个实验记录——当前显示最新一个"
     }
   },
   "expPage": {
     "sub": "config-bundle A/B · 经 gateway 路由",
     "startHint": "AI 建议 → 配置包 → A/B 50/50 → 判定",
     "start": "启动实验",
-    "running": "流程运行中 — 建议 → 配置包 → gateway → A/B → 流量 → 判定……",
-    "noMetrics": "暂无分组指标(在线评估存在延迟)",
     "promote": "晋级",
     "promoted": "已晋级",
     "canaryTitle": "目标金丝雀",

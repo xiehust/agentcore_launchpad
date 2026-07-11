@@ -10,7 +10,7 @@ import { evaluatorLabel } from "../lib/evaluators";
 import { DatasetsView } from "./EvaluationDatasets";
 import { EvaluatorsView } from "./EvaluationEvaluators";
 import type { ExperimentInfo } from "./EvaluationExperiment";
-import { ExperimentView } from "./EvaluationExperiment";
+import { experimentTone, ExperimentView } from "./EvaluationExperiment";
 
 interface Dataset {
   id: string;
@@ -823,15 +823,7 @@ export function Evaluation() {
           >
             <span className="pri">{experiments[0].name}</span>
             <Chip
-              tone={
-                experiments[0].status === "failed"
-                  ? "crit"
-                  : experiments[0].status === "cleaned"
-                    ? "muted"
-                    : experiments[0].status === "running"
-                      ? "warn"
-                      : "good"
-              }
+              tone={experimentTone(experiments[0].status)}
               icon={experiments[0].status === "running" ? "◐" : "●"}
             >
               {experiments[0].status.toUpperCase()}

@@ -49,6 +49,76 @@ const LOOP_STAGES = [
   "promote", "canary", "ramp", "cleanup",
 ];
 
+// status → chip tone, shared by the sub-page header and the dashboard row.
+export function experimentTone(status: string): "good" | "warn" | "crit" | "muted" {
+  if (status === "failed") return "crit";
+  if (status === "cleaned") return "muted";
+  if (status === "running") return "warn";
+  return "good"; // ready | promoted
+}
+
+// The 10-segment rail: done ✓ / current highlighted (pulse while running,
+// result color otherwise, ✕ on failure) / future grey, with a one-line hint
+// under the current segment saying what is happening and how long it takes.
+function StagePipeline({ exp }: { exp: ExperimentInfo }) {
+  const { t } = useTranslation();
+  const stages = exp.stages?.length ? exp.stages : LOOP_STAGES;
+  const cur = stages.indexOf(exp.stage);
+  const failed = exp.status === "failed";
+  return (
+    <div data-testid="stage-pipeline" style={{ marginBottom: 12 }}>
+      {stages.map((s, i) => {
+        const state = i < cur ? "done" : i === cur ? (failed ? "failed" : "current") : "future";
+        const color =
+          state === "done" ? "var(--good)"
+            : state === "failed" ? "var(--crit)"
+              : state === "current"
+                ? exp.status === "running" ? "var(--warn)" : "var(--good)"
+                : "var(--ink-3)";
+        const icon =
+          state === "done" ? "✓"
+            : state === "failed" ? "✕"
+              : state === "current" ? (exp.status === "running" ? "◐" : "●") : "·";
+        return (
+          <div key={s} data-testid={`stage-${s}`} data-state={state}>
+            <div style={{ display: "flex", gap: 9, alignItems: "baseline" }}>
+              <span className="mono" style={{ color, width: 12, textAlign: "center" }}>
+                {icon}
+              </span>
+              <span
+                className="mono"
+                style={{
+                  color,
+                  fontSize: 10.5,
+                  letterSpacing: ".1em",
+                  fontWeight: state === "current" || state === "failed" ? 700 : 400,
+                }}
+              >
+                {s.toUpperCase()}
+              </span>
+            </div>
+            {(state === "current" || state === "failed") && (
+              <div
+                data-testid="stage-hint"
+                className={failed ? "mono" : "dim"}
+                style={{
+                  fontSize: 10.5,
+                  margin: "2px 0 4px 21px",
+                  color: failed ? "var(--crit)" : undefined,
+                }}
+              >
+                {failed
+                  ? exp.error
+                  : t(`evalPage.experiment.stageHint.${exp.status === "ready" ? "ready" : s}`)}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function ExperimentView({ onBack }: { onBack: () => void }) {
   const { t } = useTranslation();
   const toast = useToast();
@@ -93,6 +163,10 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
   const verdict = exp?.artifacts.verdict;
   const canary = exp?.artifacts.canary;
   const canaryWeights = canary?.after_weights ?? canary?.weights;
+  const insufficient = !!verdict?.verdict.includes("insufficient");
+  // cleaned/failed experiments are over — controls that would fire actions
+  // against torn-down resources collapse into a read-only summary.
+  const terminal = exp?.status === "cleaned" || exp?.status === "failed";
 
   const onStart = async () => {
     setStartError(null);
@@ -136,6 +210,45 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
     }
   };
 
+  const startForm = (label: string) => (
+    <>
+      <div className="field">
+        <label>{t("evalPage.newRun.agent")}</label>
+        <select
+          className="input"
+          value={startAgentId}
+          data-testid="exp-agent-select"
+          onChange={(e) => setStartAgentId(e.target.value)}
+        >
+          {agents.length === 0 && (
+            <option value="">{t("evalPage.newRun.noAgents")}</option>
+          )}
+          {agents.map((a) => (
+            <option key={a.id} value={a.id} style={{ background: "#141816" }}>
+              {a.name} · {a.method}
+            </option>
+          ))}
+        </select>
+      </div>
+      {startError && (
+        <div className="note" style={{ borderColor: "var(--crit)", marginBottom: 10 }}>
+          <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
+          <span>{startError}</span>
+        </div>
+      )}
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <Btn
+          primary
+          disabled={busy || !startAgentId}
+          data-testid="exp-start-btn"
+          onClick={() => void onStart()}
+        >
+          ▸ {label}
+        </Btn>
+      </div>
+    </>
+  );
+
   return (
     <section>
       <ViewHead
@@ -154,7 +267,7 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
           end={
             exp && (
               <Chip
-                tone={exp.status === "failed" ? "crit" : exp.status === "ready" ? "good" : "warn"}
+                tone={experimentTone(exp.status)}
                 icon={exp.status === "running" ? "◐" : "●"}
               >
                 {exp.stage.toUpperCase()} · {exp.status.toUpperCase()}
@@ -163,46 +276,98 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
           }
           style={{ "--i": 0 } as CSSProperties}
         >
-          {!exp && (
+          {experiments.length > 1 && (
+            <div
+              className="mono dim"
+              data-testid="more-experiments"
+              style={{ fontSize: 10, marginBottom: 8 }}
+            >
+              {t("evalPage.experiment.moreCount", { count: experiments.length })}
+            </div>
+          )}
+          {!exp && startForm(t("expPage.start"))}
+
+          {exp && terminal && (
             <>
-              <div className="field">
-                <label>{t("evalPage.newRun.agent")}</label>
-                <select
-                  className="input"
-                  value={startAgentId}
-                  data-testid="exp-agent-select"
-                  onChange={(e) => setStartAgentId(e.target.value)}
-                >
-                  {agents.length === 0 && (
-                    <option value="">{t("evalPage.newRun.noAgents")}</option>
-                  )}
-                  {agents.map((a) => (
-                    <option key={a.id} value={a.id} style={{ background: "#141816" }}>
-                      {a.name} · {a.method}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              {startError && (
-                <div className="note" style={{ borderColor: "var(--crit)", marginBottom: 10 }}>
-                  <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
-                  <span>{startError}</span>
+              <div data-testid="exp-summary-card">
+                {exp.status === "failed" && exp.error && (
+                  <div
+                    className="note"
+                    style={{ borderColor: "var(--crit)", marginBottom: 10 }}
+                    data-testid="exp-error"
+                  >
+                    <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
+                    <span className="mono">{exp.error}</span>
+                  </div>
+                )}
+                <div className="kv">
+                  <span className="k mono">{t("evalPage.experiment.summary.agent")}</span>
+                  <span className="v">{exp.agent_name}</span>
                 </div>
-              )}
-              <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                <Btn
-                  primary
-                  disabled={busy || !startAgentId}
-                  data-testid="exp-start-btn"
-                  onClick={() => void onStart()}
-                >
-                  ▸ {t("expPage.start")}
-                </Btn>
+                <div className="kv">
+                  <span className="k mono">{t("evalPage.experiment.summary.verdict")}</span>
+                  <span className="v mono">
+                    {verdict ? verdict.verdict.toUpperCase() : "—"}
+                    {exp.artifacts.promote &&
+                      ` · ${t("expPage.promoted")} T1 ${
+                        exp.artifacts.promote.after_weights?.T1 ?? 100}%`}
+                  </span>
+                </div>
+                <div className="kv">
+                  <span className="k mono">{t("evalPage.experiment.summary.created")}</span>
+                  <span className="v mono">
+                    {exp.created_at ? new Date(exp.created_at).toLocaleString() : "—"}
+                  </span>
+                </div>
+                {exp.artifacts.promote && insufficient && (
+                  <div
+                    className="mono dim"
+                    data-testid="promoted-context"
+                    style={{ fontSize: 10.5, margin: "4px 0" }}
+                  >
+                    ⚠ {t("evalPage.experiment.insufficient.promotedContext")}
+                  </div>
+                )}
+                <div className="note" style={{ marginTop: 8 }}>
+                  <span className="i">[i]</span>
+                  <span>
+                    {exp.status === "cleaned"
+                      ? t("evalPage.experiment.summary.cleaned")
+                      : t("evalPage.experiment.summary.failed")}
+                  </span>
+                </div>
+                {exp.status === "failed" && (
+                  <div style={{ marginTop: 10 }}>
+                    <Btn
+                      disabled={busy}
+                      data-testid="cleanup-btn"
+                      onClick={() => setConfirmCleanup(true)}
+                    >
+                      {t("expPage.cleanup")}
+                    </Btn>
+                  </div>
+                )}
+                {exp.artifacts.cleanup && (
+                  <div className="code" style={{ marginTop: 10, maxHeight: 120, overflowY: "auto" }}>
+                    {exp.artifacts.cleanup
+                      .map((row) => `${row.status.padEnd(8)} ${row.category}`)
+                      .join("\n")}
+                  </div>
+                )}
+              </div>
+              <div
+                data-testid="start-new"
+                style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 12 }}
+              >
+                {startForm(t("evalPage.experiment.startNew"))}
               </div>
             </>
           )}
-          {exp && (
+
+          {exp && !terminal && (
             <>
+              <StagePipeline exp={exp} />
+
               {verdict?.metrics?.length ? (
                 verdict.metrics.map((metric) => {
                   const variant = metric.variants[0];
@@ -241,104 +406,149 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
                     </div>
                   );
                 })
-              ) : (
-                <div className="mono dim" style={{ fontSize: 11, marginBottom: 8 }}>
-                  {exp.status === "running" ? t("expPage.running") : t("expPage.noMetrics")}
+              ) : exp.status === "running" ? (
+                <div
+                  className="mono dim"
+                  data-testid="metrics-pending"
+                  style={{ fontSize: 11, marginBottom: 8 }}
+                >
+                  {t("evalPage.experiment.metricsPending")}
                 </div>
-              )}
+              ) : null}
 
               {verdict && (
-                <div
-                  className="verdict"
-                  style={
-                    verdict.verdict.includes("insufficient")
-                      ? { background: "rgba(250,178,25,.08)",
-                          border: "1px solid rgba(250,178,25,.35)" }
-                      : undefined
-                  }
-                >
-                  <span
-                    className="vt"
-                    style={verdict.verdict.includes("insufficient")
-                      ? { color: "var(--warn)" } : undefined}
+                <>
+                  <div
+                    className="verdict"
+                    style={
+                      insufficient
+                        ? { background: "rgba(250,178,25,.08)",
+                            border: "1px solid rgba(250,178,25,.35)" }
+                        : undefined
+                    }
                   >
-                    ◎ {verdict.verdict.toUpperCase()}
-                  </span>
-                  <span className="vm">
-                    {verdict.avg_delta != null && `Δ ${verdict.avg_delta}`} · n={verdict.n ?? 0}
-                  </span>
-                  {exp.status === "ready" && !exp.artifacts.promote && (
-                    <Btn
-                      primary
-                      style={{ marginLeft: "auto" }}
-                      disabled={busy}
-                      onClick={() => void onAction(exp.id, "promote")}
+                    <span
+                      className="vt"
+                      style={insufficient ? { color: "var(--warn)" } : undefined}
                     >
-                      {t("expPage.promote")} ▸
-                    </Btn>
+                      ◎ {verdict.verdict.toUpperCase()}
+                    </span>
+                    <span className="vm">
+                      {verdict.avg_delta != null && `Δ ${verdict.avg_delta}`} · n={verdict.n ?? 0}
+                    </span>
+                    {exp.status === "ready" && !exp.artifacts.promote && (
+                      <Btn
+                        primary
+                        style={{ marginLeft: "auto" }}
+                        disabled={busy}
+                        data-testid="promote-btn"
+                        onClick={() => void onAction(exp.id, "promote")}
+                      >
+                        {t("expPage.promote")} ▸
+                      </Btn>
+                    )}
+                    {exp.artifacts.promote && (
+                      <Chip tone="good" icon="✓" style={{ marginLeft: "auto" }}>
+                        {t("expPage.promoted")} · T1{" "}
+                        {exp.artifacts.promote.after_weights?.T1 ?? 100}%
+                      </Chip>
+                    )}
+                  </div>
+                  {insufficient && exp.artifacts.promote && (
+                    <div
+                      className="mono dim"
+                      data-testid="promoted-context"
+                      style={{ fontSize: 10.5, margin: "4px 0 8px" }}
+                    >
+                      ⚠ {t("evalPage.experiment.insufficient.promotedContext")}
+                    </div>
                   )}
-                  {exp.artifacts.promote && (
-                    <Chip tone="good" icon="✓" style={{ marginLeft: "auto" }}>
-                      {t("expPage.promoted")} · T1{" "}
-                      {exp.artifacts.promote.after_weights?.T1 ?? 100}%
-                    </Chip>
+                  {insufficient && !exp.artifacts.promote && (
+                    <div
+                      className="note"
+                      style={{ borderColor: "var(--warn)", marginTop: 8 }}
+                      data-testid="insufficient-note"
+                    >
+                      <span className="i" style={{ color: "var(--warn)" }}>[!]</span>
+                      <span>
+                        {t("evalPage.experiment.insufficient.reason")}
+                        <br />· {t("evalPage.experiment.insufficient.a1")}
+                        <br />· {t("evalPage.experiment.insufficient.a2")}
+                        <br />· {t("evalPage.experiment.insufficient.a3")}
+                      </span>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {exp.artifacts.promote && (
+                <div style={{ marginTop: 14 }} data-testid="canary-section">
+                  <div className="am-h" style={{ fontSize: 11, color: "var(--ink-3)" }}>
+                    <span className="mono">
+                      {t("expPage.canaryTitle")}
+                      {canary?.challenger_agent ? ` — ${canary.challenger_agent}` : ""}
+                    </span>
+                    <span className="mono">RAMP 10 → 50 → 100</span>
+                  </div>
+                  {canaryWeights ? (
+                    <>
+                      <div className="split">
+                        <div style={{ flex: `0 0 ${canaryWeights.C ?? 90}%`,
+                                      background: "var(--s1)" }} />
+                        <div style={{ flex: 1, background: "var(--s3)" }} />
+                      </div>
+                      <div className="mono dim" style={{ fontSize: 9.5 }}>
+                        champion {canaryWeights.C}% · challenger {canaryWeights.T1}% — stage{" "}
+                        {(canary?.ramp_stage ?? 0) + 1}/3
+                      </div>
+                      {(canary?.ramp_stage ?? 0) < 2 && (
+                        <div style={{ marginTop: 8, display: "flex", gap: 9 }}>
+                          <Btn
+                            disabled={busy}
+                            data-testid="ramp-btn"
+                            onClick={() => void onAction(exp.id, "ramp")}
+                          >
+                            {t("expPage.ramp")} ▸
+                          </Btn>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div style={{ display: "flex", gap: 9, alignItems: "center" }}>
+                      <select
+                        className="input"
+                        style={{ maxWidth: 220 }}
+                        value={challengerId}
+                        onChange={(e) => setChallengerId(e.target.value)}
+                      >
+                        <option value="">{t("expPage.pickChallenger")}</option>
+                        {agents
+                          .filter((a) => a.id !== exp.agent_id)
+                          .map((a) => (
+                            <option key={a.id} value={a.id} style={{ background: "#141816" }}>
+                              {a.name}
+                            </option>
+                          ))}
+                      </select>
+                      <Btn
+                        disabled={busy || !challengerId}
+                        onClick={() => void onAction(exp.id, "canary", challengerId)}
+                      >
+                        {t("expPage.startCanary")}
+                      </Btn>
+                    </div>
                   )}
                 </div>
               )}
 
-              <div style={{ marginTop: 14 }}>
-                <div className="am-h" style={{ fontSize: 11, color: "var(--ink-3)" }}>
-                  <span className="mono">
-                    {t("expPage.canaryTitle")}
-                    {canary?.challenger_agent ? ` — ${canary.challenger_agent}` : ""}
-                  </span>
-                  <span className="mono">RAMP 10 → 50 → 100</span>
-                </div>
-                {canaryWeights ? (
-                  <>
-                    <div className="split">
-                      <div style={{ flex: `0 0 ${canaryWeights.C ?? 90}%`,
-                                    background: "var(--s1)" }} />
-                      <div style={{ flex: 1, background: "var(--s3)" }} />
-                    </div>
-                    <div className="mono dim" style={{ fontSize: 9.5 }}>
-                      champion {canaryWeights.C}% · challenger {canaryWeights.T1}% — stage{" "}
-                      {(canary?.ramp_stage ?? 0) + 1}/3
-                    </div>
-                    <div style={{ marginTop: 8, display: "flex", gap: 9 }}>
-                      <Btn disabled={busy} onClick={() => void onAction(exp.id, "ramp")}>
-                        {t("expPage.ramp")} ▸
-                      </Btn>
-                      <Btn disabled={busy} onClick={() => setConfirmCleanup(true)}>
-                        {t("expPage.cleanup")}
-                      </Btn>
-                    </div>
-                  </>
-                ) : (
-                  <div style={{ display: "flex", gap: 9, alignItems: "center" }}>
-                    <select
-                      className="input"
-                      style={{ maxWidth: 220 }}
-                      value={challengerId}
-                      onChange={(e) => setChallengerId(e.target.value)}
-                    >
-                      <option value="">{t("expPage.pickChallenger")}</option>
-                      {agents
-                        .filter((a) => a.id !== exp.agent_id)
-                        .map((a) => (
-                          <option key={a.id} value={a.id} style={{ background: "#141816" }}>
-                            {a.name}
-                          </option>
-                        ))}
-                    </select>
-                    <Btn
-                      disabled={busy || !challengerId || exp.status === "running"}
-                      onClick={() => void onAction(exp.id, "canary", challengerId)}
-                    >
-                      {t("expPage.startCanary")}
-                    </Btn>
-                  </div>
-                )}
+              <div style={{ marginTop: 14, display: "flex", gap: 9 }}>
+                <Btn
+                  disabled={busy}
+                  data-testid="cleanup-btn"
+                  onClick={() => setConfirmCleanup(true)}
+                >
+                  {t("expPage.cleanup")}
+                </Btn>
               </div>
 
               {exp.artifacts.cleanup && (
@@ -348,18 +558,20 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
                     .join("\n")}
                 </div>
               )}
-              <ConfirmDialog
-                open={confirmCleanup}
-                title={t("expPage.confirmCleanup.title")}
-                body={t("expPage.confirmCleanup.body")}
-                confirmLabel={t("expPage.cleanup")}
-                onConfirm={() => {
-                  setConfirmCleanup(false);
-                  void onAction(exp.id, "cleanup");
-                }}
-                onCancel={() => setConfirmCleanup(false)}
-              />
             </>
+          )}
+          {exp && (
+            <ConfirmDialog
+              open={confirmCleanup}
+              title={t("expPage.confirmCleanup.title")}
+              body={t("expPage.confirmCleanup.body")}
+              confirmLabel={t("expPage.cleanup")}
+              onConfirm={() => {
+                setConfirmCleanup(false);
+                void onAction(exp.id, "cleanup");
+              }}
+              onCancel={() => setConfirmCleanup(false)}
+            />
           )}
         </Panel>
 
