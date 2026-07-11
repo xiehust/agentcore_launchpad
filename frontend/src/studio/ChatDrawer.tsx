@@ -113,6 +113,10 @@ export function ChatDrawer({
     if (active) endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, streamingContent, active]);
 
+  // Abort any in-flight streamed turn when the drawer unmounts (e.g. the debug
+  // pane is closed mid-stream) so we don't leak a reader or a backend subprocess.
+  useEffect(() => () => abortRef.current?.abort(), []);
+
   const send = async () => {
     const text = input.trim();
     if (!text || !session || streaming || aiFix.isFixing) return;

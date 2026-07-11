@@ -79,6 +79,10 @@ export function ExecutionDrawer({
     if (outRef.current) outRef.current.scrollTop = outRef.current.scrollHeight;
   }, [output]);
 
+  // Abort any in-flight stream when the drawer unmounts (e.g. the debug pane is
+  // closed mid-run) so we don't leak a reader or a backend subprocess.
+  useEffect(() => () => abortRef.current?.abort(), []);
+
   const persistInput = (value: string) => {
     setInputData(value);
     try {
