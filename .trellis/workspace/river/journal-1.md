@@ -83,3 +83,44 @@ User caught the canvas being one baseline behind upstream (PR#31 merged the same
 ### Next Steps
 
 - None - task complete
+
+
+## Session 3: Studio local debug + AI fix, caching triad, effort tiers, defaults
+
+**Date**: 2026-07-11
+**Task**: Studio local debug + AI fix, caching triad, effort tiers, defaults
+**Package**: lab4-interactive
+**Branch**: `main`
+
+### Summary
+
+Four asks: aws-knowledge MCP sample (live-verified public server); system-prompt cache completing the caching triad (cache_prompt, probed silent-noop under 1k tokens); Bedrock reasoning-effort tiers via the live-probed output_config.effort shape with per-model xhigh gating + Nova max_tokens clamps; streaming-on/32k defaults. Ported upstream PR#31 local debug: dedicated exec venv runs /api/execute[/stream] + /api/conversations* (messages replay, failed-turn pairing, CHAT_ERROR sentinel) with registry skills bundled into workdirs; AI Fix via claude-agent-sdk over Bedrock (diagnosis categories, env-revert guard, repair loop, revert-on-failed-validation); CodeState template|ai+flowStale lifted into CreateAgentStudio. E2E live: MCP sample answered S3 limits locally, 3-cache run, multi-turn context, full AI Fix loop (bogus model -> config diagnosis -> patched -> rerun OK -> regenerate discards), old agent rev4 re-publish. Two e2e-caught bugs fixed: chat session effect self-cancelling via its own deps; drawer unmount stream leak.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ef68b20` | (see git log) |
+| `ca4bbd3` | (see git log) |
+| `f2fe07f` | (see git log) |
+| `8385c6e` | (see git log) |
+| `9326372` | (see git log) |
+| `748ea9f` | (see git log) |
+| `ee4f07a` | (see git log) |
+| `b82cf15` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
