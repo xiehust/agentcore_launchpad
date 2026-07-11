@@ -39,6 +39,7 @@ interface StudioNodeData {
   // Bedrock prompt caching
   cacheMessages?: boolean;
   cacheTools?: boolean;
+  cacheSystem?: boolean; // launchpad extension: system-prompt caching
   // Mantle (Amazon Bedrock via OpenAI Responses API)
   region?: string;
   coordinationPrompt?: string;
@@ -519,6 +520,11 @@ export function PropertyPanel({
 
   const renderThinkingSection = (data: StudioNodeData) => {
     const isBedrock = data.modelProvider === 'AWS Bedrock' || !data.modelProvider;
+    // legacy 'minimal' coerced to 'low' (upstream :845)
+    const effortValue = data.reasoningEffort === 'minimal' ? 'low' : data.reasoningEffort || 'medium';
+    // launchpad extension: xhigh effort is only accepted by Sonnet 5 / Opus 4.8 on Bedrock
+    const modelId = data.modelId || '';
+    const xhighCapable = modelId.includes('claude-sonnet-5') || modelId.includes('claude-opus-4-8');
     return (
       <div className="studio-prop-sect">
         <div className="kicker" style={{ marginBottom: 10 }}>
@@ -539,14 +545,38 @@ export function PropertyPanel({
         {data.thinkingEnabled &&
           (isBedrock ? (
             // Bedrock/Claude uses adaptive thinking — no budget knob; temperature pinned to 1.
-            <div className="studio-note">{t('studio.prop.adaptiveThinkingNote')}</div>
+            // launchpad extension: expose the reasoning-effort tier for Bedrock (output_config.effort).
+            <>
+              <div className="studio-note">{t('studio.prop.adaptiveThinkingNote')}</div>
+              <div className="field" style={{ marginTop: 10 }}>
+                <label>{t('studio.prop.reasoningEffort')}</label>
+                <select
+                  className="input"
+                  value={effortValue}
+                  onChange={(e) => handleInputChange('reasoningEffort', e.target.value)}
+                >
+                  <option value="low">{t('studio.prop.effortLow')}</option>
+                  <option value="medium">{t('studio.prop.effortMedium')}</option>
+                  <option value="high">{t('studio.prop.effortHigh')}</option>
+                  <option
+                    value="xhigh"
+                    disabled={!xhighCapable}
+                    title={!xhighCapable ? t('studio.prop.effortXHighUnavailable') : undefined}
+                  >
+                    {t('studio.prop.effortXHigh')}
+                  </option>
+                </select>
+                {effortValue === 'xhigh' && !xhighCapable && (
+                  <div className="studio-prop-hint">{t('studio.prop.effortXHighClamped')}</div>
+                )}
+              </div>
+            </>
           ) : (
             <div className="field">
               <label>{t('studio.prop.reasoningEffort')}</label>
               <select
                 className="input"
-                // legacy 'minimal' coerced to 'low' (upstream :845)
-                value={data.reasoningEffort === 'minimal' ? 'low' : data.reasoningEffort || 'medium'}
+                value={effortValue}
                 onChange={(e) => handleInputChange('reasoningEffort', e.target.value)}
               >
                 <option value="low">{t('studio.prop.effortLow')}</option>
@@ -577,6 +607,16 @@ export function PropertyPanel({
               />
               <span>{t('studio.prop.cacheTools')}</span>
             </label>
+            {/* launchpad extension: system-prompt caching (third cache toggle) */}
+            <label className="studio-check" style={{ marginTop: 6 }}>
+              <input
+                type="checkbox"
+                checked={data.cacheSystem || false}
+                onChange={(e) => handleInputChange('cacheSystem', e.target.checked)}
+              />
+              <span>{t('studio.prop.cacheSystem')}</span>
+            </label>
+            <div className="studio-prop-hint">{t('studio.prop.cacheSystemHint')}</div>
             <div className="studio-prop-hint">{t('studio.prop.cachingHint')}</div>
           </div>
         )}
@@ -584,12 +624,27 @@ export function PropertyPanel({
     );
   };
 
+  // launchpad extension: surface per-model max_tokens caps (Nova Pro 10000, Nova Premier 32000)
+  const renderMaxTokensCapHint = (data: StudioNodeData) => {
+    const isBedrock = data.modelProvider === 'AWS Bedrock' || !data.modelProvider;
+    if (!isBedrock) return null;
+    const modelId = data.modelId || '';
+    if (modelId.includes('nova-premier')) {
+      return <div className="studio-prop-hint">{t('studio.prop.maxTokensCapNovaPremier')}</div>;
+    }
+    if (modelId.includes('nova-pro')) {
+      return <div className="studio-prop-hint">{t('studio.prop.maxTokensCapNovaPro')}</div>;
+    }
+    return null;
+  };
+
   const renderStreamingField = (data: StudioNodeData) => (
     <div className="field">
       <label className="studio-check">
         <input
           type="checkbox"
-          checked={data.streaming || false}
+          // launchpad extension: streaming defaults ON for the main execution agent
+          checked={data.streaming ?? true}
           disabled={!hasConnectedOutputNode()}
           onChange={(e) => handleInputChange('streaming', e.target.checked)}
         />
@@ -637,11 +692,13 @@ export function PropertyPanel({
         <input
           className="input"
           type="number"
-          value={data.maxTokens || 10000}
+          // launchpad extension: default 32000
+          value={data.maxTokens || 32000}
           onChange={(e) => handleInputChange('maxTokens', parseInt(e.target.value))}
           min="1"
           max="100000"
         />
+        {renderMaxTokensCapHint(data)}
       </div>
 
       {renderStreamingField(data)}
@@ -700,11 +757,13 @@ export function PropertyPanel({
         <input
           className="input"
           type="number"
-          value={data.maxTokens || 10000}
+          // launchpad extension: default 32000
+          value={data.maxTokens || 32000}
           onChange={(e) => handleInputChange('maxTokens', parseInt(e.target.value))}
           min="100"
           max="100000"
         />
+        {renderMaxTokensCapHint(data)}
       </div>
 
       {renderStreamingField(data)}

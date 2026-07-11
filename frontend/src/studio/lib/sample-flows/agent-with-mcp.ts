@@ -4,7 +4,7 @@ export const agentWithMcp: SampleFlow = {
   id: 'agent-with-mcp',
   name: 'Agent with MCP Server',
   description:
-    'An agent connected to an external MCP server over streamable HTTP. Point the MCP node URL at your own server (default: http://localhost:8811/mcp) before running.',
+    'An agent connected to the public AWS Knowledge MCP server over streamable HTTP (https://knowledge-mcp.global.api.aws, no auth). Ask it AWS documentation questions.',
   level: 'basic',
   graphMode: false,
   nodes: [
@@ -37,12 +37,12 @@ export const agentWithMcp: SampleFlow = {
       type: 'mcp-tool',
       position: { x: 40, y: 320 },
       data: {
-        label: 'Docs MCP Server',
-        serverName: 'docs_server',
+        label: 'AWS Knowledge MCP',
+        serverName: 'aws_knowledge',
         transportType: 'streamable_http',
-        url: 'http://localhost:8811/mcp',
+        url: 'https://knowledge-mcp.global.api.aws',
         timeout: 30,
-        description: 'Documentation search MCP server',
+        description: 'AWS Knowledge MCP (public, no auth)',
       },
     },
     {

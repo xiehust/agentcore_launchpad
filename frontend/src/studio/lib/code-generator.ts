@@ -270,12 +270,13 @@ function generateAgentModelOnly(
     modelId = DEFAULT_MODEL_ID,
     modelName = 'Claude 3.7 Sonnet',
     temperature = 0.7,
-    maxTokens = 4000,
+    maxTokens = 32000, // launchpad extension: default max output tokens 32000
     baseUrl = '',
     thinkingEnabled = false,
     reasoningEffort = 'medium',
     cacheMessages = false,
     cacheTools = false,
+    cacheSystem = false, // launchpad extension: system-prompt caching toggle
   } = data;
 
   // Use modelId for Bedrock, modelName for others
@@ -285,7 +286,7 @@ function generateAgentModelOnly(
   const agentVarName = sanitizePythonVariableName(label as string);
 
   // Generate model configuration based on provider
-  const modelConfig = generateModelConfigForCode(agentVarName, modelProvider as string, modelIdentifier as string, temperature as number, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean);
+  const modelConfig = generateModelConfigForCode(agentVarName, modelProvider as string, modelIdentifier as string, temperature as number, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean, cacheSystem as boolean);
 
   return `# ${label} Configuration
 ${modelConfig}`;
@@ -305,12 +306,13 @@ function generateAgentCode(
     modelName = 'Claude 3.7 Sonnet',
     systemPrompt = 'You are a helpful AI assistant.',
     temperature = 0.7,
-    maxTokens = 4000,
+    maxTokens = 32000, // launchpad extension: default max output tokens 32000
     baseUrl = '',
     thinkingEnabled = false,
     reasoningEffort = 'medium',
     cacheMessages = false,
     cacheTools = false,
+    cacheSystem = false, // launchpad extension: system-prompt caching toggle
   } = data;
 
   // Use modelId for Bedrock, modelName for others
@@ -332,7 +334,7 @@ function generateAgentCode(
   const systemPromptValue = String(systemPrompt || 'You are a helpful AI assistant.');
 
   // Generate model configuration based on provider
-  const modelConfig = generateModelConfigForCode(agentVarName, modelProvider as string, modelIdentifier as string, temperature as number, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean);
+  const modelConfig = generateModelConfigForCode(agentVarName, modelProvider as string, modelIdentifier as string, temperature as number, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean, cacheSystem as boolean);
 
   return `# ${label} Configuration
 ${modelConfig}
@@ -358,12 +360,13 @@ function generateSwarmAgentCode(
     modelName = 'Claude 3.7 Sonnet',
     systemPrompt = 'You are a helpful AI assistant.',
     temperature = 0.7,
-    maxTokens = 4000,
+    maxTokens = 32000, // launchpad extension: default max output tokens 32000
     baseUrl = '',
     thinkingEnabled = false,
     reasoningEffort = 'medium',
     cacheMessages = false,
     cacheTools = false,
+    cacheSystem = false, // launchpad extension: system-prompt caching toggle
   } = data;
 
   // Use modelId for Bedrock, modelName for others
@@ -385,7 +388,7 @@ function generateSwarmAgentCode(
   const systemPromptValue = String(systemPrompt || 'You are a helpful AI assistant.');
 
   // Generate model configuration based on provider
-  const modelConfig = generateModelConfigForCode(agentVarName, modelProvider as string, modelIdentifier as string, temperature as number, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean);
+  const modelConfig = generateModelConfigForCode(agentVarName, modelProvider as string, modelIdentifier as string, temperature as number, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean, cacheSystem as boolean);
 
   return `# ${label} Configuration
 ${modelConfig}
@@ -849,7 +852,8 @@ ${baseIndent}    user_input = "Hello, how can you help me?"`;
         
   }
     const executionAgentData = executionAgent.data || {};
-    const isStreaming = executionAgentData.streaming || false;
+    // launchpad extension: streaming defaults ON for the main execution agent (undefined -> true)
+    const isStreaming = executionAgentData.streaming ?? true;
 
     if (executionAgent.type === 'swarm') {
       // Swarm execution (always synchronous)
@@ -1080,12 +1084,13 @@ function generateAgentAsToolCode(
     modelName = 'Claude 3.7 Sonnet',
     systemPrompt = 'You are a helpful AI assistant.',
     temperature = 0.7,
-    maxTokens = 4000,
+    maxTokens = 32000, // launchpad extension: default max output tokens 32000
     baseUrl = '',
     thinkingEnabled = false,
     reasoningEffort = 'medium',
     cacheMessages = false,
     cacheTools = false,
+    cacheSystem = false, // launchpad extension: system-prompt caching toggle
   } = data;
 
   const modelIdentifier = modelProvider === 'AWS Bedrock' ? modelId : modelName;
@@ -1124,7 +1129,7 @@ def ${functionName}(user_input: str) -> str:
         ${mcpClientVars.map(clientVar => `mcp_tools.extend(${clientVar}.list_tools_sync())`).join('\n        ')}
         
         # Create model for ${label}
-        ${generateModelConfigForTool(functionName, modelProvider as string, modelIdentifier as string, temperature as number, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean)}
+        ${generateModelConfigForTool(functionName, modelProvider as string, modelIdentifier as string, temperature as number, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean, cacheSystem as boolean)}
 
         # Create agent with MCP tools
         agent = Agent(
@@ -1148,7 +1153,7 @@ def ${functionName}(user_input: str) -> str:
     """${label} - ${(systemPrompt as string).substring(0, 100)}${(systemPrompt as string).length > 100 ? '...' : ''}"""
 
     # Create model for ${label}
-    ${generateModelConfigForTool(functionName, modelProvider as string, modelIdentifier as string, temperature as number, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean)}
+    ${generateModelConfigForTool(functionName, modelProvider as string, modelIdentifier as string, temperature as number, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean, cacheSystem as boolean)}
 
     # Create agent
     agent = Agent(
@@ -1180,13 +1185,14 @@ function generateOrchestratorAsToolCode(
     modelName = 'Claude 3.7 Sonnet',
     systemPrompt = 'You are an orchestrator agent that coordinates multiple specialized agents.',
     temperature = 0.7,
-    maxTokens = 4000,
+    maxTokens = 32000, // launchpad extension: default max output tokens 32000
     coordinationPrompt = '',
     baseUrl = '',
     thinkingEnabled = false,
     reasoningEffort = 'medium',
     cacheMessages = false,
     cacheTools = false,
+    cacheSystem = false, // launchpad extension: system-prompt caching toggle
   } = data;
 
   const modelIdentifier = modelProvider === 'AWS Bedrock' ? modelId : modelName;
@@ -1244,7 +1250,7 @@ def ${functionName}(user_input: str) -> str:
         ${mcpClientVars.map(clientVar => `mcp_tools.extend(${clientVar}.list_tools_sync())`).join('\n        ')}
         
         # Create model for ${label}
-        ${generateModelConfigForTool(functionName, modelProvider as string, modelIdentifier as string, temperature as number, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean)}
+        ${generateModelConfigForTool(functionName, modelProvider as string, modelIdentifier as string, temperature as number, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean, cacheSystem as boolean)}
 
         # Create orchestrator agent with MCP tools
         agent = Agent(
@@ -1268,7 +1274,7 @@ def ${functionName}(user_input: str) -> str:
     """${label} - ${(systemPrompt as string).substring(0, 100)}${(systemPrompt as string).length > 100 ? '...' : ''}"""
 
     # Create model for ${label}
-    ${generateModelConfigForTool(functionName, modelProvider as string, modelIdentifier as string, temperature as number, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean)}
+    ${generateModelConfigForTool(functionName, modelProvider as string, modelIdentifier as string, temperature as number, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean, cacheSystem as boolean)}
 
     # Create orchestrator agent
     agent = Agent(
@@ -1296,12 +1302,13 @@ function generateOrchestratorModelOnly(
     modelId = DEFAULT_MODEL_ID,
     modelName = 'Claude 3.7 Sonnet',
     temperature = 0.7,
-    maxTokens = 4000,
+    maxTokens = 32000, // launchpad extension: default max output tokens 32000
     baseUrl = '',
     thinkingEnabled = false,
     reasoningEffort = 'medium',
     cacheMessages = false,
     cacheTools = false,
+    cacheSystem = false, // launchpad extension: system-prompt caching toggle
   } = data;
 
   const modelIdentifier = modelProvider === 'AWS Bedrock' ? modelId : modelName;
@@ -1309,7 +1316,7 @@ function generateOrchestratorModelOnly(
   const orchestratorName = sanitizePythonVariableName(label as string);
 
   // Generate model configuration based on provider
-  const modelConfig = generateModelConfigForCode(orchestratorName, modelProvider as string, modelIdentifier as string, temperature as number, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean);
+  const modelConfig = generateModelConfigForCode(orchestratorName, modelProvider as string, modelIdentifier as string, temperature as number, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean, cacheSystem as boolean);
 
   return `# ${label} Configuration
 ${modelConfig}`;
@@ -1329,13 +1336,14 @@ function generateOrchestratorCode(
     modelName = 'Claude 3.7 Sonnet',
     systemPrompt = 'You are an orchestrator agent that coordinates multiple specialized agents.',
     temperature = 0.7,
-    maxTokens = 4000,
+    maxTokens = 32000, // launchpad extension: default max output tokens 32000
     coordinationPrompt = '',
     baseUrl = '',
     thinkingEnabled = false,
     reasoningEffort = 'medium',
     cacheMessages = false,
     cacheTools = false,
+    cacheSystem = false, // launchpad extension: system-prompt caching toggle
   } = data;
 
   const modelIdentifier = modelProvider === 'AWS Bedrock' ? modelId : modelName;
@@ -1391,7 +1399,7 @@ function generateOrchestratorCode(
 
   if (hasMCPTools) {
     // When MCP tools are present, only define the model - agent creation happens in main()
-    const modelConfig = generateModelConfigForCode(orchestratorName, modelProvider as string, modelIdentifier as string, temperature as number, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean);
+    const modelConfig = generateModelConfigForCode(orchestratorName, modelProvider as string, modelIdentifier as string, temperature as number, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean, cacheSystem as boolean);
     return `# ${label} Configuration
 ${modelConfig}
 
@@ -1399,7 +1407,7 @@ ${modelConfig}
   } else {
     // Regular orchestrator without MCP tools
     const skillsCode = buildSkillsPluginArg(findConnectedSkills(orchestratorNode, allNodes, edges), '    ');
-    const modelConfig = generateModelConfigForCode(orchestratorName, modelProvider as string, modelIdentifier as string, temperature as number, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean);
+    const modelConfig = generateModelConfigForCode(orchestratorName, modelProvider as string, modelIdentifier as string, temperature as number, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages as boolean, cacheTools as boolean, cacheSystem as boolean);
     return `# ${label} Configuration
 ${modelConfig}
 
@@ -1421,7 +1429,8 @@ function generateModelConfigForCode(
   thinkingEnabled?: boolean,
   reasoningEffort?: string,
   cacheMessages?: boolean,
-  cacheTools?: boolean
+  cacheTools?: boolean,
+  cacheSystem?: boolean // launchpad extension: system-prompt caching
 ): string {
   // Legacy projects may still carry 'minimal' (removed from the effort scale)
   if (reasoningEffort === 'minimal') reasoningEffort = 'low';
@@ -1474,17 +1483,34 @@ function generateModelConfigForCode(
   } else {
     // Default to Bedrock. Claude 4.6+ uses adaptive thinking (budget_tokens is
     // rejected on Sonnet 5 / Opus 4.8); Bedrock requires temperature=1 with it.
+    // launchpad extension: clamp max_tokens to per-model caps (Nova Pro 10000, Nova Premier 32000)
+    let effectiveMaxTokens = maxTokens;
+    if (modelIdentifier.includes('nova-premier')) effectiveMaxTokens = Math.min(maxTokens, 32000);
+    else if (modelIdentifier.includes('nova-pro')) effectiveMaxTokens = Math.min(maxTokens, 10000);
+
     let bedrockCode = `${varName}_model = BedrockModel(
     model_id="${modelIdentifier}",
     temperature=${finalTemperature},
-    max_tokens=${maxTokens}`;
+    max_tokens=${effectiveMaxTokens}`;
 
     if (thinkingEnabled) {
+      // launchpad extension: emit output_config.effort alongside adaptive thinking (probe-verified
+      // shape); clamp xhigh->high for models that reject it (only Sonnet 5 / Opus 4.8 accept xhigh)
+      let effortTier = reasoningEffort;
+      const xhighCapable =
+        modelIdentifier.includes('claude-sonnet-5') || modelIdentifier.includes('claude-opus-4-8');
+      if (effortTier === 'xhigh' && !xhighCapable) effortTier = 'high';
+      const effortField = effortTier
+        ? `,
+        "output_config": {
+            "effort": "${effortTier}"
+        }`
+        : '';
       bedrockCode += `,
     additional_request_fields={
         "thinking": {
             "type": "adaptive"
-        }
+        }${effortField}
     }`;
     }
 
@@ -1496,6 +1522,11 @@ function generateModelConfigForCode(
     if (cacheTools) {
       bedrockCode += `,
     cache_tools="default"`;
+    }
+    // launchpad extension: system-prompt caching (cache_prompt="default"; deprecated-but-functional in strands 1.47)
+    if (cacheSystem) {
+      bedrockCode += `,
+    cache_prompt="default"`;
     }
 
     bedrockCode += '\n)';
@@ -1513,7 +1544,8 @@ function generateModelConfigForTool(
   thinkingEnabled?: boolean,
   reasoningEffort?: string,
   cacheMessages?: boolean,
-  cacheTools?: boolean
+  cacheTools?: boolean,
+  cacheSystem?: boolean // launchpad extension: system-prompt caching
 ): string {
   // Legacy projects may still carry 'minimal' (removed from the effort scale)
   if (reasoningEffort === 'minimal') reasoningEffort = 'low';
@@ -1563,17 +1595,34 @@ function generateModelConfigForTool(
         )`;
   } else {
     // Default to Bedrock — adaptive thinking (see generateModelConfigForCode)
+    // launchpad extension: clamp max_tokens to per-model caps (Nova Pro 10000, Nova Premier 32000)
+    let effectiveMaxTokens = maxTokens;
+    if (modelIdentifier.includes('nova-premier')) effectiveMaxTokens = Math.min(maxTokens, 32000);
+    else if (modelIdentifier.includes('nova-pro')) effectiveMaxTokens = Math.min(maxTokens, 10000);
+
     let bedrockCode = `${varName}_model = BedrockModel(
             model_id="${modelIdentifier}",
             temperature=${finalTemperature},
-            max_tokens=${maxTokens}`;
+            max_tokens=${effectiveMaxTokens}`;
 
     if (thinkingEnabled) {
+      // launchpad extension: emit output_config.effort alongside adaptive thinking (probe-verified
+      // shape); clamp xhigh->high for models that reject it (only Sonnet 5 / Opus 4.8 accept xhigh)
+      let effortTier = reasoningEffort;
+      const xhighCapable =
+        modelIdentifier.includes('claude-sonnet-5') || modelIdentifier.includes('claude-opus-4-8');
+      if (effortTier === 'xhigh' && !xhighCapable) effortTier = 'high';
+      const effortField = effortTier
+        ? `,
+                "output_config": {
+                    "effort": "${effortTier}"
+                }`
+        : '';
       bedrockCode += `,
             additional_request_fields={
                 "thinking": {
                     "type": "adaptive"
-                }
+                }${effortField}
             }`;
     }
 
@@ -1585,6 +1634,11 @@ function generateModelConfigForTool(
     if (cacheTools) {
       bedrockCode += `,
             cache_tools="default"`;
+    }
+    // launchpad extension: system-prompt caching (cache_prompt="default"; deprecated-but-functional in strands 1.47)
+    if (cacheSystem) {
+      bedrockCode += `,
+            cache_prompt="default"`;
     }
 
     bedrockCode += '\n        )';

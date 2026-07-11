@@ -45,7 +45,8 @@ function generateModelConfig(
   thinkingEnabled?: boolean,
   reasoningEffort?: string,
   cacheMessages?: boolean,
-  cacheTools?: boolean
+  cacheTools?: boolean,
+  cacheSystem?: boolean // launchpad extension: system-prompt caching
 ): string {
   // Legacy projects may still carry 'minimal' (removed from the effort scale)
   if (reasoningEffort === 'minimal') reasoningEffort = 'low';
@@ -93,17 +94,34 @@ function generateModelConfig(
 )`;
   } else {
     // Default to Bedrock — Claude 4.6+ adaptive thinking (see code-generator.ts)
+    // launchpad extension: clamp max_tokens to per-model caps (Nova Pro 10000, Nova Premier 32000)
+    let effectiveMaxTokens = maxTokens;
+    if (modelIdentifier.includes('nova-premier')) effectiveMaxTokens = Math.min(maxTokens, 32000);
+    else if (modelIdentifier.includes('nova-pro')) effectiveMaxTokens = Math.min(maxTokens, 10000);
+
     let bedrockCode = `${varName}_model = BedrockModel(
     model_id="${modelIdentifier}",
     temperature=${finalTemperature},
-    max_tokens=${maxTokens}`;
+    max_tokens=${effectiveMaxTokens}`;
 
     if (thinkingEnabled) {
+      // launchpad extension: emit output_config.effort alongside adaptive thinking (probe-verified
+      // shape); clamp xhigh->high for models that reject it (only Sonnet 5 / Opus 4.8 accept xhigh)
+      let effortTier = reasoningEffort;
+      const xhighCapable =
+        modelIdentifier.includes('claude-sonnet-5') || modelIdentifier.includes('claude-opus-4-8');
+      if (effortTier === 'xhigh' && !xhighCapable) effortTier = 'high';
+      const effortField = effortTier
+        ? `,
+        "output_config": {
+            "effort": "${effortTier}"
+        }`
+        : '';
       bedrockCode += `,
     additional_request_fields={
         "thinking": {
             "type": "adaptive"
-        }
+        }${effortField}
     }`;
     }
 
@@ -115,6 +133,11 @@ function generateModelConfig(
     if (cacheTools) {
       bedrockCode += `,
     cache_tools="default"`;
+    }
+    // launchpad extension: system-prompt caching (cache_prompt="default"; deprecated-but-functional in strands 1.47)
+    if (cacheSystem) {
+      bedrockCode += `,
+    cache_prompt="default"`;
     }
 
     bedrockCode += '\n)';
@@ -410,12 +433,13 @@ export function generateGraphCode(
       const modelName = data.modelName || 'Claude 3.7 Sonnet';
       const systemPrompt = data.systemPrompt || 'You are a helpful AI assistant.';
       const temperature = data.temperature !== undefined ? data.temperature : 0.7;
-      const maxTokens = data.maxTokens || 4000;
+      const maxTokens = data.maxTokens || 32000; // launchpad extension: default max output tokens 32000
       const baseUrl = data.baseUrl || '';
       const thinkingEnabled = data.thinkingEnabled || false;
       const reasoningEffort = data.reasoningEffort || 'medium';
       const cacheMessages = (data.cacheMessages as boolean) || false;
       const cacheTools = (data.cacheTools as boolean) || false;
+      const cacheSystem = (data.cacheSystem as boolean) || false; // launchpad extension: system-prompt caching
 
       const modelIdentifier = modelProvider === 'AWS Bedrock' ? modelId : modelName;
       const agentVarName = sanitizePythonVariableName(label as string);
@@ -430,7 +454,7 @@ export function generateGraphCode(
       const skillsCode = buildSkillsPluginArg(findConnectedSkills(agentNode, nodes, edges), '    ');
 
       // Generate model config
-      const modelConfig = generateModelConfig(agentVarName, modelProvider as string, modelIdentifier as string, temperature as number, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages, cacheTools);
+      const modelConfig = generateModelConfig(agentVarName, modelProvider as string, modelIdentifier as string, temperature as number, maxTokens as number, baseUrl as string, thinkingEnabled as boolean, reasoningEffort as string, cacheMessages, cacheTools, cacheSystem);
 
       code += `# ${label} Configuration\n`;
       code += modelConfig + '\n\n';

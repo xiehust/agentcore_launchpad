@@ -235,7 +235,9 @@ export function FlowEditor({
           modelName: 'Claude Sonnet 4.6',
           systemPrompt: 'You are a helpful AI assistant.',
           temperature: 0.7,
-          maxTokens: 4000,
+          // launchpad extension: new agents default to streaming ON + 32000 max output tokens
+          maxTokens: 32000,
+          streaming: true,
         });
       }
 
