@@ -51,6 +51,19 @@ class Settings(BaseSettings):
     account_id: str = ""
     resources: dict[str, Any] = {}
 
+    # Studio local-debug (un-deployed flow execution + AI fix). The control-plane
+    # backend env has no strands/openai; generated code runs in the dedicated
+    # interpreter provisioned by scripts/setup_exec_env.sh. Endpoints return a
+    # friendly 503 pointing at that script when the interpreter is missing.
+    studio_exec_python: str = str(DATA_DIR / "exec-venv" / "bin" / "python")
+    execute_timeout_s: float = 300.0
+    # AI-fix coding backend (slice 3 consumes these; declared here so the whole
+    # local-debug surface shares one settings block).
+    codegen_backend: str = "claude"
+    codegen_model: str = "global.anthropic.claude-sonnet-4-6"
+    codegen_timeout_s: float = 180.0
+    codegen_max_repair_rounds: int = 2
+
     # Advisory USD-per-1M-token prices for observability cost estimates.
     # Keys are substring-matched against gen_ai.request.model ids; unknown
     # models report tokens with a null cost. Overridable in launchpad.yaml,

@@ -18,6 +18,8 @@ from app.optimization.routers import router as experiments_router
 from app.routers.agents import router as agents_router
 from app.routers.apikeys import router as apikeys_router
 from app.routers.chat import router as chat_router
+from app.routers.conversations import router as conversations_router
+from app.routers.execution import router as execution_router
 from app.routers.governance import router as governance_router
 from app.routers.observability import router as observability_router
 from app.routers.overview import router as overview_router
@@ -59,6 +61,8 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(tools_router)
     app.include_router(registry_router)
     app.include_router(chat_router)
+    app.include_router(execution_router)  # studio local-debug: run un-deployed code
+    app.include_router(conversations_router)  # studio local-debug: multi-turn chat
     app.include_router(governance_router)
     app.include_router(observability_router)
     app.include_router(evaluation_router)

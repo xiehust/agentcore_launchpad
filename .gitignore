@@ -23,6 +23,7 @@ dist/
 # --- local data & generated config ---
 data/*.db
 data/*.db-journal
+data/exec-venv/
 config/launchpad.yaml
 
 # --- misc ---

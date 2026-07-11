@@ -175,9 +175,28 @@ def bundle_skills(
     ``pkg_dir/skills/{name}/`` so the runtime's ``Path(__file__).parent/"skills"``
     fallback resolves them. Non-studio agents are a no-op. Any skill issue
     (missing record, oversize, download error) logs + skips — never raises."""
-    empty = {"bundled": [], "files": 0, "bytes": 0}
     if spec.method != "studio":
-        return empty
+        return {"bundled": [], "files": 0, "bytes": 0}
+    return bundle_skills_into(
+        code, pkg_dir, log, skill_records=skill_records, s3_client=s3_client
+    )
+
+
+def bundle_skills_into(
+    code: str,
+    dest_parent: Path,
+    log: Callable[[str], None],
+    *,
+    skill_records: dict[str, str] | None = None,
+    s3_client: Any = None,
+) -> dict[str, Any]:
+    """Method-agnostic core of ``bundle_skills``: download every APPROVED skill
+    referenced by ``code`` into ``dest_parent/skills/{name}/``. Shared by the
+    deploy-time packager (which gates on ``spec.method == "studio"``) and the
+    studio local-debug executor (which has no AgentSpec — it bundles skills into
+    the run's temp workdir so ``Path(__file__).parent/"skills"`` resolves them).
+    Any skill issue logs + skips — never raises."""
+    empty = {"bundled": [], "files": 0, "bytes": 0}
     names = extract_skill_names(code)
     if not names:
         return empty
@@ -195,7 +214,7 @@ def bundle_skills(
             log(f"skill '{name}' not found in registry — skipped")
             continue
         bucket, prefix = _parse_s3_uri(path)
-        dest = pkg_dir / "skills" / name
+        dest = dest_parent / "skills" / name
         try:
             files, size = _download_skill_prefix(s3_client, bucket, prefix, dest, name, log)
         except Exception as exc:  # a bad skill can't sink the whole deploy
