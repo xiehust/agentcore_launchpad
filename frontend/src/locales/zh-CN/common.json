@@ -595,7 +595,9 @@
         "a3": "或 CLEANUP 放弃实验并清除资源。",
         "promotedContext": "已在样本不足时手动放量——上方判定早于该操作"
       },
-      "moreCount": "共 {{count}} 个实验记录——当前显示最新一个"
+      "moreCount": "共 {{count}} 个实验记录——当前显示最新一个",
+      "significant": "统计显著",
+      "notSignificant": "未达统计显著"
     }
   },
   "expPage": {

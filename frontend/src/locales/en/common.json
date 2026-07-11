@@ -595,7 +595,9 @@
         "a3": "CLEANUP to abandon the experiment and remove its resources.",
         "promotedContext": "promoted manually despite insufficient data — the verdict above predates the promotion"
       },
-      "moreCount": "{{count}} experiments on record — showing the latest"
+      "moreCount": "{{count}} experiments on record — showing the latest",
+      "significant": "statistically significant",
+      "notSignificant": "not statistically significant"
     }
   },
   "expPage": {

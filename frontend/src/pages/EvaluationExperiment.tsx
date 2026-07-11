@@ -11,7 +11,7 @@ export interface ABMetric {
   label: string;
   control: { mean: number | null; sampleSize: number | null };
   variants: { name: string; mean: number | null; sampleSize: number | null;
-    pValue?: number | null; isSignificant?: boolean }[];
+    pValue?: number | null; percentChange?: number | null; isSignificant?: boolean }[];
 }
 
 export interface ExperimentInfo {
@@ -29,7 +29,8 @@ export interface ExperimentInfo {
     bundles?: { control: { arn: string }; treatment: { arn: string } };
     abtest?: { ab_test_id: string };
     traffic?: { sent: number; failed: number };
-    verdict?: { verdict: string; avg_delta?: number; n?: number; metrics: ABMetric[] };
+    verdict?: { verdict: string; avg_delta?: number; n?: number;
+      significant?: boolean; metrics: ABMetric[] };
     promote?: { after_weights: Record<string, number> };
     canary?: {
       canary_ab_test_id: string;
@@ -48,6 +49,11 @@ const LOOP_STAGES = [
   "recommend", "bundles", "gateway", "abtest", "traffic", "verdict",
   "promote", "canary", "ramp", "cleanup",
 ];
+
+// "0.0310" reads worse than "0.031"; tiny values collapse to a bound.
+function fmtP(p: number): string {
+  return p < 0.001 ? "<0.001" : p.toFixed(3);
+}
 
 // status → chip tone, shared by the sub-page header and the dashboard row.
 export function experimentTone(status: string): "good" | "warn" | "crit" | "muted" {
@@ -308,6 +314,10 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
                   <span className="k mono">{t("evalPage.experiment.summary.verdict")}</span>
                   <span className="v mono">
                     {verdict ? verdict.verdict.toUpperCase() : "—"}
+                    {verdict?.significant != null &&
+                      ` · ${verdict.significant
+                        ? `✓ ${t("evalPage.experiment.significant")}`
+                        : t("evalPage.experiment.notSignificant")}`}
                     {exp.artifacts.promote &&
                       ` · ${t("expPage.promoted")} T1 ${
                         exp.artifacts.promote.after_weights?.T1 ?? 100}%`}
@@ -403,6 +413,26 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
                         </div>
                         <span className="av">{variant?.mean?.toFixed(2) ?? "—"}</span>
                       </div>
+                      <div
+                        className="mono dim"
+                        data-testid="metric-stats"
+                        style={{ fontSize: 9.5, marginTop: 2 }}
+                      >
+                        n {metric.control.sampleSize ?? "—"}/{variant?.sampleSize ?? "—"}
+                        {" · "}p={variant?.pValue != null ? fmtP(variant.pValue) : "—"}
+                        {variant?.isSignificant != null && (
+                          <span
+                            style={{
+                              color: variant.isSignificant ? "var(--good)" : undefined,
+                            }}
+                          >
+                            {" · "}
+                            {variant.isSignificant
+                              ? `✓ ${t("evalPage.experiment.significant")}`
+                              : t("evalPage.experiment.notSignificant")}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   );
                 })
@@ -435,6 +465,19 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
                     </span>
                     <span className="vm">
                       {verdict.avg_delta != null && `Δ ${verdict.avg_delta}`} · n={verdict.n ?? 0}
+                      {verdict.significant != null && (
+                        <span
+                          data-testid="verdict-significance"
+                          style={{
+                            color: verdict.significant ? "var(--good)" : "var(--warn)",
+                          }}
+                        >
+                          {" · "}
+                          {verdict.significant
+                            ? `✓ ${t("evalPage.experiment.significant")}`
+                            : t("evalPage.experiment.notSignificant")}
+                        </span>
+                      )}
                     </span>
                     {exp.status === "ready" && !exp.artifacts.promote && (
                       <Btn
