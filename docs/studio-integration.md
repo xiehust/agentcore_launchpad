@@ -86,7 +86,54 @@ client definitions.
 Requirements added on top of the studio code: the platform zip baseline
 (`strands-agents[otel]`, `bedrock-agentcore`, `aws-opentelemetry-distro` for
 ADOT traces) plus `strands-agents-tools[mem0_memory]`, which studio's
-generated import line always references.
+generated import line always references. When any node uses the **OpenAI** or
+**Amazon Bedrock (Mantle)** provider, `CreateAgentStudio.tsx` adds
+`strands-agents[openai]` to `spec.requirements` — both providers import
+`openai` at module top level (shipped only via that extra, which also pulls
+the Bedrock token generator Mantle auth needs). Prompt caching, adaptive
+thinking, and skills need no extra. Generated code reads `OPENAI_API_KEY` /
+`BEDROCK_API_KEY` from the runtime env; the publish body maps each node's
+`apiKey` onto `spec.env` (first non-empty per provider), which the deploy
+stage passes as `environmentVariables` (platform-injected keys like
+`LAUNCHPAD_MEMORY_ID` win over same-named user env). The key lives in
+`studio_flow` → ledger spec in plaintext, same exposure class as upstream's
+localStorage — acceptable for this demo platform.
+
+## Skill bundling / 技能打包
+
+The canvas Skill node attaches a launchpad **AGENT_SKILLS** registry record
+(the picker lists APPROVED records from `GET /api/registry/attachables`) to an
+agent. The generator emits
+`plugins=[AgentSkills(skills=[os.path.join(_skills_dir, "<name>")])]` plus a
+module-level `_skills_dir = os.environ.get("STUDIO_SKILLS_DIR") or
+str(Path(__file__).parent / "skills")`. At runtime `STUDIO_SKILLS_DIR` is
+unset, so the code resolves `skills/<name>/` next to `main.py`.
+
+`build_zip()` (`backend/app/deployer/zip_runtime.py`) bundles those dirs at
+package time (studio method only):
+
+1. Regex the adapted code for `os\.path\.join\(\s*_skills_dir\s*,\s*"([a-z0-9-]+)"\s*\)`
+   (the same pattern upstream's `agentcore_deployment_service` uses) → unique
+   referenced skill names.
+2. Resolve each name against the APPROVED AGENT_SKILLS records
+   (`registry_console.attachable_records()`, `name == s3 prefix segment`,
+   `path = s3://{bucket}/skills/{name}/`).
+3. Download every object under that prefix into `pkg_dir/skills/{name}/`
+   (path-traversal guarded, 50 MB/skill cap) — the zip walk picks it up.
+
+Any skill issue (missing/unapproved record, oversize, download error) logs +
+skips, never fails the deploy — mirroring upstream. `adapt_studio_code` is
+untouched (the `_skills_dir` line survives verbatim). `AgentSkills` /
+`CacheConfig` / `OpenAIResponsesModel` all resolve from the zip pin
+`strands-agents[otel]>=1.0,<2` (→ 1.47.0), so no SDK bump is needed. No schema
+change: skill refs are derived from the generated code, not a new field.
+
+画布 Skill 节点把 launchpad 的 **AGENT_SKILLS** 注册表记录附加到 agent(选择器
+仅列出 `GET /api/registry/attachables` 的 APPROVED 记录)。生成代码通过
+`plugins=[AgentSkills(...)]` 引用 `skills/<name>/`;`build_zip()` 在打包阶段
+(仅 studio 方式)按正则从生成代码提取被引用的技能名,解析 APPROVED 记录的 S3
+前缀,下载到 `pkg_dir/skills/{name}/`(含路径穿越防护与 50 MB 上限),缺失/超限
+/下载失败均记录并跳过,绝不阻断部署。无需 schema 改动或 SDK 升级。
 
 ## Running locally / 本地运行
 
@@ -149,9 +196,10 @@ Publish body assembled by `CreateAgentStudio.tsx`:
 | `method` | `"studio"` | fixed |
 | `system_prompt` | execution agent's systemPrompt (the agent/orchestrator/swarm reached from the input node), fallback `"Strands Studio generated agent"` | trimmed to 20000; doubles as the registry A2A card description |
 | `code` | `imports + '\n\n' + code` | ≤ 200000 chars (client-checked; schema max) |
-| `requirements` | `["strands-agents[openai]"]` iff any node `data.modelProvider === 'OpenAI'`, else omitted | base reqs + mem0 extra come from the backend, never sent by the client |
+| `requirements` | `["strands-agents[openai]"]` iff any node `data.modelProvider` is `'OpenAI'` or `'Amazon Bedrock (Mantle)'`, else omitted | base reqs + mem0 extra come from the backend, never sent by the client |
+| `env` | `{OPENAI_API_KEY?, BEDROCK_API_KEY?}` — first non-empty `apiKey` per provider; omitted when empty | passed to the runtime as `environmentVariables`; platform keys win same-named conflicts |
 | `memory` | `{short_term: false, long_term: false}` | generated code manages no launchpad memory |
-| `studio_flow` | `{nodes, edges, graphMode}` (React Flow arrays verbatim) | round-trips into edit mode |
+| `studio_flow` | `{nodes, edges, graphMode}` (React Flow arrays verbatim) | round-trips into edit mode; carries skill nodes for the package-stage bundler |
 
 Edit mode (`/create/studio?agent=<id>`): `GET /api/agents/{id}` →
 `spec.studio_flow` restores the canvas. Studio agents WITHOUT `studio_flow`
@@ -203,10 +251,28 @@ flow and posts it together with the updated `studio_flow`.
 
 ### Porting invariants / 移植不变量
 
-`frontend/src/studio/lib/*` are copied VERBATIM from `apps/studio/src/lib/`
-(eslint-ignored, still tsc-checked) with exactly one documented deviation: the
-`file_write` tool mapping fix (import line + tool map in both generators).
-When re-vendoring upstream, re-apply that deviation. Node components must
-preserve every React Flow Handle `id`/`type`/`Position` and every node `data`
-key + destructuring default — the generators read them. Styling is launchpad
-CSS tokens only (namespaced `studio.css`); no Tailwind.
+`frontend/src/studio/lib/*` (`code-generator.ts`, `graph-code-generator.ts`,
+`connection-validator.ts`, `graph-validator.ts`, `models.ts`, `sample-flows/*`)
+are copied VERBATIM from upstream `xiehust/strands_studio_ui`
+(eslint-ignored, still tsc-checked). Current baseline: **PR #31**, merge
+`69318ab` (`git -C <clone> show origin/main:src/lib/<file>` reproduces each
+file byte-for-byte). The `@/lib/models` alias is the only rewrite → relative
+`./models` (`../lib/models` from components), since the studio subtree has no
+`@` alias. The documented deviation set is now **two entries**, both
+re-applied to the two generators' static `strands_tools` import line AND tool
+map: **`file_write`** and **`mem0_memory`** — upstream drops both (they silently
+fall back to `calculator`); launchpad keeps them so saved graphs' tool nodes
+don't downgrade. When re-vendoring upstream, re-apply both.
+
+Node components must preserve every React Flow Handle `id`/`type`/`Position`
+and every node `data` key + destructuring default — the generators read them.
+Styling is launchpad CSS tokens only (namespaced `studio.css`); no Tailwind.
+
+`frontend/src/studio/lib/*`(`code-generator.ts`、`graph-code-generator.ts`、
+`connection-validator.ts`、`graph-validator.ts`、`models.ts`、`sample-flows/*`)
+逐字复制自上游 `xiehust/strands_studio_ui`,当前基线为 **PR #31**(合并提交
+`69318ab`)。唯一改写是把 `@/lib/models` 别名改为相对路径 `./models`。已记录的
+偏差现有**两项**(均在两个生成器的 `strands_tools` import 行与工具映射表中重新
+应用):**`file_write`** 与 **`mem0_memory`** —— 上游都已移除(会静默回退为
+`calculator`),launchpad 保留以免已保存画布的工具节点被降级。重新引入上游时
+须重新应用这两项。
