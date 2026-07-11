@@ -1,4 +1,5 @@
 import { Handle, Position, type NodeProps, useReactFlow } from '@xyflow/react';
+import { useTranslation } from 'react-i18next';
 import { Wrench, Package, Code, X } from 'lucide-react';
 
 interface ToolNodeData {
@@ -10,6 +11,7 @@ interface ToolNodeData {
 }
 
 export function ToolNode({ data, selected, id }: NodeProps) {
+  const { t } = useTranslation();
   const { deleteElements } = useReactFlow();
   const nodeData = (data ?? {}) as ToolNodeData;
   const {
@@ -35,7 +37,7 @@ export function ToolNode({ data, selected, id }: NodeProps) {
         <span className="studio-node-tools">
           <KindIcon size={12} />
           {selected && (
-            <button className="studio-node-del" onClick={handleDelete} title="Delete node">
+            <button className="studio-node-del" onClick={handleDelete} title={t('studio.nodeCard.deleteTitle')}>
               <X size={12} />
             </button>
           )}
@@ -43,8 +45,8 @@ export function ToolNode({ data, selected, id }: NodeProps) {
       </div>
 
       <div className="studio-node-body">
-        <div className="studio-node-row"><span className="studio-node-k">Type:</span> {toolType}</div>
-        <div className="studio-node-row"><span className="studio-node-k">Tool:</span> {toolName}</div>
+        <div className="studio-node-row"><span className="studio-node-k">{t('studio.nodeCard.type')}</span> {toolType}</div>
+        <div className="studio-node-row"><span className="studio-node-k">{t('studio.nodeCard.tool')}</span> {toolName}</div>
         {description && <div className="studio-node-desc">{description}</div>}
       </div>
 

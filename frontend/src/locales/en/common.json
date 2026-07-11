@@ -107,10 +107,10 @@
       "studio": {
         "badge": "ZIP PATH LIVE · STUDIO LIVE",
         "title": "Strands Studio",
-        "desc": "Drag-and-drop canvas for single, hierarchical, graph and swarm topologies. Generates Strands code, deploys via zip fast path.",
+        "desc": "Native drag-and-drop canvas for single, hierarchical, graph and swarm topologies. Generates Strands code, deploys via zip fast path.",
         "spec2": "multi-agent topologies",
         "spec3": "config-bundle + ADOT baked in",
-        "open": "Open Strands Studio ↗"
+        "open": "Open the Strands Studio canvas"
       }
     },
     "configure": {
@@ -812,6 +812,227 @@
       "update": "UPDATE PRICES",
       "refreshed": "price map updated — {{updated}} refreshed · {{added}} added",
       "updatedAt": "prices updated {{date}}"
+    }
+  },
+  "studio": {
+    "head": {
+      "kicker": "Agent management · Strands Studio",
+      "title": "Strands Studio",
+      "titleEdit": "Edit {{name}}",
+      "editFallback": "studio agent",
+      "meta": "Compose a Strands agent on the canvas, then publish through the shared pipeline",
+      "publishingTitle": "Publishing agent",
+      "republishingTitle": "Re-publishing {{name}}",
+      "publishingMeta": "Deploying through the shared pipeline"
+    },
+    "toolbar": {
+      "agents": "Agents",
+      "rePublishChip": "re-publish · {{name}}",
+      "generateCode": "Generate code",
+      "hideCode": "Hide code",
+      "clearCanvas": "Clear canvas",
+      "publish": "Publish",
+      "rePublish": "Re-publish"
+    },
+    "noFlow": {
+      "notice": "This agent was created in the standalone studio, so no canvas graph is stored. Build a flow below to enable re-publish; the current deployed code is shown read-only until then."
+    },
+    "readonly": {
+      "title": "Deployed code (read-only)",
+      "sub": "Build a flow to regenerate and re-publish"
+    },
+    "published": {
+      "title": "Agent published",
+      "sub": "Runtime is active and registered",
+      "openChat": "Open chat",
+      "backToAgents": "Back to agents"
+    },
+    "publish": {
+      "title": "Publish agent",
+      "rePublishTitle": "Re-publish agent",
+      "nameLabel": "Name",
+      "agentName": "Agent name",
+      "namePlaceholder": "studio-canvas-agent",
+      "nameRule": "Lowercase letters, digits and hyphens; 3–48 chars, must start with a letter.",
+      "generatedCode": "Generated code",
+      "codeStat": "{{chars}} chars · {{lines}} lines",
+      "extraReqs": "Extra requirements",
+      "none": "none",
+      "memory": "Memory",
+      "memoryValue": "short_term off · long_term off",
+      "errHasErrors": "Code generation has errors. Close and fix the flow.",
+      "errTooLarge": "Generated code is {{size}} chars, over the {{limit}} limit."
+    },
+    "confirmClear": {
+      "title": "Clear canvas",
+      "body": "Remove all nodes and edges from the canvas? This also clears the saved draft.",
+      "confirm": "Clear"
+    },
+    "toast": {
+      "notStudioAgent": "That agent was not created with Strands Studio.",
+      "loadFailed": "Could not load that agent.",
+      "publishFailed": "Publish failed at {{stage}}: {{msg}}",
+      "fixErrors": "Fix the code generation errors before publishing."
+    },
+    "palette": {
+      "core": "Core",
+      "io": "I/O",
+      "advanced": "Advanced"
+    },
+    "nodes": {
+      "agent": {
+        "name": "Agent Node",
+        "desc": "Strands Agent with configurable model and settings"
+      },
+      "orchestrator": {
+        "name": "Orchestrator Agent",
+        "desc": "Orchestrates multiple agents as tools for complex workflows"
+      },
+      "swarm": {
+        "name": "Swarm Node",
+        "desc": "Multi-agent swarm with handoff capabilities and coordination"
+      },
+      "tool": {
+        "name": "Tool Node",
+        "desc": "Built-in or custom tool for agent capabilities"
+      },
+      "mcp": {
+        "name": "MCP Server",
+        "desc": "Model Context Protocol server for external tools"
+      },
+      "input": {
+        "name": "Input Node",
+        "desc": "Input prompt or data source"
+      },
+      "output": {
+        "name": "Output Node",
+        "desc": "Output response or data destination"
+      },
+      "customTool": {
+        "name": "Custom Tool",
+        "desc": "Define custom tools with Python code"
+      }
+    },
+    "nodeCard": {
+      "provider": "Provider:",
+      "model": "Model:",
+      "temperature": "Temperature:",
+      "type": "Type:",
+      "format": "Format:",
+      "to": "To:",
+      "tool": "Tool:",
+      "function": "Function:",
+      "parameters": "Parameters:",
+      "maxHandoffs": "Max Handoffs:",
+      "maxIterations": "Max Iterations:",
+      "executionTimeout": "Execution Timeout:",
+      "nodeTimeout": "Node Timeout:",
+      "transport": "Transport:",
+      "command": "Command:",
+      "url": "URL:",
+      "inputDesc": "Connects user input to agents",
+      "deleteTitle": "Delete node"
+    },
+    "code": {
+      "title": "Generated code",
+      "copy": "Copy",
+      "copied": "Copied",
+      "download": "Download",
+      "errorsHeader": "CODE GENERATION ERRORS",
+      "lines": "{{count}} lines"
+    },
+    "flow": {
+      "graphMode": "Graph Mode",
+      "graphModeTitle": "Toggle Graph Mode: enable DAG-based multi-agent orchestration",
+      "connectionNotAllowed": "Connection not allowed"
+    },
+    "prop": {
+      "title": "Properties",
+      "nodeType": "NODE TYPE",
+      "close": "Close",
+      "modelProvider": "Model provider",
+      "model": "Model",
+      "modelNamePlaceholder": "Enter model name (e.g., gpt-4o, gpt-3.5-turbo)",
+      "apiKey": "API key",
+      "apiKeyPlaceholder": "Enter your OpenAI API key",
+      "apiKeyHint": "API key will be stored securely as OPENAI_API_KEY environment variable",
+      "baseUrl": "Base URL (optional)",
+      "baseUrlPlaceholder": "https://api.openai.com/v1 (default)",
+      "baseUrlHint": "Leave empty to use the default OpenAI API endpoint",
+      "temperature": "Temperature: {{value}}",
+      "temperatureLocked": "Temperature is locked to 1.0 when thinking is enabled (Bedrock only)",
+      "advancedSettings": "Advanced settings",
+      "enableThinking": "Enable thinking",
+      "thinkingHint": "Enable extended thinking for more complex reasoning",
+      "thinkingBudget": "Thinking budget tokens: {{value}}",
+      "reasoningEffort": "Reasoning effort",
+      "effortLow": "Low",
+      "effortMedium": "Medium",
+      "effortHigh": "High",
+      "enableStreaming": "Enable streaming",
+      "streamingHintOn": "Stream responses in real-time for better user experience",
+      "streamingHintOff": "Connect an Output node to enable streaming mode",
+      "agentName": "Agent name",
+      "agentNamePlaceholder": "Agent Name",
+      "systemPrompt": "System prompt",
+      "systemPromptPlaceholder": "You are a helpful AI assistant...",
+      "maxTokens": "Max tokens",
+      "orchestratorName": "Orchestrator name",
+      "orchestratorNamePlaceholder": "Orchestrator Agent",
+      "orchestratorPromptPlaceholder": "You are an orchestrator agent that coordinates multiple specialized agents...",
+      "orchestrationSettings": "Orchestration settings",
+      "coordinationPrompt": "Coordination prompt",
+      "coordinationPlaceholder": "Instructions for how to coordinate and aggregate results from sub-agents...",
+      "toolName": "Tool name",
+      "toolNamePlaceholder": "Tool Name",
+      "toolType": "Tool type",
+      "builtIn": "Built-in",
+      "toolNameFunction": "Tool name / function",
+      "description": "Description",
+      "toolDescPlaceholder": "Tool description...",
+      "inputInfo": "Input node — connects user input to agents.",
+      "inputNoConfig": "No configuration required.",
+      "serverName": "Server name",
+      "serverNamePlaceholder": "MCP Server Name",
+      "transportType": "Transport type",
+      "command": "Command",
+      "arguments": "Arguments (one per line)",
+      "argumentsHint": "Enter each argument on a separate line",
+      "envVars": "Environment variables (JSON format)",
+      "envVarsHint": "Optional environment variables for the MCP server process (valid JSON required)",
+      "serverUrl": "Server URL",
+      "headers": "Headers (JSON format)",
+      "timeout": "Timeout (seconds)",
+      "mcpDescPlaceholder": "Description of the MCP server...",
+      "customToolPlaceholder": "My Custom Tool",
+      "pythonFunction": "Python function",
+      "pythonHint": "Complete Python function with type hints and docstring. The function will be automatically decorated with @tool.",
+      "swarmName": "Swarm name",
+      "swarmNamePlaceholder": "Swarm Name",
+      "executionSettings": "Execution settings",
+      "maxHandoffs": "Max handoffs",
+      "maxHandoffsHint": "Maximum number of agent handoffs allowed during execution",
+      "maxIterations": "Max iterations",
+      "maxIterationsHint": "Maximum total iterations across all agents",
+      "executionTimeout": "Execution timeout (seconds)",
+      "execTimeoutHint": "Total execution timeout in seconds (default: 900 = 15 minutes)",
+      "nodeTimeout": "Node timeout (seconds)",
+      "nodeTimeoutHint": "Individual agent timeout in seconds (default: 300 = 5 minutes)",
+      "repetitiveWindow": "Repetitive handoff detection window",
+      "repetitiveWindowHint": "Number of recent nodes to check for ping-pong behavior (0 = disabled)",
+      "minUniqueAgents": "Min unique agents for detection",
+      "minUniqueAgentsHint": "Minimum unique nodes required in recent sequence (0 = disabled)",
+      "graphName": "Graph name",
+      "graphNameHint": "Name for this graph workflow",
+      "entryPoints": "Entry points",
+      "entryPointsHint": "Connect the sub-agents handle (right side) to agent nodes to define entry points. Entry point agents receive the original user input.",
+      "agentDeps": "Agent dependencies",
+      "agentDepsHint": "Connect agent output (bottom) to another agent's input (top) to define execution dependencies. Example: Agent A → Agent B means B depends on A's output.",
+      "enableDebugLogs": "Enable debug logs",
+      "debugLogsHint": "Enable debug logging for graph execution",
+      "optionalPlaceholder": "Optional",
+      "noTimeoutHint": "Leave empty for no timeout",
+      "noProps": "No properties available for this node type."
     }
   },
   "common": {

@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Bot,
   Wrench,
@@ -13,78 +14,86 @@ import {
 
 interface NodeTypeItem {
   type: string;
-  label: string;
+  nameKey: string;
+  descKey: string;
   icon: LucideIcon;
-  description: string;
   category: string;
 }
 
+// nameKey/descKey point at studio.nodes.* so both locales localize the palette;
+// `type` stays the generator's contract string and is never translated.
 const nodeTypes: NodeTypeItem[] = [
   {
     type: 'agent',
-    label: 'Agent Node',
+    nameKey: 'studio.nodes.agent.name',
+    descKey: 'studio.nodes.agent.desc',
     icon: Bot,
-    description: 'Strands Agent with configurable model and settings',
     category: 'Core',
   },
   {
     type: 'orchestrator-agent',
-    label: 'Orchestrator Agent',
+    nameKey: 'studio.nodes.orchestrator.name',
+    descKey: 'studio.nodes.orchestrator.desc',
     icon: Crown,
-    description: 'Orchestrates multiple agents as tools for complex workflows',
     category: 'Advanced',
   },
   {
     type: 'swarm',
-    label: 'Swarm Node',
+    nameKey: 'studio.nodes.swarm.name',
+    descKey: 'studio.nodes.swarm.desc',
     icon: Users,
-    description: 'Multi-agent swarm with handoff capabilities and coordination',
     category: 'Advanced',
   },
   {
     type: 'tool',
-    label: 'Tool Node',
+    nameKey: 'studio.nodes.tool.name',
+    descKey: 'studio.nodes.tool.desc',
     icon: Wrench,
-    description: 'Built-in or custom tool for agent capabilities',
     category: 'Core',
   },
   {
     type: 'mcp-tool',
-    label: 'MCP Server',
+    nameKey: 'studio.nodes.mcp.name',
+    descKey: 'studio.nodes.mcp.desc',
     icon: Server,
-    description: 'Model Context Protocol server for external tools',
     category: 'Core',
   },
   {
     type: 'input',
-    label: 'Input Node',
+    nameKey: 'studio.nodes.input.name',
+    descKey: 'studio.nodes.input.desc',
     icon: ArrowRight,
-    description: 'Input prompt or data source',
     category: 'IO',
   },
   {
     type: 'output',
-    label: 'Output Node',
+    nameKey: 'studio.nodes.output.name',
+    descKey: 'studio.nodes.output.desc',
     icon: ArrowLeft,
-    description: 'Output response or data destination',
     category: 'IO',
   },
   {
     type: 'custom-tool',
-    label: 'Custom Tool',
+    nameKey: 'studio.nodes.customTool.name',
+    descKey: 'studio.nodes.customTool.desc',
     icon: Code,
-    description: 'Define custom tools with Python code',
     category: 'Core',
   },
 ];
 
-const categories = ['Core', 'IO', 'Advanced'];
+const categories: { id: string; labelKey: string }[] = [
+  { id: 'Core', labelKey: 'studio.palette.core' },
+  { id: 'IO', labelKey: 'studio.palette.io' },
+  { id: 'Advanced', labelKey: 'studio.palette.advanced' },
+];
 
 interface NodePaletteProps {
   className?: string;
 }
 
 export function NodePalette({ className = '' }: NodePaletteProps) {
+  const { t } = useTranslation();
+
   const onDragStart = (event: React.DragEvent, nodeType: string) => {
     event.dataTransfer.setData('application/reactflow', nodeType);
     event.dataTransfer.effectAllowed = 'move';
@@ -93,13 +102,14 @@ export function NodePalette({ className = '' }: NodePaletteProps) {
   return (
     <div className={`studio-palette ${className}`}>
       {categories.map((category) => {
-        const categoryNodes = nodeTypes.filter((node) => node.category === category);
+        const categoryNodes = nodeTypes.filter((node) => node.category === category.id);
 
         return (
-          <div key={category}>
-            <div className="studio-palette-cat">{category}</div>
+          <div key={category.id}>
+            <div className="studio-palette-cat">{t(category.labelKey)}</div>
             {categoryNodes.map((nodeType) => {
               const IconComponent = nodeType.icon;
+              const description = t(nodeType.descKey);
 
               return (
                 <div
@@ -107,12 +117,12 @@ export function NodePalette({ className = '' }: NodePaletteProps) {
                   className="studio-palette-item"
                   draggable
                   onDragStart={(event) => onDragStart(event, nodeType.type)}
-                  title={nodeType.description}
+                  title={description}
                 >
                   <IconComponent className="studio-palette-ic" size={15} />
                   <div>
-                    <div className="studio-palette-nm">{nodeType.label}</div>
-                    <div className="studio-palette-desc">{nodeType.description}</div>
+                    <div className="studio-palette-nm">{t(nodeType.nameKey)}</div>
+                    <div className="studio-palette-desc">{description}</div>
                   </div>
                 </div>
               );

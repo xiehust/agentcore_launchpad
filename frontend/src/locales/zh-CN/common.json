@@ -107,10 +107,10 @@
       "studio": {
         "badge": "ZIP 通道已上线 · Studio 已上线",
         "title": "Strands Studio",
-        "desc": "拖拽式画布,支持单体、层级、图与蜂群拓扑。自动生成 Strands 代码,经 zip 快速通道部署。",
+        "desc": "平台原生拖拽式画布,支持单体、层级、图与蜂群拓扑。自动生成 Strands 代码,经 zip 快速通道部署。",
         "spec2": "多 Agent 拓扑",
         "spec3": "内置 config-bundle 与 ADOT",
-        "open": "打开 Strands Studio ↗"
+        "open": "打开 Strands Studio 画布"
       }
     },
     "configure": {
@@ -812,6 +812,227 @@
       "update": "更新价格",
       "refreshed": "价格表已更新 — 刷新 {{updated}} 项 · 新增 {{added}} 项",
       "updatedAt": "价格更新于 {{date}}"
+    }
+  },
+  "studio": {
+    "head": {
+      "kicker": "Agent 管理 · Strands Studio",
+      "title": "Strands Studio",
+      "titleEdit": "编辑 {{name}}",
+      "editFallback": "studio agent",
+      "meta": "在画布上编排 Strands agent,再经统一流水线发布",
+      "publishingTitle": "正在发布 Agent",
+      "republishingTitle": "正在重新发布 {{name}}",
+      "publishingMeta": "经统一流水线部署"
+    },
+    "toolbar": {
+      "agents": "Agent 列表",
+      "rePublishChip": "重新发布 · {{name}}",
+      "generateCode": "生成代码",
+      "hideCode": "隐藏代码",
+      "clearCanvas": "清空画布",
+      "publish": "发布",
+      "rePublish": "重新发布"
+    },
+    "noFlow": {
+      "notice": "该 Agent 由独立 Studio 创建,未存储画布图。请在下方搭建流程以启用重新发布;在此之前仅以只读方式展示当前已部署的代码。"
+    },
+    "readonly": {
+      "title": "已部署代码(只读)",
+      "sub": "搭建流程以重新生成并重新发布"
+    },
+    "published": {
+      "title": "Agent 已发布",
+      "sub": "Runtime 已运行并完成注册",
+      "openChat": "打开对话",
+      "backToAgents": "返回 Agent 列表"
+    },
+    "publish": {
+      "title": "发布 Agent",
+      "rePublishTitle": "重新发布 Agent",
+      "nameLabel": "名称",
+      "agentName": "Agent 名称",
+      "namePlaceholder": "studio-canvas-agent",
+      "nameRule": "仅限小写字母、数字和连字符;3–48 个字符,须以字母开头。",
+      "generatedCode": "生成的代码",
+      "codeStat": "{{chars}} 字符 · {{lines}} 行",
+      "extraReqs": "额外依赖",
+      "none": "无",
+      "memory": "记忆",
+      "memoryValue": "short_term 关 · long_term 关",
+      "errHasErrors": "代码生成存在错误。请关闭并修正流程。",
+      "errTooLarge": "生成的代码为 {{size}} 字符,超出 {{limit}} 上限。"
+    },
+    "confirmClear": {
+      "title": "清空画布",
+      "body": "移除画布上的所有节点与连线?这也会清除已保存的草稿。",
+      "confirm": "清空"
+    },
+    "toast": {
+      "notStudioAgent": "该 Agent 不是用 Strands Studio 创建的。",
+      "loadFailed": "无法加载该 Agent。",
+      "publishFailed": "发布在 {{stage}} 阶段失败:{{msg}}",
+      "fixErrors": "请先修正代码生成错误,再发布。"
+    },
+    "palette": {
+      "core": "核心",
+      "io": "输入输出",
+      "advanced": "进阶"
+    },
+    "nodes": {
+      "agent": {
+        "name": "Agent 节点",
+        "desc": "可配置模型与参数的 Strands Agent"
+      },
+      "orchestrator": {
+        "name": "编排 Agent",
+        "desc": "将多个 Agent 作为工具编排,处理复杂工作流"
+      },
+      "swarm": {
+        "name": "蜂群节点",
+        "desc": "具备交接能力与协同的多 Agent 蜂群"
+      },
+      "tool": {
+        "name": "工具节点",
+        "desc": "为 Agent 提供能力的内置或自定义工具"
+      },
+      "mcp": {
+        "name": "MCP 服务器",
+        "desc": "对接外部工具的 Model Context Protocol 服务器"
+      },
+      "input": {
+        "name": "输入节点",
+        "desc": "输入提示词或数据源"
+      },
+      "output": {
+        "name": "输出节点",
+        "desc": "输出回复或数据去向"
+      },
+      "customTool": {
+        "name": "自定义工具",
+        "desc": "用 Python 代码定义自定义工具"
+      }
+    },
+    "nodeCard": {
+      "provider": "提供方:",
+      "model": "模型:",
+      "temperature": "温度:",
+      "type": "类型:",
+      "format": "格式:",
+      "to": "去向:",
+      "tool": "工具:",
+      "function": "函数:",
+      "parameters": "参数:",
+      "maxHandoffs": "最大交接次数:",
+      "maxIterations": "最大迭代次数:",
+      "executionTimeout": "执行超时:",
+      "nodeTimeout": "节点超时:",
+      "transport": "传输:",
+      "command": "命令:",
+      "url": "URL:",
+      "inputDesc": "将用户输入连接到 Agent",
+      "deleteTitle": "删除节点"
+    },
+    "code": {
+      "title": "生成的代码",
+      "copy": "复制",
+      "copied": "已复制",
+      "download": "下载",
+      "errorsHeader": "代码生成错误",
+      "lines": "{{count}} 行"
+    },
+    "flow": {
+      "graphMode": "图模式",
+      "graphModeTitle": "切换图模式:启用基于 DAG 的多 Agent 编排",
+      "connectionNotAllowed": "不允许该连接"
+    },
+    "prop": {
+      "title": "属性",
+      "nodeType": "节点类型",
+      "close": "关闭",
+      "modelProvider": "模型提供方",
+      "model": "模型",
+      "modelNamePlaceholder": "输入模型名称(如 gpt-4o、gpt-3.5-turbo)",
+      "apiKey": "API 密钥",
+      "apiKeyPlaceholder": "输入你的 OpenAI API 密钥",
+      "apiKeyHint": "API 密钥将作为 OPENAI_API_KEY 环境变量安全存储",
+      "baseUrl": "Base URL(可选)",
+      "baseUrlPlaceholder": "https://api.openai.com/v1(默认)",
+      "baseUrlHint": "留空则使用默认的 OpenAI API 端点",
+      "temperature": "温度:{{value}}",
+      "temperatureLocked": "启用思考时温度锁定为 1.0(仅 Bedrock)",
+      "advancedSettings": "高级设置",
+      "enableThinking": "启用思考",
+      "thinkingHint": "启用扩展思考以进行更复杂的推理",
+      "thinkingBudget": "思考预算 token:{{value}}",
+      "reasoningEffort": "推理强度",
+      "effortLow": "低",
+      "effortMedium": "中",
+      "effortHigh": "高",
+      "enableStreaming": "启用流式",
+      "streamingHintOn": "实时流式返回回复,提升使用体验",
+      "streamingHintOff": "连接一个输出节点以启用流式模式",
+      "agentName": "Agent 名称",
+      "agentNamePlaceholder": "Agent 名称",
+      "systemPrompt": "系统提示词",
+      "systemPromptPlaceholder": "你是一名乐于助人的 AI 助手……",
+      "maxTokens": "最大 token 数",
+      "orchestratorName": "编排器名称",
+      "orchestratorNamePlaceholder": "编排 Agent",
+      "orchestratorPromptPlaceholder": "你是一个协调多个专职 Agent 的编排 Agent……",
+      "orchestrationSettings": "编排设置",
+      "coordinationPrompt": "协同提示词",
+      "coordinationPlaceholder": "关于如何协调并汇总各子 Agent 结果的说明……",
+      "toolName": "工具名称",
+      "toolNamePlaceholder": "工具名称",
+      "toolType": "工具类型",
+      "builtIn": "内置",
+      "toolNameFunction": "工具名称 / 函数",
+      "description": "描述",
+      "toolDescPlaceholder": "工具描述……",
+      "inputInfo": "输入节点——将用户输入连接到 Agent。",
+      "inputNoConfig": "无需配置。",
+      "serverName": "服务器名称",
+      "serverNamePlaceholder": "MCP 服务器名称",
+      "transportType": "传输类型",
+      "command": "命令",
+      "arguments": "参数(每行一个)",
+      "argumentsHint": "每个参数单独一行",
+      "envVars": "环境变量(JSON 格式)",
+      "envVarsHint": "MCP 服务器进程的可选环境变量(需为合法 JSON)",
+      "serverUrl": "服务器 URL",
+      "headers": "请求头(JSON 格式)",
+      "timeout": "超时(秒)",
+      "mcpDescPlaceholder": "MCP 服务器的描述……",
+      "customToolPlaceholder": "我的自定义工具",
+      "pythonFunction": "Python 函数",
+      "pythonHint": "带类型标注与 docstring 的完整 Python 函数。该函数会被自动加上 @tool 装饰器。",
+      "swarmName": "蜂群名称",
+      "swarmNamePlaceholder": "蜂群名称",
+      "executionSettings": "执行设置",
+      "maxHandoffs": "最大交接次数",
+      "maxHandoffsHint": "执行期间允许的 Agent 交接次数上限",
+      "maxIterations": "最大迭代次数",
+      "maxIterationsHint": "所有 Agent 的总迭代次数上限",
+      "executionTimeout": "执行超时(秒)",
+      "execTimeoutHint": "总执行超时秒数(默认:900 = 15 分钟)",
+      "nodeTimeout": "节点超时(秒)",
+      "nodeTimeoutHint": "单个 Agent 的超时秒数(默认:300 = 5 分钟)",
+      "repetitiveWindow": "重复交接检测窗口",
+      "repetitiveWindowHint": "检测来回往返行为时回看的近期节点数(0 = 关闭)",
+      "minUniqueAgents": "检测所需最少唯一 Agent 数",
+      "minUniqueAgentsHint": "近期序列中所需的最少唯一节点数(0 = 关闭)",
+      "graphName": "图名称",
+      "graphNameHint": "该图工作流的名称",
+      "entryPoints": "入口点",
+      "entryPointsHint": "将 sub-agents 句柄(右侧)连接到 Agent 节点以定义入口点。入口点 Agent 接收原始用户输入。",
+      "agentDeps": "Agent 依赖",
+      "agentDepsHint": "将 Agent 输出(底部)连接到另一个 Agent 的输入(顶部)以定义执行依赖。例如 Agent A → Agent B 表示 B 依赖 A 的输出。",
+      "enableDebugLogs": "启用调试日志",
+      "debugLogsHint": "为图执行启用调试日志",
+      "optionalPlaceholder": "可选",
+      "noTimeoutHint": "留空表示不设超时",
+      "noProps": "该节点类型没有可配置的属性。"
     }
   },
   "common": {

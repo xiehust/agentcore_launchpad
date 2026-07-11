@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import Editor from '@monaco-editor/react';
 import { type Node, type Edge } from '@xyflow/react';
 import { Code, Download, Copy, AlertCircle } from 'lucide-react';
@@ -13,6 +14,7 @@ interface CodePanelProps {
 }
 
 export function CodePanel({ nodes, edges, graphMode = false, className = '' }: CodePanelProps) {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
 
   const { code, errors } = useMemo(() => {
@@ -51,13 +53,13 @@ export function CodePanel({ nodes, edges, graphMode = false, className = '' }: C
     <div className={`studio-codepanel ${className}`}>
       <div className="studio-code-head">
         <Code size={14} style={{ color: 'var(--amber)' }} />
-        <h3>Generated code</h3>
+        <h3>{t('studio.code.title')}</h3>
         <div className="studio-code-actions">
           <Btn onClick={handleCopy}>
-            <Copy size={12} /> {copied ? 'Copied' : 'Copy'}
+            <Copy size={12} /> {copied ? t('studio.code.copied') : t('studio.code.copy')}
           </Btn>
           <Btn onClick={handleDownload}>
-            <Download size={12} /> Download
+            <Download size={12} /> {t('studio.code.download')}
           </Btn>
         </div>
       </div>
@@ -65,7 +67,7 @@ export function CodePanel({ nodes, edges, graphMode = false, className = '' }: C
       {errors.length > 0 && (
         <div className="studio-code-errs">
           <div className="studio-code-errs-h">
-            <AlertCircle size={12} /> CODE GENERATION ERRORS
+            <AlertCircle size={12} /> {t('studio.code.errorsHeader')}
           </div>
           <ul>
             {errors.map((error, index) => (
@@ -96,7 +98,7 @@ export function CodePanel({ nodes, edges, graphMode = false, className = '' }: C
 
       <div className="studio-code-foot">
         <span>Python • Strands Agent SDK</span>
-        <span>{code.split('\n').length} lines</span>
+        <span>{t('studio.code.lines', { count: code.split('\n').length })}</span>
       </div>
     </div>
   );

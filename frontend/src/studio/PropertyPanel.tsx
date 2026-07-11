@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { type Node, type Edge } from '@xyflow/react';
 import { Settings, X } from 'lucide-react';
 
@@ -66,6 +67,8 @@ export function PropertyPanel({
   nodes = [],
   className = '',
 }: PropertyPanelProps) {
+  const { t } = useTranslation();
+
   if (!selectedNode) {
     return null;
   }
@@ -162,7 +165,7 @@ export function PropertyPanel({
   const renderModelFields = (data: StudioNodeData, allowAnthropic = false) => (
     <>
       <div className="field">
-        <label>Model provider</label>
+        <label>{t('studio.prop.modelProvider')}</label>
         <select
           className="input"
           value={data.modelProvider || 'AWS Bedrock'}
@@ -191,7 +194,7 @@ export function PropertyPanel({
       </div>
 
       <div className="field">
-        <label>Model</label>
+        <label>{t('studio.prop.model')}</label>
         {data.modelProvider === 'AWS Bedrock' || !data.modelProvider ? (
           <select
             className="input"
@@ -219,7 +222,7 @@ export function PropertyPanel({
             type="text"
             value={data.modelName || ''}
             onChange={(e) => handleInputChange('modelName', e.target.value)}
-            placeholder="Enter model name (e.g., gpt-4o, gpt-3.5-turbo)"
+            placeholder={t('studio.prop.modelNamePlaceholder')}
           />
         )}
       </div>
@@ -227,31 +230,27 @@ export function PropertyPanel({
       {data.modelProvider === 'OpenAI' && (
         <>
           <div className="field">
-            <label>API key</label>
+            <label>{t('studio.prop.apiKey')}</label>
             <input
               className="input"
               type="password"
               value={data.apiKey || ''}
               onChange={(e) => handleInputChange('apiKey', e.target.value)}
-              placeholder="Enter your OpenAI API key"
+              placeholder={t('studio.prop.apiKeyPlaceholder')}
             />
-            <div className="studio-prop-hint">
-              API key will be stored securely as OPENAI_API_KEY environment variable
-            </div>
+            <div className="studio-prop-hint">{t('studio.prop.apiKeyHint')}</div>
           </div>
 
           <div className="field">
-            <label>Base URL (optional)</label>
+            <label>{t('studio.prop.baseUrl')}</label>
             <input
               className="input"
               type="url"
               value={data.baseUrl || ''}
               onChange={(e) => handleInputChange('baseUrl', e.target.value)}
-              placeholder="https://api.openai.com/v1 (default)"
+              placeholder={t('studio.prop.baseUrlPlaceholder')}
             />
-            <div className="studio-prop-hint">
-              Leave empty to use the default OpenAI API endpoint
-            </div>
+            <div className="studio-prop-hint">{t('studio.prop.baseUrlHint')}</div>
           </div>
         </>
       )}
@@ -264,7 +263,7 @@ export function PropertyPanel({
     const shown = isBedrockThinking ? 1 : data.temperature || 0.7;
     return (
       <div className="field">
-        <label>Temperature: {shown}</label>
+        <label>{t('studio.prop.temperature', { value: shown })}</label>
         <input
           className="studio-range"
           type="range"
@@ -280,9 +279,7 @@ export function PropertyPanel({
           }}
         />
         {isBedrockThinking && (
-          <div className="studio-warn">
-            Temperature is locked to 1.0 when thinking is enabled (Bedrock only)
-          </div>
+          <div className="studio-warn">{t('studio.prop.temperatureLocked')}</div>
         )}
       </div>
     );
@@ -291,7 +288,7 @@ export function PropertyPanel({
   const renderThinkingSection = (data: StudioNodeData) => (
     <div className="studio-prop-sect">
       <div className="kicker" style={{ marginBottom: 10 }}>
-        Advanced settings
+        {t('studio.prop.advancedSettings')}
       </div>
       <div className="field">
         <label className="studio-check">
@@ -300,17 +297,17 @@ export function PropertyPanel({
             checked={data.thinkingEnabled || false}
             onChange={(e) => handleInputChange('thinkingEnabled', e.target.checked)}
           />
-          <span>Enable thinking</span>
+          <span>{t('studio.prop.enableThinking')}</span>
         </label>
-        <div className="studio-prop-hint">
-          Enable extended thinking for more complex reasoning
-        </div>
+        <div className="studio-prop-hint">{t('studio.prop.thinkingHint')}</div>
       </div>
 
       {data.thinkingEnabled &&
         (data.modelProvider === 'AWS Bedrock' || !data.modelProvider ? (
           <div className="field">
-            <label>Thinking budget tokens: {data.thinkingBudgetTokens || 2048}</label>
+            <label>
+              {t('studio.prop.thinkingBudget', { value: data.thinkingBudgetTokens || 2048 })}
+            </label>
             <input
               className="studio-range"
               type="range"
@@ -327,15 +324,15 @@ export function PropertyPanel({
           </div>
         ) : (
           <div className="field">
-            <label>Reasoning effort</label>
+            <label>{t('studio.prop.reasoningEffort')}</label>
             <select
               className="input"
               value={data.reasoningEffort || 'medium'}
               onChange={(e) => handleInputChange('reasoningEffort', e.target.value)}
             >
-              <option value="low">Low</option>
-              <option value="medium">Medium</option>
-              <option value="high">High</option>
+              <option value="low">{t('studio.prop.effortLow')}</option>
+              <option value="medium">{t('studio.prop.effortMedium')}</option>
+              <option value="high">{t('studio.prop.effortHigh')}</option>
             </select>
           </div>
         ))}
@@ -351,12 +348,12 @@ export function PropertyPanel({
           disabled={!hasConnectedOutputNode()}
           onChange={(e) => handleInputChange('streaming', e.target.checked)}
         />
-        <span>Enable streaming</span>
+        <span>{t('studio.prop.enableStreaming')}</span>
       </label>
       <div className="studio-prop-hint">
         {hasConnectedOutputNode()
-          ? 'Stream responses in real-time for better user experience'
-          : 'Connect an Output node to enable streaming mode'}
+          ? t('studio.prop.streamingHintOn')
+          : t('studio.prop.streamingHintOff')}
       </div>
     </div>
   );
@@ -364,26 +361,26 @@ export function PropertyPanel({
   const renderAgentProperties = (data: StudioNodeData) => (
     <div>
       <div className="field">
-        <label>Agent name</label>
+        <label>{t('studio.prop.agentName')}</label>
         <input
           className="input"
           type="text"
           value={data.label || ''}
           onChange={(e) => handleInputChange('label', e.target.value)}
-          placeholder="Agent Name"
+          placeholder={t('studio.prop.agentNamePlaceholder')}
         />
       </div>
 
       {renderModelFields(data)}
 
       <div className="field">
-        <label>System prompt</label>
+        <label>{t('studio.prop.systemPrompt')}</label>
         <textarea
           className="input mono"
           style={{ minHeight: 88, resize: 'vertical' }}
           value={data.systemPrompt || ''}
           onChange={(e) => handleInputChange('systemPrompt', e.target.value)}
-          placeholder="You are a helpful AI assistant..."
+          placeholder={t('studio.prop.systemPromptPlaceholder')}
           rows={4}
         />
       </div>
@@ -391,7 +388,7 @@ export function PropertyPanel({
       {renderTemperatureField(data)}
 
       <div className="field">
-        <label>Max tokens</label>
+        <label>{t('studio.prop.maxTokens')}</label>
         <input
           className="input"
           type="number"
@@ -410,42 +407,42 @@ export function PropertyPanel({
   const renderOrchestratorAgentProperties = (data: StudioNodeData) => (
     <div>
       <div className="field">
-        <label>Orchestrator name</label>
+        <label>{t('studio.prop.orchestratorName')}</label>
         <input
           className="input"
           type="text"
           value={data.label || ''}
           onChange={(e) => handleInputChange('label', e.target.value)}
-          placeholder="Orchestrator Agent"
+          placeholder={t('studio.prop.orchestratorNamePlaceholder')}
         />
       </div>
 
       {renderModelFields(data, true)}
 
       <div className="field">
-        <label>System prompt</label>
+        <label>{t('studio.prop.systemPrompt')}</label>
         <textarea
           className="input mono"
           style={{ minHeight: 88, resize: 'vertical' }}
           value={data.systemPrompt || ''}
           onChange={(e) => handleInputChange('systemPrompt', e.target.value)}
-          placeholder="You are an orchestrator agent that coordinates multiple specialized agents..."
+          placeholder={t('studio.prop.orchestratorPromptPlaceholder')}
           rows={4}
         />
       </div>
 
       <div className="studio-prop-sect">
         <div className="kicker" style={{ marginBottom: 10 }}>
-          Orchestration settings
+          {t('studio.prop.orchestrationSettings')}
         </div>
         <div className="field">
-          <label>Coordination prompt</label>
+          <label>{t('studio.prop.coordinationPrompt')}</label>
           <textarea
             className="input mono"
             style={{ minHeight: 66, resize: 'vertical' }}
             value={data.coordinationPrompt || ''}
             onChange={(e) => handleInputChange('coordinationPrompt', e.target.value)}
-            placeholder="Instructions for how to coordinate and aggregate results from sub-agents..."
+            placeholder={t('studio.prop.coordinationPlaceholder')}
             rows={3}
           />
         </div>
@@ -454,7 +451,7 @@ export function PropertyPanel({
       {renderTemperatureField(data)}
 
       <div className="field">
-        <label>Max tokens</label>
+        <label>{t('studio.prop.maxTokens')}</label>
         <input
           className="input"
           type="number"
@@ -473,29 +470,29 @@ export function PropertyPanel({
   const renderToolProperties = (data: StudioNodeData) => (
     <div>
       <div className="field">
-        <label>Tool name</label>
+        <label>{t('studio.prop.toolName')}</label>
         <input
           className="input"
           type="text"
           value={data.label || ''}
           onChange={(e) => handleInputChange('label', e.target.value)}
-          placeholder="Tool Name"
+          placeholder={t('studio.prop.toolNamePlaceholder')}
         />
       </div>
 
       <div className="field">
-        <label>Tool type</label>
+        <label>{t('studio.prop.toolType')}</label>
         <select
           className="input"
           value={data.toolType || 'built-in'}
           onChange={(e) => handleInputChange('toolType', e.target.value)}
         >
-          <option value="built-in">Built-in</option>
+          <option value="built-in">{t('studio.prop.builtIn')}</option>
         </select>
       </div>
 
       <div className="field">
-        <label>Tool name / function</label>
+        <label>{t('studio.prop.toolNameFunction')}</label>
         {data.toolType === 'built-in' || !data.toolType ? (
           <select
             className="input"
@@ -524,13 +521,13 @@ export function PropertyPanel({
       </div>
 
       <div className="field">
-        <label>Description</label>
+        <label>{t('studio.prop.description')}</label>
         <textarea
           className="input"
           style={{ resize: 'vertical' }}
           value={data.description || ''}
           onChange={(e) => handleInputChange('description', e.target.value)}
-          placeholder="Tool description..."
+          placeholder={t('studio.prop.toolDescPlaceholder')}
           rows={3}
         />
       </div>
@@ -539,26 +536,26 @@ export function PropertyPanel({
 
   const renderInputProperties = () => (
     <div className="studio-prop-empty">
-      Input node — connects user input to agents.
-      <div style={{ marginTop: 8 }}>No configuration required.</div>
+      {t('studio.prop.inputInfo')}
+      <div style={{ marginTop: 8 }}>{t('studio.prop.inputNoConfig')}</div>
     </div>
   );
 
   const renderMCPToolProperties = (data: StudioNodeData) => (
     <div>
       <div className="field">
-        <label>Server name</label>
+        <label>{t('studio.prop.serverName')}</label>
         <input
           className="input"
           type="text"
           value={data.serverName || ''}
           onChange={(e) => handleInputChange('serverName', e.target.value)}
-          placeholder="MCP Server Name"
+          placeholder={t('studio.prop.serverNamePlaceholder')}
         />
       </div>
 
       <div className="field">
-        <label>Transport type</label>
+        <label>{t('studio.prop.transportType')}</label>
         <select
           className="input"
           value={data.transportType || 'stdio'}
@@ -573,7 +570,7 @@ export function PropertyPanel({
       {data.transportType === 'stdio' && (
         <>
           <div className="field">
-            <label>Command</label>
+            <label>{t('studio.prop.command')}</label>
             <input
               className="input"
               type="text"
@@ -584,7 +581,7 @@ export function PropertyPanel({
           </div>
 
           <div className="field">
-            <label>Arguments (one per line)</label>
+            <label>{t('studio.prop.arguments')}</label>
             <textarea
               className="input mono"
               style={{ resize: 'vertical' }}
@@ -601,11 +598,11 @@ export function PropertyPanel({
               placeholder="server-name@latest"
               rows={3}
             />
-            <div className="studio-prop-hint">Enter each argument on a separate line</div>
+            <div className="studio-prop-hint">{t('studio.prop.argumentsHint')}</div>
           </div>
 
           <div className="field">
-            <label>Environment variables (JSON format)</label>
+            <label>{t('studio.prop.envVars')}</label>
             <textarea
               className="input mono"
               style={{ resize: 'vertical' }}
@@ -629,9 +626,7 @@ export function PropertyPanel({
               placeholder={'{\n  "PATH": "/usr/local/bin",\n  "API_KEY": "your-key"\n}'}
               rows={4}
             />
-            <div className="studio-prop-hint">
-              Optional environment variables for the MCP server process (valid JSON required)
-            </div>
+            <div className="studio-prop-hint">{t('studio.prop.envVarsHint')}</div>
           </div>
         </>
       )}
@@ -639,7 +634,7 @@ export function PropertyPanel({
       {(data.transportType === 'streamable_http' || data.transportType === 'sse') && (
         <>
           <div className="field">
-            <label>Server URL</label>
+            <label>{t('studio.prop.serverUrl')}</label>
             <input
               className="input"
               type="url"
@@ -650,7 +645,7 @@ export function PropertyPanel({
           </div>
 
           <div className="field">
-            <label>Headers (JSON format)</label>
+            <label>{t('studio.prop.headers')}</label>
             <textarea
               className="input mono"
               style={{ resize: 'vertical' }}
@@ -673,7 +668,7 @@ export function PropertyPanel({
       )}
 
       <div className="field">
-        <label>Timeout (seconds)</label>
+        <label>{t('studio.prop.timeout')}</label>
         <input
           className="input"
           type="number"
@@ -685,13 +680,13 @@ export function PropertyPanel({
       </div>
 
       <div className="field">
-        <label>Description</label>
+        <label>{t('studio.prop.description')}</label>
         <textarea
           className="input"
           style={{ resize: 'vertical' }}
           value={data.description || ''}
           onChange={(e) => handleInputChange('description', e.target.value)}
-          placeholder="Description of the MCP server..."
+          placeholder={t('studio.prop.mcpDescPlaceholder')}
           rows={3}
         />
       </div>
@@ -701,18 +696,18 @@ export function PropertyPanel({
   const renderCustomToolProperties = (data: StudioNodeData) => (
     <div>
       <div className="field">
-        <label>Tool name</label>
+        <label>{t('studio.prop.toolName')}</label>
         <input
           className="input"
           type="text"
           value={data.label || ''}
           onChange={(e) => handleInputChange('label', e.target.value)}
-          placeholder="My Custom Tool"
+          placeholder={t('studio.prop.customToolPlaceholder')}
         />
       </div>
 
       <div className="field">
-        <label>Python function</label>
+        <label>{t('studio.prop.pythonFunction')}</label>
         <textarea
           className="input mono"
           style={{ minHeight: 220, resize: 'vertical' }}
@@ -723,10 +718,7 @@ export function PropertyPanel({
           }
           rows={12}
         />
-        <div className="studio-prop-hint">
-          Complete Python function with type hints and docstring. The function will be automatically
-          decorated with @tool.
-        </div>
+        <div className="studio-prop-hint">{t('studio.prop.pythonHint')}</div>
       </div>
     </div>
   );
@@ -734,7 +726,7 @@ export function PropertyPanel({
   const renderGraphBuilderProperties = (data: StudioNodeData) => (
     <div>
       <div className="field">
-        <label>Graph name</label>
+        <label>{t('studio.prop.graphName')}</label>
         <input
           className="input"
           type="text"
@@ -742,27 +734,21 @@ export function PropertyPanel({
           onChange={(e) => handleInputChange('label', e.target.value)}
           placeholder="Graph"
         />
-        <div className="studio-prop-hint">Name for this graph workflow</div>
+        <div className="studio-prop-hint">{t('studio.prop.graphNameHint')}</div>
       </div>
 
       <div className="studio-prop-sect">
         <div className="kicker" style={{ marginBottom: 8 }}>
-          Entry points
+          {t('studio.prop.entryPoints')}
         </div>
-        <div className="studio-prop-hint">
-          Connect the sub-agents handle (right side) to agent nodes to define entry points. Entry
-          point agents receive the original user input.
-        </div>
+        <div className="studio-prop-hint">{t('studio.prop.entryPointsHint')}</div>
       </div>
 
       <div className="studio-prop-sect">
         <div className="kicker" style={{ marginBottom: 8 }}>
-          Agent dependencies
+          {t('studio.prop.agentDeps')}
         </div>
-        <div className="studio-prop-hint">
-          Connect agent output (bottom) to another agent's input (top) to define execution
-          dependencies. Example: Agent A → Agent B means B depends on A's output.
-        </div>
+        <div className="studio-prop-hint">{t('studio.prop.agentDepsHint')}</div>
       </div>
 
       <div className="field">
@@ -772,13 +758,13 @@ export function PropertyPanel({
             checked={data.enableDebugLogs || false}
             onChange={(e) => handleInputChange('enableDebugLogs', e.target.checked)}
           />
-          <span>Enable debug logs</span>
+          <span>{t('studio.prop.enableDebugLogs')}</span>
         </label>
-        <div className="studio-prop-hint">Enable debug logging for graph execution</div>
+        <div className="studio-prop-hint">{t('studio.prop.debugLogsHint')}</div>
       </div>
 
       <div className="field">
-        <label>Execution timeout (seconds)</label>
+        <label>{t('studio.prop.executionTimeout')}</label>
         <input
           className="input"
           type="number"
@@ -786,10 +772,10 @@ export function PropertyPanel({
           onChange={(e) =>
             handleInputChange('executionTimeout', e.target.value ? parseInt(e.target.value) : undefined)
           }
-          placeholder="Optional"
+          placeholder={t('studio.prop.optionalPlaceholder')}
           min="1"
         />
-        <div className="studio-prop-hint">Leave empty for no timeout</div>
+        <div className="studio-prop-hint">{t('studio.prop.noTimeoutHint')}</div>
       </div>
     </div>
   );
@@ -797,23 +783,23 @@ export function PropertyPanel({
   const renderSwarmProperties = (data: StudioNodeData) => (
     <div>
       <div className="field">
-        <label>Swarm name</label>
+        <label>{t('studio.prop.swarmName')}</label>
         <input
           className="input"
           type="text"
           value={data.label || ''}
           onChange={(e) => handleInputChange('label', e.target.value)}
-          placeholder="Swarm Name"
+          placeholder={t('studio.prop.swarmNamePlaceholder')}
         />
       </div>
 
       <div className="studio-prop-sect">
         <div className="kicker" style={{ marginBottom: 10 }}>
-          Execution settings
+          {t('studio.prop.executionSettings')}
         </div>
 
         <div className="field">
-          <label>Max handoffs</label>
+          <label>{t('studio.prop.maxHandoffs')}</label>
           <input
             className="input"
             type="number"
@@ -822,13 +808,11 @@ export function PropertyPanel({
             min="1"
             max="100"
           />
-          <div className="studio-prop-hint">
-            Maximum number of agent handoffs allowed during execution
-          </div>
+          <div className="studio-prop-hint">{t('studio.prop.maxHandoffsHint')}</div>
         </div>
 
         <div className="field">
-          <label>Max iterations</label>
+          <label>{t('studio.prop.maxIterations')}</label>
           <input
             className="input"
             type="number"
@@ -837,11 +821,11 @@ export function PropertyPanel({
             min="1"
             max="100"
           />
-          <div className="studio-prop-hint">Maximum total iterations across all agents</div>
+          <div className="studio-prop-hint">{t('studio.prop.maxIterationsHint')}</div>
         </div>
 
         <div className="field">
-          <label>Execution timeout (seconds)</label>
+          <label>{t('studio.prop.executionTimeout')}</label>
           <input
             className="input"
             type="number"
@@ -850,13 +834,11 @@ export function PropertyPanel({
             min="10"
             max="3600"
           />
-          <div className="studio-prop-hint">
-            Total execution timeout in seconds (default: 900 = 15 minutes)
-          </div>
+          <div className="studio-prop-hint">{t('studio.prop.execTimeoutHint')}</div>
         </div>
 
         <div className="field">
-          <label>Node timeout (seconds)</label>
+          <label>{t('studio.prop.nodeTimeout')}</label>
           <input
             className="input"
             type="number"
@@ -865,13 +847,11 @@ export function PropertyPanel({
             min="5"
             max="1800"
           />
-          <div className="studio-prop-hint">
-            Individual agent timeout in seconds (default: 300 = 5 minutes)
-          </div>
+          <div className="studio-prop-hint">{t('studio.prop.nodeTimeoutHint')}</div>
         </div>
 
         <div className="field">
-          <label>Repetitive handoff detection window</label>
+          <label>{t('studio.prop.repetitiveWindow')}</label>
           <input
             className="input"
             type="number"
@@ -882,13 +862,11 @@ export function PropertyPanel({
             min="0"
             max="20"
           />
-          <div className="studio-prop-hint">
-            Number of recent nodes to check for ping-pong behavior (0 = disabled)
-          </div>
+          <div className="studio-prop-hint">{t('studio.prop.repetitiveWindowHint')}</div>
         </div>
 
         <div className="field">
-          <label>Min unique agents for detection</label>
+          <label>{t('studio.prop.minUniqueAgents')}</label>
           <input
             className="input"
             type="number"
@@ -899,9 +877,7 @@ export function PropertyPanel({
             min="0"
             max="10"
           />
-          <div className="studio-prop-hint">
-            Minimum unique nodes required in recent sequence (0 = disabled)
-          </div>
+          <div className="studio-prop-hint">{t('studio.prop.minUniqueAgentsHint')}</div>
         </div>
       </div>
     </div>
@@ -927,9 +903,7 @@ export function PropertyPanel({
       case 'custom-tool':
         return renderCustomToolProperties(data);
       default:
-        return (
-          <div className="studio-prop-empty">No properties available for this node type.</div>
-        );
+        return <div className="studio-prop-empty">{t('studio.prop.noProps')}</div>;
     }
   };
 
@@ -937,8 +911,8 @@ export function PropertyPanel({
     <div className={`studio-prop ${className}`}>
       <div className="studio-prop-head">
         <Settings size={14} />
-        <h3>Properties</h3>
-        <button className="studio-prop-x" onClick={onClose} title="Close">
+        <h3>{t('studio.prop.title')}</h3>
+        <button className="studio-prop-x" onClick={onClose} title={t('studio.prop.close')}>
           <X size={14} />
         </button>
       </div>
@@ -955,7 +929,7 @@ export function PropertyPanel({
               marginBottom: 6,
             }}
           >
-            NODE TYPE
+            {t('studio.prop.nodeType')}
           </label>
           <div className="studio-prop-typev">{node.type}</div>
         </div>

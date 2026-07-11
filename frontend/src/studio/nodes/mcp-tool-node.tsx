@@ -1,4 +1,5 @@
 import { Handle, Position, type NodeProps, useReactFlow } from '@xyflow/react';
+import { useTranslation } from 'react-i18next';
 import { Server, Globe, Radio, Terminal, Settings, X } from 'lucide-react';
 
 export interface MCPToolNodeData {
@@ -42,6 +43,7 @@ const getTransportLabel = (transportType: string) => {
 };
 
 export function MCPToolNode({ data, selected, id }: NodeProps) {
+  const { t } = useTranslation();
   const { deleteElements } = useReactFlow();
   const nodeData = (data ?? {}) as unknown as MCPToolNodeData;
   const {
@@ -69,7 +71,7 @@ export function MCPToolNode({ data, selected, id }: NodeProps) {
         <span className="studio-node-tools">
           <Settings size={12} />
           {selected && (
-            <button className="studio-node-del" onClick={handleDelete} title="Delete node">
+            <button className="studio-node-del" onClick={handleDelete} title={t('studio.nodeCard.deleteTitle')}>
               <X size={12} />
             </button>
           )}
@@ -81,12 +83,12 @@ export function MCPToolNode({ data, selected, id }: NodeProps) {
           <span className="studio-node-ic" style={{ display: 'inline-flex' }}>{transportIcon}</span>
           <span style={{ color: 'var(--ink)' }}>{serverName}</span>
         </div>
-        <div className="studio-node-row"><span className="studio-node-k">Transport:</span> {transportLabel}</div>
+        <div className="studio-node-row"><span className="studio-node-k">{t('studio.nodeCard.transport')}</span> {transportLabel}</div>
         {transportType === 'stdio' && command && (
-          <div className="studio-node-row"><span className="studio-node-k">Command:</span> {command}</div>
+          <div className="studio-node-row"><span className="studio-node-k">{t('studio.nodeCard.command')}</span> {command}</div>
         )}
         {(transportType === 'streamable_http' || transportType === 'sse') && url && (
-          <div className="studio-node-row"><span className="studio-node-k">URL:</span> {url}</div>
+          <div className="studio-node-row"><span className="studio-node-k">{t('studio.nodeCard.url')}</span> {url}</div>
         )}
         {description && <div className="studio-node-desc">{description}</div>}
       </div>

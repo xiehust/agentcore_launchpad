@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import type { Edge, Node } from "@xyflow/react";
 
@@ -37,6 +38,7 @@ function executionAgent(nodes: Node[], edges: Edge[]): Node | null {
 }
 
 export function CreateAgentStudio() {
+  const { t } = useTranslation();
   const toast = useToast();
   const navigate = useNavigate();
   const [params] = useSearchParams();
@@ -89,7 +91,7 @@ export function CreateAgentStudio() {
       .then((agent) => {
         if (cancelled) return;
         if (agent.method !== "studio") {
-          toast("That agent was not created with Strands Studio.");
+          toast(t("studio.toast.notStudioAgent"));
           navigate("/create");
           return;
         }
@@ -112,13 +114,13 @@ export function CreateAgentStudio() {
       })
       .catch(() => {
         if (cancelled) return;
-        toast("Could not load that agent.");
+        toast(t("studio.toast.loadFailed"));
         navigate("/create");
       });
     return () => {
       cancelled = true;
     };
-  }, [editAgentId, navigate, toast]);
+  }, [editAgentId, navigate, toast, t]);
 
   // ── new-agent mode: restore then autosave a localStorage draft ──
   const restoredRef = useRef(false);
@@ -163,14 +165,17 @@ export function CreateAgentStudio() {
           (s) => s.status === "failed",
         );
         toast(
-          `Publish failed at ${failedStage?.name ?? "deploy"}: ${(failedStage?.detail ?? "").slice(0, 120)}`,
+          t("studio.toast.publishFailed", {
+            stage: failedStage?.name ?? "deploy",
+            msg: (failedStage?.detail ?? "").slice(0, 120),
+          }),
         );
       }
       setAgentStatus(agent.status);
     } catch {
       /* transient poll errors retry on the next tick */
     }
-  }, [launch, toast]);
+  }, [launch, toast, t]);
 
   useEffect(() => {
     if (!launch) return;
@@ -199,7 +204,7 @@ export function CreateAgentStudio() {
 
   const openPublish = () => {
     if (genResult.errors.length > 0) {
-      toast("Fix the code generation errors before publishing.");
+      toast(t("studio.toast.fixErrors"));
       setCodeOpen(true);
       return;
     }
@@ -210,12 +215,15 @@ export function CreateAgentStudio() {
   const doPublish = async () => {
     setPublishErr(null);
     if (genResult.errors.length > 0) {
-      setPublishErr("Code generation has errors. Close and fix the flow.");
+      setPublishErr(t("studio.publish.errHasErrors"));
       return;
     }
     if (fullCode.length > MAX_CODE) {
       setPublishErr(
-        `Generated code is ${fullCode.length.toLocaleString()} chars, over the ${MAX_CODE.toLocaleString()} limit.`,
+        t("studio.publish.errTooLarge", {
+          size: fullCode.length.toLocaleString(),
+          limit: MAX_CODE.toLocaleString(),
+        }),
       );
       return;
     }
@@ -262,9 +270,13 @@ export function CreateAgentStudio() {
     return (
       <section>
         <ViewHead
-          kicker="Agent management · Strands Studio"
-          title={editing ? `Re-publishing ${editAgent?.name ?? ""}` : "Publishing agent"}
-          meta="Deploying through the shared pipeline"
+          kicker={t("studio.head.kicker")}
+          title={
+            editing
+              ? t("studio.head.republishingTitle", { name: editAgent?.name ?? "" })
+              : t("studio.head.publishingTitle")
+          }
+          meta={t("studio.head.publishingMeta")}
         />
         <LaunchSequence
           deployment={deployment}
@@ -276,13 +288,13 @@ export function CreateAgentStudio() {
         {agentStatus === "active" && (
           <>
             <div style={{ height: 14 }} />
-            <Panel title="Agent published" sub="Runtime is active and registered">
+            <Panel title={t("studio.published.title")} sub={t("studio.published.sub")}>
               <div style={{ display: "flex", gap: 10 }}>
                 <Link className="btn primary" to={`/chat?agent=${launch.agentId}`}>
-                  Open chat ▸
+                  {t("studio.published.openChat")} ▸
                 </Link>
                 <Link className="btn" to="/create">
-                  Back to agents
+                  {t("studio.published.backToAgents")}
                 </Link>
               </div>
             </Panel>
@@ -295,9 +307,15 @@ export function CreateAgentStudio() {
   return (
     <section>
       <ViewHead
-        kicker="Agent management · Strands Studio"
-        title={editing ? `Edit ${editAgent?.name ?? "studio agent"}` : "Strands Studio"}
-        meta="Compose a Strands agent on the canvas, then publish through the shared pipeline"
+        kicker={t("studio.head.kicker")}
+        title={
+          editing
+            ? t("studio.head.titleEdit", {
+                name: editAgent?.name ?? t("studio.head.editFallback"),
+              })
+            : t("studio.head.title")
+        }
+        meta={t("studio.head.meta")}
       />
 
       <div
@@ -310,20 +328,22 @@ export function CreateAgentStudio() {
         }}
       >
         <Link className="btn" to="/create">
-          ◂ Agents
+          ◂ {t("studio.toolbar.agents")}
         </Link>
         {editing && (
           <Chip tone="muted" icon="⟳">
-            re-publish · {editAgent?.name ?? ""}
+            {t("studio.toolbar.rePublishChip", { name: editAgent?.name ?? "" })}
           </Chip>
         )}
         <div style={{ marginLeft: "auto", display: "flex", gap: 10 }}>
-          <Btn onClick={() => setCodeOpen((v) => !v)}>{codeOpen ? "Hide code" : "Generate code"}</Btn>
+          <Btn onClick={() => setCodeOpen((v) => !v)}>
+            {codeOpen ? t("studio.toolbar.hideCode") : t("studio.toolbar.generateCode")}
+          </Btn>
           <Btn onClick={() => setConfirmClear(true)} disabled={nodes.length === 0 && edges.length === 0}>
-            Clear canvas
+            {t("studio.toolbar.clearCanvas")}
           </Btn>
           <Btn primary onClick={openPublish} disabled={!canPublish}>
-            ▲ {editing ? "Re-publish" : "Publish"}
+            ▲ {editing ? t("studio.toolbar.rePublish") : t("studio.toolbar.publish")}
           </Btn>
         </div>
       </div>
@@ -333,10 +353,7 @@ export function CreateAgentStudio() {
           <span className="i" style={{ color: "var(--amber)" }}>
             [i]
           </span>
-          <span>
-            This agent was created in the standalone studio, so no canvas graph is stored. Build a
-            flow below to enable re-publish; the current deployed code is shown read-only until then.
-          </span>
+          <span>{t("studio.noFlow.notice")}</span>
         </div>
       )}
 
@@ -369,7 +386,7 @@ export function CreateAgentStudio() {
         <>
           <div style={{ height: 14 }} />
           {showReadonly ? (
-            <Panel title="Deployed code (read-only)" sub="Build a flow to regenerate and re-publish">
+            <Panel title={t("studio.readonly.title")} sub={t("studio.readonly.sub")}>
               <pre className="code" style={{ maxHeight: 420, overflow: "auto", margin: 0 }}>
                 {readonlyCode}
               </pre>
@@ -386,49 +403,56 @@ export function CreateAgentStudio() {
             className="confirm-box"
             role="dialog"
             aria-modal="true"
-            aria-label="Publish agent"
+            aria-label={t("studio.publish.title")}
             style={{ maxWidth: 520, width: "92%" }}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="confirm-title">▲ {editing ? "Re-publish agent" : "Publish agent"}</div>
+            <div className="confirm-title">
+              ▲ {editing ? t("studio.publish.rePublishTitle") : t("studio.publish.title")}
+            </div>
 
             {editing ? (
               <div className="field">
-                <label>Name</label>
+                <label>{t("studio.publish.nameLabel")}</label>
                 <input className="input mono" value={editAgent?.name ?? publishName} disabled />
               </div>
             ) : (
               <div className="field">
-                <label htmlFor="studio-name">Agent name</label>
+                <label htmlFor="studio-name">{t("studio.publish.agentName")}</label>
                 <input
                   id="studio-name"
                   className="input mono"
                   value={publishName}
                   onChange={(e) => setPublishName(e.target.value)}
-                  placeholder="studio-canvas-agent"
+                  placeholder={t("studio.publish.namePlaceholder")}
                   autoFocus
                 />
                 {publishName.length > 0 && !nameValid && (
                   <div className="studio-warn" style={{ color: "var(--crit)" }}>
-                    Lowercase letters, digits and hyphens; 3–48 chars, must start with a letter.
+                    {t("studio.publish.nameRule")}
                   </div>
                 )}
               </div>
             )}
 
             <div className="kv">
-              <span className="k">Generated code</span>
+              <span className="k">{t("studio.publish.generatedCode")}</span>
               <span className="v">
-                {fullCode.length.toLocaleString()} chars · {fullCode.split("\n").length} lines
+                {t("studio.publish.codeStat", {
+                  chars: fullCode.length.toLocaleString(),
+                  lines: fullCode.split("\n").length,
+                })}
               </span>
             </div>
             <div className="kv">
-              <span className="k">Extra requirements</span>
-              <span className="v">{extraReqs.length ? extraReqs.join(", ") : "none"}</span>
+              <span className="k">{t("studio.publish.extraReqs")}</span>
+              <span className="v">
+                {extraReqs.length ? extraReqs.join(", ") : t("studio.publish.none")}
+              </span>
             </div>
             <div className="kv">
-              <span className="k">Memory</span>
-              <span className="v">short_term off · long_term off</span>
+              <span className="k">{t("studio.publish.memory")}</span>
+              <span className="v">{t("studio.publish.memoryValue")}</span>
             </div>
 
             {publishErr && (
@@ -441,9 +465,9 @@ export function CreateAgentStudio() {
             )}
 
             <div className="confirm-actions" style={{ marginTop: 16 }}>
-              <Btn onClick={() => setPublishOpen(false)}>Cancel</Btn>
+              <Btn onClick={() => setPublishOpen(false)}>{t("common.cancel")}</Btn>
               <Btn primary disabled={!nameValid} onClick={() => void doPublish()}>
-                ▲ {editing ? "Re-publish" : "Publish"}
+                ▲ {editing ? t("studio.toolbar.rePublish") : t("studio.toolbar.publish")}
               </Btn>
             </div>
           </div>
@@ -452,9 +476,9 @@ export function CreateAgentStudio() {
 
       <ConfirmDialog
         open={confirmClear}
-        title="Clear canvas"
-        body="Remove all nodes and edges from the canvas? This also clears the saved draft."
-        confirmLabel="Clear"
+        title={t("studio.confirmClear.title")}
+        body={t("studio.confirmClear.body")}
+        confirmLabel={t("studio.confirmClear.confirm")}
         onConfirm={clearCanvas}
         onCancel={() => setConfirmClear(false)}
       />

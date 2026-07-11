@@ -1,4 +1,5 @@
 import { Handle, Position, type NodeProps, useReactFlow } from '@xyflow/react';
+import { useTranslation } from 'react-i18next';
 import { Crown, Settings, X } from 'lucide-react';
 
 interface OrchestratorAgentNodeData {
@@ -22,6 +23,7 @@ interface OrchestratorAgentNodeData {
 }
 
 export function OrchestratorAgentNode({ data, selected, id }: NodeProps) {
+  const { t } = useTranslation();
   const { deleteElements } = useReactFlow();
   const nodeData = (data ?? {}) as OrchestratorAgentNodeData;
   const {
@@ -44,7 +46,7 @@ export function OrchestratorAgentNode({ data, selected, id }: NodeProps) {
         <span className="studio-node-tools">
           <Settings size={12} />
           {selected && (
-            <button className="studio-node-del" onClick={handleDelete} title="Delete node">
+            <button className="studio-node-del" onClick={handleDelete} title={t('studio.nodeCard.deleteTitle')}>
               <X size={12} />
             </button>
           )}
@@ -52,9 +54,9 @@ export function OrchestratorAgentNode({ data, selected, id }: NodeProps) {
       </div>
 
       <div className="studio-node-body">
-        <div className="studio-node-row"><span className="studio-node-k">Provider:</span> {modelProvider}</div>
-        <div className="studio-node-row"><span className="studio-node-k">Model:</span> {modelName}</div>
-        <div className="studio-node-row"><span className="studio-node-k">Temperature:</span> {temperature}</div>
+        <div className="studio-node-row"><span className="studio-node-k">{t('studio.nodeCard.provider')}</span> {modelProvider}</div>
+        <div className="studio-node-row"><span className="studio-node-k">{t('studio.nodeCard.model')}</span> {modelName}</div>
+        <div className="studio-node-row"><span className="studio-node-k">{t('studio.nodeCard.temperature')}</span> {temperature}</div>
       </div>
 
       {/* Input Handle */}

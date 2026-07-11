@@ -1,4 +1,5 @@
 import { Handle, Position, type NodeProps, useReactFlow } from '@xyflow/react';
+import { useTranslation } from 'react-i18next';
 import { Users, Settings, X } from 'lucide-react';
 
 interface SwarmNodeData {
@@ -14,6 +15,7 @@ interface SwarmNodeData {
 }
 
 export function SwarmNode({ data, selected, id }: NodeProps) {
+  const { t } = useTranslation();
   const { deleteElements } = useReactFlow();
   const nodeData = (data ?? {}) as SwarmNodeData;
   const {
@@ -37,7 +39,7 @@ export function SwarmNode({ data, selected, id }: NodeProps) {
         <span className="studio-node-tools">
           <Settings size={12} />
           {selected && (
-            <button className="studio-node-del" onClick={handleDelete} title="Delete node">
+            <button className="studio-node-del" onClick={handleDelete} title={t('studio.nodeCard.deleteTitle')}>
               <X size={12} />
             </button>
           )}
@@ -45,10 +47,10 @@ export function SwarmNode({ data, selected, id }: NodeProps) {
       </div>
 
       <div className="studio-node-body">
-        <div className="studio-node-row"><span className="studio-node-k">Max Handoffs:</span> {maxHandoffs}</div>
-        <div className="studio-node-row"><span className="studio-node-k">Max Iterations:</span> {maxIterations}</div>
-        <div className="studio-node-row"><span className="studio-node-k">Execution Timeout:</span> {executionTimeout}s</div>
-        <div className="studio-node-row"><span className="studio-node-k">Node Timeout:</span> {nodeTimeout}s</div>
+        <div className="studio-node-row"><span className="studio-node-k">{t('studio.nodeCard.maxHandoffs')}</span> {maxHandoffs}</div>
+        <div className="studio-node-row"><span className="studio-node-k">{t('studio.nodeCard.maxIterations')}</span> {maxIterations}</div>
+        <div className="studio-node-row"><span className="studio-node-k">{t('studio.nodeCard.executionTimeout')}</span> {executionTimeout}s</div>
+        <div className="studio-node-row"><span className="studio-node-k">{t('studio.nodeCard.nodeTimeout')}</span> {nodeTimeout}s</div>
       </div>
 
       {/* Input Handle */}

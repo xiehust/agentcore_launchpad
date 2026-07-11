@@ -1,4 +1,5 @@
 import { Handle, Position, type NodeProps, useReactFlow } from '@xyflow/react';
+import { useTranslation } from 'react-i18next';
 import { ArrowRight, MessageCircle, X } from 'lucide-react';
 
 interface InputNodeData {
@@ -6,6 +7,7 @@ interface InputNodeData {
 }
 
 export function InputNode({ data, selected, id }: NodeProps) {
+  const { t } = useTranslation();
   const { deleteElements } = useReactFlow();
   const nodeData = (data ?? {}) as InputNodeData;
   const { label = 'Input' } = nodeData;
@@ -23,7 +25,7 @@ export function InputNode({ data, selected, id }: NodeProps) {
         <span className="studio-node-tools">
           <MessageCircle size={12} />
           {selected && (
-            <button className="studio-node-del" onClick={handleDelete} title="Delete node">
+            <button className="studio-node-del" onClick={handleDelete} title={t('studio.nodeCard.deleteTitle')}>
               <X size={12} />
             </button>
           )}
@@ -31,7 +33,7 @@ export function InputNode({ data, selected, id }: NodeProps) {
       </div>
 
       <div className="studio-node-body">
-        <div className="studio-node-desc">Connects user input to agents</div>
+        <div className="studio-node-desc">{t('studio.nodeCard.inputDesc')}</div>
       </div>
 
       {/* Output Handle */}

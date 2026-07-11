@@ -1,4 +1,5 @@
 import React, { useCallback, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   ReactFlow,
   useNodesState,
@@ -79,6 +80,7 @@ export function FlowEditor({
   onGraphModeChange,
   onInvalidConnection,
 }: FlowEditorProps) {
+  const { t } = useTranslation();
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   const [internalNodes, setInternalNodes, onInternalNodesChange]: [
     Node[],
@@ -167,10 +169,12 @@ export function FlowEditor({
         setEdges(addEdge(params, edges));
       } else {
         // Surface a user-friendly reason via the page's toast (upstream used alert()).
-        onInvalidConnection?.(validation.message ?? 'Connection not allowed');
+        // validation.message comes from the pure connection-validator (English);
+        // only the generic fallback is localized here.
+        onInvalidConnection?.(validation.message ?? t('studio.flow.connectionNotAllowed'));
       }
     },
-    [setEdges, nodes, edges, graphMode, onInvalidConnection],
+    [setEdges, nodes, edges, graphMode, onInvalidConnection, t],
   );
 
   const isValidConnectionCallback = useCallback(
@@ -266,12 +270,12 @@ export function FlowEditor({
       {/* Graph Mode Toggle */}
       <div className={`studio-graphmode${graphMode ? ' on' : ''}`}>
         <Network className="studio-graphmode-ic" size={14} />
-        <span className="studio-graphmode-lbl">Graph Mode</span>
+        <span className="studio-graphmode-lbl">{t('studio.flow.graphMode')}</span>
         <button
           type="button"
           className={`studio-switch${graphMode ? ' on' : ''}`}
           onClick={() => onGraphModeChange?.(!graphMode)}
-          title="Toggle Graph Mode: enable DAG-based multi-agent orchestration"
+          title={t('studio.flow.graphModeTitle')}
           aria-pressed={graphMode}
         />
       </div>
