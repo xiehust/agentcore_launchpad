@@ -253,26 +253,84 @@ flow and posts it together with the updated `studio_flow`.
 
 `frontend/src/studio/lib/*` (`code-generator.ts`, `graph-code-generator.ts`,
 `connection-validator.ts`, `graph-validator.ts`, `models.ts`, `sample-flows/*`)
-are copied VERBATIM from upstream `xiehust/strands_studio_ui`
-(eslint-ignored, still tsc-checked). Current baseline: **PR #31**, merge
-`69318ab` (`git -C <clone> show origin/main:src/lib/<file>` reproduces each
-file byte-for-byte). The `@/lib/models` alias is the only rewrite → relative
-`./models` (`../lib/models` from components), since the studio subtree has no
-`@` alias. The documented deviation set is now **two entries**, both
-re-applied to the two generators' static `strands_tools` import line AND tool
-map: **`file_write`** and **`mem0_memory`** — upstream drops both (they silently
-fall back to `calculator`); launchpad keeps them so saved graphs' tool nodes
-don't downgrade. When re-vendoring upstream, re-apply both.
+are copied from upstream `xiehust/strands_studio_ui` (eslint-ignored, still
+tsc-checked). Current baseline: **PR #31**, merge `69318ab`. The `@/lib/models`
+alias is the only path rewrite → relative `./models`. Local edits are tracked
+in a TWO-CLASS LEDGER — re-apply ALL of it on every upstream re-sync:
+
+**Deviations** (restore upstream behavior we keep): `file_write` +
+`mem0_memory` in both generators' static `strands_tools` import line AND tool
+map — upstream drops both (silent `calculator` fallback); launchpad keeps them
+so saved graphs' tool nodes don't downgrade.
+
+**Extensions** (launchpad-only features, every block comment-marked
+`// launchpad extension:` in the generators; grep for that marker to relocate
+them after a re-copy):
+- `cacheSystem` node key → `cache_prompt="default"` in the Bedrock model
+  config (system-prompt cache; deprecated-but-functional in strands 1.47,
+  silent no-op under ~1k tokens — probed live).
+- Bedrock reasoning effort: `additional_request_fields` gains
+  `"output_config": {"effort": "<low|medium|high|xhigh>"}` beside
+  `thinking:{type:adaptive}` (the ONLY accepted shape — probed); `xhigh` is
+  clamped to `high` unless the model id contains `claude-sonnet-5` /
+  `claude-opus-4-8` (Claude 4.6-gen rejects it).
+- `max_tokens` fallbacks 4000→32000 + emit-time clamps (`nova-premier`→32000,
+  `nova-pro`→10000 — Nova Pro hard-caps at 10000, probed).
+- streaming gate fallback `?? true` (execution agent only; explicit `false`
+  in saved graphs respected).
+- `sample-flows/agent-with-mcp.ts` points at the public aws-knowledge MCP
+  (`https://knowledge-mcp.global.api.aws`, streamable_http, no auth) instead
+  of upstream's localhost placeholder.
 
 Node components must preserve every React Flow Handle `id`/`type`/`Position`
 and every node `data` key + destructuring default — the generators read them.
 Styling is launchpad CSS tokens only (namespaced `studio.css`); no Tailwind.
 
-`frontend/src/studio/lib/*`(`code-generator.ts`、`graph-code-generator.ts`、
-`connection-validator.ts`、`graph-validator.ts`、`models.ts`、`sample-flows/*`)
-逐字复制自上游 `xiehust/strands_studio_ui`,当前基线为 **PR #31**(合并提交
-`69318ab`)。唯一改写是把 `@/lib/models` 别名改为相对路径 `./models`。已记录的
-偏差现有**两项**(均在两个生成器的 `strands_tools` import 行与工具映射表中重新
-应用):**`file_write`** 与 **`mem0_memory`** —— 上游都已移除(会静默回退为
-`calculator`),launchpad 保留以免已保存画布的工具节点被降级。重新引入上游时
-须重新应用这两项。
+上游库文件的本地改动采用**两级台账**:偏差(`file_write`/`mem0_memory` 工具映射,
+上游移除、launchpad 保留)与扩展(生成器中全部以 `// launchpad extension:` 注释
+标记:`cacheSystem`→`cache_prompt` 系统缓存、Bedrock `output_config.effort`
+推理档位(xhigh 仅 Sonnet 5/Opus 4.8,其余钳制为 high)、max_tokens 32000 默认
++ Nova 钳制(Pro 10000/Premier 32000)、streaming 默认开、aws-knowledge MCP
+样例)。重新同步上游时须完整重放两级台账。
+
+## Local debug & AI Fix / 本地调试与 AI 修复
+
+The canvas debugs UN-deployed flows locally (ported from upstream PR #31's
+execution/conversation/fix subsystems; task `07-11-studio-local-debug-and-defaults`):
+
+- **Exec env**: `scripts/setup_exec_env.sh` provisions `data/exec-venv`
+  (strands-agents[openai] ≥1.46 + strands-agents-tools[mem0_memory] + mcp +
+  bedrock-agentcore). Settings: `studio_exec_python` (both run and chat spawn
+  THIS interpreter — upstream's `sys.executable` vs `uv run` split is
+  deliberately unified), `execute_timeout_s` (300).
+- **`POST /api/execute[/stream]`**: subprocess in a temp workdir
+  (process-group kill, `--user-input` flag, referenced registry skills bundled
+  into `workdir/skills/` via the same `bundle_skills_into` the deploy zip
+  uses). Stream framing: each `\n` becomes an empty `data: ` line; sentinel
+  `data: [STREAM_COMPLETE:<seconds>]`.
+- **`/api/conversations*`** (8 endpoints): LOCAL debug chat — in-memory
+  sessions, whole-history `--messages` replay (Bedrock Converse shape), failed
+  turns pair-marked and excluded from replay, sentinels
+  `[CHAT_ERROR:<json>]` / `[CHAT_COMPLETE:<id>]`, `PUT .../code` rewrites the
+  session's agent.py after an applied fix. Distinct namespace from
+  `/api/chat/*` (deployed agents).
+- **AI Fix**: `POST /api/fix-code/stream` (events
+  `progress|agent_activity|validation|done|error|end`) — diagnosis
+  (`code|config|environment`; environment edits are reverted), ≤2 repair
+  rounds, staged validators (contract AST → ruff → import smoke in the exec
+  venv), revert-to-original when validation fails. Coding agent =
+  `claude` CLI via claude-agent-sdk over Bedrock (`CLAUDE_CODE_USE_BEDROCK=1`,
+  model `codegen_model`). `GET /api/generate-code/status` gates the UI button.
+  Upstream's AI code GENERATION path is deliberately not ported.
+- **Frontend CodeState** `{code, source: template|ai, flowStale}` in
+  `CreateAgentStudio`: canvas changes regenerate template code; an applied fix
+  flips source to `ai` (canvas changes then only mark `flowStale`); publish
+  ships the ACTIVE code (fixed code publishable, drawer notes the divergence);
+  "Regenerate from flow" discards fixes.
+
+画布可在本地调试未部署的流程:`data/exec-venv` 专用解释器运行生成代码
+(`/api/execute[/stream]`,技能目录与部署 zip 同源打包);`/api/conversations*`
+为本地调试对话(内存会话、全量 `--messages` 重放、失败轮成对剔除,与已部署
+agent 的 `/api/chat/*` 完全分离);AI 修复(`/api/fix-code/stream`)由 Bedrock 上
+的 Claude 编码代理诊断并修复失败运行,环境类问题不改代码、校验不过则回滚原码;
+修复后的代码可继续运行/对话/直接发布,"从画布重新生成"随时丢弃修复。
