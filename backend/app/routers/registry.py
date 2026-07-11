@@ -1,18 +1,33 @@
 """Registry console API — records per type, register, lifecycle actions,
-attachables catalog, search, defaults sync."""
+attachables catalog, search, defaults sync, multi-source skill ingestion."""
 
+import secrets
 import time
+from dataclasses import asdict
 from typing import Any, Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, UploadFile
 from pydantic import BaseModel, Field
 
 from app.core.errors import AppError
 from app.services import registry_console as console
+from app.services.skill_ingest import (
+    SKILL_BUNDLE_MAX_BYTES,
+    SkillBundle,
+    bundle_errors,
+    bundle_from_zip,
+)
 
 router = APIRouter(prefix="/api/registry", tags=["registry"])
 
 _attachables_cache: dict[str, Any] = {"data": None, "at": 0.0}
+
+# Skill inspect→import staging. inspect() acquires + validates bundles into a
+# server-side temp dir and parks them here under a random id; import() consumes
+# by id. Single-process uvicorn (this project's deploy shape) → an in-process
+# dict is sufficient; no Redis. TTL keeps abandoned uploads/clones from leaking.
+_STAGING_TTL_S = 600  # 10 minutes
+_staging: dict[str, dict[str, Any]] = {}  # id → {"bundles": [SkillBundle], "expires": float}
 
 
 def _record_out(record: dict[str, Any]) -> dict[str, Any]:
@@ -67,7 +82,7 @@ class RegisterRequest(BaseModel):
     name: str = Field(pattern=r"^[a-z][a-z0-9-]{2,63}$")
     description: str = Field(default="", max_length=500)
     url: str | None = None  # MCP: streamable-http endpoint
-    skill_md: str | None = Field(default=None, max_length=200000)  # AGENT_SKILLS
+    skill_md: str | None = Field(default=None, max_length=102400)  # AGENT_SKILLS (AWS cap)
 
 
 @router.post("/records", status_code=201)
@@ -87,6 +102,148 @@ def register_record(req: RegisterRequest) -> dict[str, Any]:
             status_code=400,
         )
     return _record_out(console.register_skill(req.name, req.description, req.skill_md))
+
+
+def _sweep_staging() -> None:
+    now = time.time()
+    for sid, entry in list(_staging.items()):
+        if entry["expires"] <= now:
+            _staging.pop(sid, None)
+            for bundle in entry["bundles"]:
+                bundle.close()
+
+
+def _stage(bundles: list[SkillBundle]) -> str:
+    _sweep_staging()
+    sid = secrets.token_urlsafe(16)
+    _staging[sid] = {"bundles": bundles, "expires": time.time() + _STAGING_TTL_S}
+    return sid
+
+
+def _drop_staging(sid: str) -> None:
+    entry = _staging.pop(sid, None)
+    if entry:
+        for bundle in entry["bundles"]:
+            bundle.close()
+
+
+def _skill_out(bundle: SkillBundle, errors: list[str], index: int) -> dict[str, Any]:
+    return {
+        "index": index,
+        "name": bundle.name,
+        "description": bundle.description,
+        "version": bundle.version,
+        "files": bundle.files,
+        "skill_md_excerpt": bundle.skill_md[:4000],
+        "source": asdict(bundle.source),
+        "valid": not errors,
+        "errors": errors,
+    }
+
+
+@router.post("/skills/inspect")
+async def inspect_skill(file: UploadFile) -> dict[str, Any]:
+    """Acquire + validate a skill bundle from an uploaded .zip without touching
+    S3, park it in staging, and return the parsed skills for preview. The whole
+    upload is refused (4xx) when no skill in it is importable."""
+    filename = (file.filename or "").lower()
+    if not filename.endswith(".zip"):
+        raise AppError("registry.invalid_upload", "expected a .zip file", status_code=400)
+    data = await file.read()
+    if len(data) > SKILL_BUNDLE_MAX_BYTES:
+        raise AppError(
+            "registry.upload_too_large",
+            f"upload exceeds the {SKILL_BUNDLE_MAX_BYTES} byte limit",
+            status_code=413,
+        )
+    bundles = [bundle_from_zip(data)]  # archive-safety violations raise here (422)
+    staged = [(b, bundle_errors(b)) for b in bundles]
+    if not any(not errs for _, errs in staged):
+        for bundle, _ in staged:
+            bundle.close()
+        first_errors = staged[0][1] if staged else ["no SKILL.md found in archive"]
+        raise AppError(
+            "registry.skill_invalid",
+            "; ".join(first_errors),
+            detail=first_errors,
+            status_code=422,
+        )
+    sid = _stage([b for b, _ in staged])
+    return {
+        "staging_id": sid,
+        "skills": [_skill_out(b, errs, i) for i, (b, errs) in enumerate(staged)],
+    }
+
+
+class ImportSelection(BaseModel):
+    """Pick a staged skill by ``index`` (preferred, unambiguous) or by ``name``;
+    ``name_override`` / ``description_override`` edit the registered record."""
+
+    index: int | None = None
+    name: str = ""
+    name_override: str | None = Field(default=None, max_length=64)
+    description_override: str | None = Field(default=None, max_length=500)
+
+
+class ImportRequest(BaseModel):
+    staging_id: str
+    selections: list[ImportSelection]
+
+
+def _match_bundle(bundles: list[SkillBundle], sel: ImportSelection) -> SkillBundle | None:
+    if sel.index is not None:
+        return bundles[sel.index] if 0 <= sel.index < len(bundles) else None
+    for bundle in bundles:
+        if bundle.name == sel.name:
+            return bundle
+    return None
+
+
+@router.post("/skills/import")
+def import_skills(req: ImportRequest) -> dict[str, Any]:
+    """Register each selected staged bundle via the shared pipeline. A per-item
+    failure (name conflict, validation) is reported inline and never aborts the
+    other selections. Staging is consumed once the batch completes."""
+    _sweep_staging()
+    entry = _staging.get(req.staging_id)
+    if entry is None:
+        raise AppError(
+            "registry.staging_expired",
+            "staging session expired or unknown — re-inspect the source",
+            status_code=410,
+        )
+    bundles: list[SkillBundle] = entry["bundles"]
+    records: list[dict[str, Any]] = []
+    for sel in req.selections:
+        label = sel.name_override or sel.name or f"#{sel.index}"
+        bundle = _match_bundle(bundles, sel)
+        if bundle is None:
+            records.append(
+                {"name": label, "ok": False,
+                 "error": "no staged skill matches this selection",
+                 "error_code": "registry.skill_not_staged"}
+            )
+            continue
+        try:
+            record = console.register_skill_bundle(
+                bundle,
+                name_override=sel.name_override,
+                description_override=sel.description_override,
+            )
+            records.append({"name": record.get("name", label), "ok": True,
+                            "record": _record_out(record)})
+        except AppError as exc:
+            # error is a plain string for inline display; error_code kept for i18n.
+            records.append({"name": label, "ok": False,
+                            "error": exc.message, "error_code": exc.code})
+        except Exception as exc:  # never let one bad skill abort the batch
+            records.append({"name": label, "ok": False,
+                            "error": str(exc), "error_code": "registry.import_failed"})
+    # keep staging on any failure so the user can fix (e.g. rename) and retry
+    # without re-uploading; the TTL sweep reclaims abandoned sessions
+    if all(r["ok"] for r in records):
+        _drop_staging(req.staging_id)
+    return {"records": records}
 
 
 @router.delete("/records/{record_id}")

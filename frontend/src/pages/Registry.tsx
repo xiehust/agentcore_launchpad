@@ -5,10 +5,12 @@ import { useNavigate } from "react-router-dom";
 
 import { Btn, Chip, ConfirmDialog, Panel, useToast, ViewHead } from "../components";
 import type { ChipTone } from "../components";
+import type { RegSource } from "./registry/SkillSourceForm";
+import { SkillSourceForm } from "./registry/SkillSourceForm";
 
 type RecordType = "A2A" | "MCP" | "AGENT_SKILLS";
 
-interface RegistryRecord {
+export interface RegistryRecord {
   record_id: string;
   name: string;
   description: string;
@@ -18,6 +20,47 @@ interface RegistryRecord {
   descriptors?: Record<string, unknown>;
   updated_at: string | null;
 }
+
+interface SkillSourceMeta {
+  kind: string;
+  url?: string;
+  ref?: string;
+  subdir?: string;
+  imported_at?: string;
+}
+
+/** Parse the AGENT_SKILLS skillDefinition JSON; returns file list + source when present. */
+function parseSkillDefinition(
+  record: RegistryRecord,
+): { files: string[]; source: SkillSourceMeta | null } | null {
+  if (record.type !== "AGENT_SKILLS") return null;
+  const skills = record.descriptors?.agentSkills as
+    | { skillDefinition?: { inlineContent?: string } }
+    | undefined;
+  const raw = skills?.skillDefinition?.inlineContent;
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as { files?: unknown; source?: unknown };
+    const files = Array.isArray(parsed.files)
+      ? parsed.files.filter((f): f is string => typeof f === "string")
+      : [];
+    const source =
+      parsed.source && typeof parsed.source === "object"
+        ? (parsed.source as SkillSourceMeta)
+        : null;
+    if (files.length === 0 && !source) return null;
+    return { files, source };
+  } catch {
+    return null;
+  }
+}
+
+const SOURCE_CHIP_TONE: Record<string, ChipTone> = {
+  inline: "muted",
+  zip: "aqua",
+  git: "amber",
+  url: "blue",
+};
 
 const TABS: { key: RecordType; labelKey: string }[] = [
   { key: "A2A", labelKey: "registry.tabs.agents" },
@@ -67,6 +110,7 @@ export function Registry() {
   const [confirmDelete, setConfirmDelete] = useState<RegistryRecord | null>(null);
   const [registering, setRegistering] = useState(false);
   const [regType, setRegType] = useState<"MCP" | "AGENT_SKILLS">("MCP");
+  const [regSource, setRegSource] = useState<RegSource>("inline");
   const [regName, setRegName] = useState("");
   const [regDesc, setRegDesc] = useState("");
   const [regUrl, setRegUrl] = useState("");
@@ -142,6 +186,24 @@ export function Registry() {
     /^[a-z][a-z0-9-]{2,63}$/.test(regName) &&
     (regType === "MCP" ? /^https?:\/\/.+/.test(regUrl) : regMd.trim().length > 0);
 
+  // shared success tail for both the inline POST /records path and the zip import path
+  const finishRegistration = useCallback(
+    async (record: RegistryRecord | null, name: string, resultTab: RecordType) => {
+      toast(t("registry.register.done", { name }));
+      setRegistering(false);
+      setRegName("");
+      setRegDesc("");
+      setRegUrl("");
+      setRegMd("");
+      setRegSource("inline");
+      setTab(resultTab);
+      setSearching(false);
+      await load();
+      if (record) setSelected(record);
+    },
+    [load, t, toast],
+  );
+
   const submitRegistration = async () => {
     setBusy(true);
     try {
@@ -162,16 +224,7 @@ export function Registry() {
         toast(t("common.actionFailed", { msg: body.message ?? `HTTP ${res.status}` }));
         return;
       }
-      toast(t("registry.register.done", { name: regName }));
-      setRegistering(false);
-      setRegName("");
-      setRegDesc("");
-      setRegUrl("");
-      setRegMd("");
-      setTab(regType);
-      setSearching(false);
-      await load();
-      setSelected(body);
+      await finishRegistration(body, regName, regType);
     } catch (err) {
       toast(t("common.actionFailed", { msg: String(err) }));
     } finally {
@@ -223,6 +276,7 @@ export function Registry() {
   };
 
   const loading = records === null;
+  const skillMeta = selected ? parseSkillDefinition(selected) : null;
   const loaded = records ?? [];
   const visible = searching ? loaded : loaded.filter((r) => r.type === tab);
   const counts = (type: RecordType) => loaded.filter((r) => r.type === type).length;
@@ -286,6 +340,7 @@ export function Registry() {
               onClick={() => {
                 setSelected(null);
                 setRegistering((v) => !v);
+                setRegSource("inline");
                 if (tab !== "A2A") setRegType(tab);
               }}
               data-testid="register-btn"
@@ -390,25 +445,29 @@ export function Registry() {
                     ))}
                   </div>
                 </div>
-                <div className="field">
-                  <label htmlFor="reg-name">{t("registry.register.name")}</label>
-                  <input
-                    id="reg-name"
-                    className="input mono"
-                    value={regName}
-                    onChange={(e) => setRegName(e.target.value)}
-                    placeholder={regType === "MCP" ? "team-search-mcp" : "report-writer"}
-                  />
-                </div>
-                <div className="field">
-                  <label htmlFor="reg-desc">{t("registry.register.description")}</label>
-                  <input
-                    id="reg-desc"
-                    className="input"
-                    value={regDesc}
-                    onChange={(e) => setRegDesc(e.target.value)}
-                  />
-                </div>
+                {(regType === "MCP" || regSource === "inline") && (
+                  <>
+                    <div className="field">
+                      <label htmlFor="reg-name">{t("registry.register.name")}</label>
+                      <input
+                        id="reg-name"
+                        className="input mono"
+                        value={regName}
+                        onChange={(e) => setRegName(e.target.value)}
+                        placeholder={regType === "MCP" ? "team-search-mcp" : "report-writer"}
+                      />
+                    </div>
+                    <div className="field">
+                      <label htmlFor="reg-desc">{t("registry.register.description")}</label>
+                      <input
+                        id="reg-desc"
+                        className="input"
+                        value={regDesc}
+                        onChange={(e) => setRegDesc(e.target.value)}
+                      />
+                    </div>
+                  </>
+                )}
                 {regType === "MCP" ? (
                   <div className="field">
                     <label htmlFor="reg-url">{t("registry.register.url")}</label>
@@ -421,31 +480,33 @@ export function Registry() {
                     />
                   </div>
                 ) : (
-                  <div className="field">
-                    <label htmlFor="reg-md">{t("registry.register.skillMd")}</label>
-                    <textarea
-                      id="reg-md"
-                      className="input mono"
-                      style={{ minHeight: 160, resize: "vertical" }}
-                      value={regMd}
-                      onChange={(e) => setRegMd(e.target.value)}
-                      placeholder={"---\nname: report-writer\ndescription: …\n---\n# Instructions"}
-                    />
-                  </div>
+                  <SkillSourceForm
+                    source={regSource}
+                    onSourceChange={setRegSource}
+                    md={regMd}
+                    onMdChange={setRegMd}
+                    onImported={(record, name) =>
+                      void finishRegistration(record, name, "AGENT_SKILLS")
+                    }
+                  />
                 )}
-                <div className="note">
-                  <span className="i">[i]</span>
-                  <span>{t("registry.register.note")}</span>
-                </div>
-                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
-                  <Btn
-                    primary
-                    disabled={busy || !regValid}
-                    onClick={() => void submitRegistration()}
-                  >
-                    ▲ {t("registry.register.submit")}
-                  </Btn>
-                </div>
+                {(regType === "MCP" || regSource === "inline") && (
+                  <>
+                    <div className="note">
+                      <span className="i">[i]</span>
+                      <span>{t("registry.register.note")}</span>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
+                      <Btn
+                        primary
+                        disabled={busy || !regValid}
+                        onClick={() => void submitRegistration()}
+                      >
+                        ▲ {t("registry.register.submit")}
+                      </Btn>
+                    </div>
+                  </>
+                )}
               </div>
             )}
             {!registering && selected && (
@@ -468,6 +529,40 @@ export function Registry() {
                     <span className="v">{selected.updated_at?.slice(0, 19) ?? "—"}</span>
                   </div>
                 </div>
+                {skillMeta && (
+                  <div className="sect" data-testid="skill-bundle">
+                    {skillMeta.source && (
+                      <div className="kv">
+                        <span className="k">{t("registry.drawer.source")}</span>
+                        <span className="v">
+                          <Chip tone={SOURCE_CHIP_TONE[skillMeta.source.kind] ?? "muted"}>
+                            {skillMeta.source.kind}
+                          </Chip>
+                        </span>
+                      </div>
+                    )}
+                    {skillMeta.source?.url && (
+                      <div className="kv">
+                        <span className="k">{t("registry.drawer.sourceUrl")}</span>
+                        <span className="v">{skillMeta.source.url}</span>
+                      </div>
+                    )}
+                    {skillMeta.files.length > 0 && (
+                      <>
+                        <h4 style={{ marginTop: 10 }}>
+                          {t("registry.drawer.files", { n: skillMeta.files.length })}
+                        </h4>
+                        <div
+                          className="code"
+                          style={{ maxHeight: 160, overflowY: "auto" }}
+                          data-testid="skill-files"
+                        >
+                          {skillMeta.files.join("\n")}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
                 <div className="sect">
                   <h4>{t("registry.drawer.descriptor")}</h4>
                   <div className="code" style={{ maxHeight: 260, overflowY: "auto" }}>

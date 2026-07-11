@@ -6,10 +6,11 @@ registryRecordId.
 """
 
 import json
+from dataclasses import asdict, replace
+from datetime import UTC, datetime
 from typing import Any
 
 import boto3
-import yaml
 
 from app.core.config import REPO_ROOT, get_settings
 from app.core.errors import AppError
@@ -17,6 +18,19 @@ from app.models.ledger import Agent
 from app.services import mcp_client
 from app.services.agentcore import registry as reg
 from app.services.agentcore.client import control_client, data_client
+from app.services.skill_ingest import (
+    SKILL_MD_MAX_BYTES,
+    SKILL_NAME_RE,
+    SkillBundle,
+    SkillValidationError,
+    bundle_from_inline,
+    parse_frontmatter,
+    validate_bundle,
+)
+
+# Shared frontmatter parser lives in skill_ingest now; kept as a module-level
+# name for the existing callers (upload_skill_bundle) and tests.
+_parse_frontmatter = parse_frontmatter
 
 SKILLS_DIR = REPO_ROOT / "samples" / "skills"
 SKILL_NAME = "expense-report-writer"
@@ -82,16 +96,6 @@ def upload_skill_bundle(skill_name: str = SKILL_NAME) -> dict[str, Any]:
             "files": files,
         },
     }
-
-
-def _parse_frontmatter(markdown: str) -> dict[str, Any]:
-    if not markdown.startswith("---"):
-        return {}
-    try:
-        _, frontmatter, _ = markdown.split("---", 2)
-        return yaml.safe_load(frontmatter) or {}
-    except ValueError:
-        return {}
 
 
 def ensure_default_records() -> list[dict[str, Any]]:
@@ -272,35 +276,102 @@ def register_mcp_server(name: str, description: str, url: str) -> dict[str, Any]
     return reg.wait_record_settled(client, registry_id, record["recordId"])
 
 
-def register_skill(name: str, description: str, skill_md: str) -> dict[str, Any]:
-    """Register a skill from raw SKILL.md content: upload the bundle to the
-    artifacts bucket (the path a harness attaches via skills[{path}]), then
-    create the AGENT_SKILLS record. Starts in DRAFT."""
+def _utcnow_iso() -> str:
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def register_skill_bundle(
+    bundle: SkillBundle,
+    *,
+    name_override: str | None = None,
+    description_override: str | None = None,
+) -> dict[str, Any]:
+    """Register any acquired skill bundle: validate → reserve the name → upload
+    every file under ``bundle.root`` to ``skills/{name}/{rel}`` → create the
+    AGENT_SKILLS record with the real file list + provenance. Starts in DRAFT.
+
+    The single funnel every source (inline/zip and later git/url) converges on.
+    Best-effort: if record creation fails after upload, the uploaded objects are
+    deleted so no orphan S3 prefix is left behind.
+    """
+    name = (name_override or bundle.name or "").strip()
+    if not SKILL_NAME_RE.match(name):
+        raise SkillValidationError(
+            f"skill name '{name}' must match ^[a-z][a-z0-9-]{{2,63}}$ "
+            "(set it in SKILL.md frontmatter or provide an override)"
+        )
+    validate_bundle(bundle)
+
     client = control_client()
     registry_id = _registry_id()
     _require_new_name(client, registry_id, name, "AGENT_SKILLS")
+
     settings = get_settings()
     bucket = settings.resources.get("artifacts_bucket")
     if not bucket:
         raise RuntimeError("artifacts_bucket missing — run scripts/bootstrap.py")
-    boto3.client("s3", region_name=settings.region).put_object(
-        Bucket=bucket, Key=f"skills/{name}/SKILL.md",
-        Body=skill_md.encode("utf-8"), ContentType="text/markdown",
-    )
-    meta = _parse_frontmatter(skill_md)
+
+    prefix = f"skills/{name}/"
+    description = (description_override or bundle.description or "").strip()
+    source = replace(bundle.source, imported_at=_utcnow_iso())
     definition = {
         "name": name,
-        "description": description or meta.get("description", ""),
-        "version": str(meta.get("version", "1.0.0")),
-        "path": f"s3://{bucket}/skills/{name}/",
-        "files": ["SKILL.md"],
+        "description": description,
+        "version": bundle.version,
+        "path": f"s3://{bucket}/{prefix}",
+        "files": bundle.files,
+        "source": asdict(source),
     }
-    record, _ = reg.upsert_record(
-        client,
-        registry_id,
-        name=name,
-        description=definition["description"][:200],
-        descriptor_type="AGENT_SKILLS",
-        descriptors=reg.build_skills_descriptors(skill_md=skill_md, definition=definition),
-    )
-    return reg.wait_record_settled(client, registry_id, record["recordId"])
+    # skillDefinition.inlineContent has the same 102,400-byte AWS cap as skillMd;
+    # a large file list (many/long paths) could overflow it. Fail cleanly at the
+    # Launchpad layer *before* uploading, so no S3 objects are created (AC4/AC5).
+    definition_bytes = len(json.dumps(definition).encode("utf-8"))
+    if definition_bytes > SKILL_MD_MAX_BYTES:
+        raise SkillValidationError(
+            f"skill descriptor is {definition_bytes} bytes — exceeds the "
+            f"{SKILL_MD_MAX_BYTES} byte limit (too many files or paths too long)"
+        )
+
+    s3 = boto3.client("s3", region_name=settings.region)
+    uploaded: list[str] = []
+    try:
+        for rel in bundle.files:
+            key = f"{prefix}{rel}"
+            s3.upload_file(str(bundle.root / rel), bucket, key)
+            uploaded.append(key)
+
+        record, _ = reg.upsert_record(
+            client,
+            registry_id,
+            name=name,
+            description=(description or name)[:200],
+            descriptor_type="AGENT_SKILLS",
+            descriptors=reg.build_skills_descriptors(
+                skill_md=bundle.skill_md, definition=definition
+            ),
+        )
+        return reg.wait_record_settled(client, registry_id, record["recordId"])
+    except Exception:
+        _delete_keys(s3, bucket, uploaded)  # best-effort orphan cleanup
+        raise
+
+
+def _delete_keys(s3: Any, bucket: str, keys: list[str]) -> None:
+    for key in keys:
+        try:
+            s3.delete_object(Bucket=bucket, Key=key)
+        except Exception:  # cleanup must never mask the original failure
+            pass
+
+
+def register_skill(name: str, description: str, skill_md: str) -> dict[str, Any]:
+    """Register a skill from raw SKILL.md content (the console paste path). Thin
+    wrapper over ``register_skill_bundle`` via the inline acquirer — behaviour is
+    unchanged bar the additive ``source`` field in the descriptor."""
+    bundle = bundle_from_inline(skill_md)
+    try:
+        return register_skill_bundle(
+            bundle, name_override=name, description_override=description or None
+        )
+    finally:
+        bundle.close()

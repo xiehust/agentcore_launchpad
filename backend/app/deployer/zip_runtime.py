@@ -31,6 +31,7 @@ from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client
+from app.services.skill_ingest import SKILL_BUNDLE_MAX_BYTES
 from app.templates.strands_agent import base_requirements, render_main_py
 
 
@@ -96,7 +97,7 @@ def build_zip(
 # the runtime resolves that to Path(__file__).parent/"skills"/<name>. This is the
 # same emission pattern upstream extracts (agentcore_deployment_service.py).
 _SKILL_REF_RE = re.compile(r'os\.path\.join\(\s*_skills_dir\s*,\s*"([a-z0-9-]+)"\s*\)')
-_SKILL_BUNDLE_MAX_BYTES = 50 * 1024 * 1024  # per-skill cap (mirror upstream)
+_SKILL_BUNDLE_MAX_BYTES = SKILL_BUNDLE_MAX_BYTES  # shared with the ingest producer
 
 
 def extract_skill_names(code: str) -> list[str]:
