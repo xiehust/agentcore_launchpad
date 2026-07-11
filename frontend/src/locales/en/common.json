@@ -833,7 +833,12 @@
       "clearCanvas": "Clear canvas",
       "samples": "Samples",
       "publish": "Publish",
-      "rePublish": "Re-publish"
+      "rePublish": "Re-publish",
+      "runLocally": "Run locally",
+      "localChat": "Local chat",
+      "debugDisabled": "Fix the code generation errors to run locally.",
+      "regen": "Regenerate from flow",
+      "regenHint": "Discard the AI-fixed code and regenerate from the canvas."
     },
     "samples": {
       "title": "Sample gallery",
@@ -883,7 +888,9 @@
       "memoryValue": "short_term off · long_term off",
       "missingApiKey": "An OpenAI or Mantle node has no API key. Publish is still allowed — the key can be provisioned another way — but the agent will fail at runtime without it.",
       "errHasErrors": "Code generation has errors. Close and fix the flow.",
-      "errTooLarge": "Generated code is {{size}} chars, over the {{limit}} limit."
+      "errTooLarge": "Generated code is {{size}} chars, over the {{limit}} limit.",
+      "aiFixed": "Publishing AI-fixed code (not regenerated from the canvas).",
+      "aiFixedStale": "Publishing AI-fixed code; the canvas has changed since, so the saved flow graph may not match this code."
     },
     "confirmClear": {
       "title": "Clear canvas",
@@ -968,7 +975,9 @@
       "copied": "Copied",
       "download": "Download",
       "errorsHeader": "CODE GENERATION ERRORS",
-      "lines": "{{count}} lines"
+      "lines": "{{count}} lines",
+      "aiFixed": "AI-fixed",
+      "flowStale": "Flow changed"
     },
     "flow": {
       "graphMode": "Graph Mode",
@@ -1092,11 +1101,59 @@
       "skillEmptyHint": "Skills are sourced from APPROVED registry records. Register and approve skills in the Registry.",
       "manageInRegistry": "Manage in Registry",
       "noProps": "No properties available for this node type."
+    },
+    "debug": {
+      "tabCode": "Code",
+      "tabRun": "Run",
+      "tabChat": "Chat"
+    },
+    "exec": {
+      "inputLabel": "Input",
+      "inputPlaceholder": "Optional input passed to the agent…",
+      "run": "Run",
+      "stop": "Stop",
+      "outputEmpty": "Run to stream output here.",
+      "ok": "Completed in {{ms}} ms",
+      "failed": "Failed in {{ms}} ms",
+      "stopped": "Stopped",
+      "fixUnavailable": "AI Fix unavailable"
+    },
+    "chat": {
+      "title": "Local chat",
+      "localBadge": "LOCAL DEBUG",
+      "placeholder": "Message your agent…",
+      "send": "Send",
+      "stop": "Stop",
+      "newSession": "New session",
+      "creating": "Starting local session…",
+      "empty": "Send a message to run this flow locally.",
+      "you": "YOU",
+      "agent": "AGENT",
+      "streaming": "STREAMING",
+      "staleBanner": "This session is running older code. Start a new session to use the latest.",
+      "sessionErr": "Could not start local session: {{msg}}",
+      "codeSyncFailed": "Failed to sync fixed code to the session: {{msg}}"
+    },
+    "fix": {
+      "button": "AI Fix",
+      "fixing": "AI fixing…",
+      "failed": "AI fix failed",
+      "dismiss": "Dismiss",
+      "applied": "Code fixed by AI — re-run to verify.",
+      "appliedChat": "Code fixed — send your message again.",
+      "appliedToast": "AI fix applied to the active code.",
+      "diagnosis": "AI diagnosis",
+      "catCode": "CODE",
+      "catConfig": "CONFIG",
+      "catEnv": "ENVIRONMENT",
+      "suggNodeProp": "Node ‘{{label}}’ → {{property}}: {{action}}",
+      "suggNode": "Node ‘{{label}}’: {{action}}"
     }
   },
   "common": {
     "cancel": "Cancel",
     "loading": "LOADING ▸",
-    "actionFailed": "Action failed: {{msg}}"
+    "actionFailed": "Action failed: {{msg}}",
+    "close": "Close"
   }
 }

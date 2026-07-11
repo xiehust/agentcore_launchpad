@@ -6,11 +6,14 @@ import type { Edge, Node } from "@xyflow/react";
 import { Btn, Chip, ConfirmDialog, LaunchSequence, Panel, useToast, ViewHead } from "../components";
 import type { AgentInfo, AgentSpecInput, DeploymentInfo, JobInfo } from "../lib/api";
 import { api, ApiError } from "../lib/api";
+import { ChatDrawer } from "../studio/ChatDrawer";
 import { CodePanel } from "../studio/CodePanel";
+import { ExecutionDrawer } from "../studio/ExecutionDrawer";
 import { FlowEditor } from "../studio/FlowEditor";
 import { NodePalette } from "../studio/NodePalette";
 import { PropertyPanel } from "../studio/PropertyPanel";
 import { generateStrandsAgentCode } from "../studio/lib/code-generator";
+import type { FlowData } from "../studio/lib/debug-client";
 import { MANTLE_PROVIDER } from "../studio/lib/models";
 import { SampleGallery } from "../studio/SampleGallery";
 import type { SampleFlow } from "../studio/lib/sample-flows";
@@ -25,6 +28,18 @@ interface StudioFlow {
   edges: Edge[];
   graphMode: boolean;
 }
+
+// Lifted code state: while `source==='template'` the code tracks the canvas;
+// once an AI fix is applied (`source==='ai'`) the code is locked against the
+// canvas and `flowStale` flags that the graph has since drifted from it.
+type CodeSource = "template" | "ai";
+interface CodeState {
+  code: string;
+  source: CodeSource;
+  flowStale: boolean;
+}
+
+type Drawer = "code" | "run" | "chat" | null;
 
 // Mirror of the generator's findConnectedAgent: the execution agent is the
 // agent/orchestrator/swarm reached from an input node, else the first one.
@@ -52,9 +67,21 @@ export function CreateAgentStudio() {
   const [edges, setEdges] = useState<Edge[]>([]);
   const [graphMode, setGraphMode] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [codeOpen, setCodeOpen] = useState(false);
+  const [drawer, setDrawer] = useState<Drawer>(null);
   const [showSamples, setShowSamples] = useState(false);
   const [pendingSample, setPendingSample] = useState<SampleFlow | null>(null);
+
+  // Lifted code state (template-generated vs AI-fixed) — drives the code drawer,
+  // the local-debug run/chat drawers, and the publish body.
+  const [codeState, setCodeState] = useState<CodeState>({
+    code: "",
+    source: "template",
+    flowStale: false,
+  });
+  // Keep the region mounted once opened so the chat session survives tab
+  // switches and drawer close (the backend session is in-memory).
+  const drawerOpenedRef = useRef(false);
+  if (drawer) drawerOpenedRef.current = true;
 
   // Edit-mode state
   const [editAgent, setEditAgent] = useState<AgentInfo | null>(null);
@@ -79,6 +106,30 @@ export function CreateAgentStudio() {
     [nodes, edges, graphMode],
   );
   const fullCode = genResult.imports.join("\n") + "\n\n" + genResult.code;
+
+  // ── lifted code-state machine (canvas ↔ template ↔ AI-fixed) ──
+  const codeSourceRef = useRef<CodeSource>(codeState.source);
+  codeSourceRef.current = codeState.source;
+  useEffect(() => {
+    if (codeSourceRef.current === "template") {
+      setCodeState({ code: fullCode, source: "template", flowStale: false });
+    } else {
+      // AI-fixed code is locked against the canvas; flag drift, don't overwrite.
+      setCodeState((prev) => (prev.flowStale ? prev : { ...prev, flowStale: true }));
+    }
+  }, [fullCode]);
+
+  // Applied by the AI-fix flow (execution/chat drawers). Always applies here —
+  // there is no manual editing in the native canvas, so nothing to overwrite.
+  const applyFixedCode = useCallback((code: string): boolean => {
+    setCodeState((prev) => ({ code, source: "ai", flowStale: prev.flowStale }));
+    return true;
+  }, []);
+
+  const regenerateFromFlow = () => {
+    setCodeState({ code: fullCode, source: "template", flowStale: false });
+  };
+
   // OpenAI and Mantle both import `openai` at the top level (only in the
   // [openai] extra); the extra also pulls the Bedrock token generator Mantle
   // auth needs. Caching / thinking / skills need no extra requirement.
@@ -122,6 +173,19 @@ export function CreateAgentStudio() {
     };
   }, [nodes]);
 
+  // Flow graph + API keys handed to the local-debug drawers (run/chat/fix).
+  const flowData = useMemo<FlowData>(
+    () => ({
+      nodes: nodes as unknown as Record<string, unknown>[],
+      edges: edges as unknown as Record<string, unknown>[],
+    }),
+    [nodes, edges],
+  );
+  const debugApiKeys = useMemo(
+    () => ({ openai_api_key: publishEnv.OPENAI_API_KEY, bedrock_api_key: publishEnv.BEDROCK_API_KEY }),
+    [publishEnv],
+  );
+
   // ── edit mode: load the stored flow (or fall back for external-app agents) ──
   useEffect(() => {
     if (!editAgentId) return;
@@ -148,7 +212,7 @@ export function CreateAgentStudio() {
           setNoFlowNotice(true);
           if (typeof spec.code === "string") {
             setReadonlyCode(spec.code);
-            setCodeOpen(true);
+            setDrawer("code");
           }
         }
       })
@@ -261,10 +325,14 @@ export function CreateAgentStudio() {
     }
   };
 
+  // AI-fixed code is validated by the fix pipeline, so the generation-error
+  // gate only applies while the code still tracks the canvas (source template).
+  const publishBlockedByErrors = codeState.source === "template" && genResult.errors.length > 0;
+
   const openPublish = () => {
-    if (genResult.errors.length > 0) {
+    if (publishBlockedByErrors) {
       toast(t("studio.toast.fixErrors"));
-      setCodeOpen(true);
+      setDrawer("code");
       return;
     }
     setPublishErr(null);
@@ -273,14 +341,14 @@ export function CreateAgentStudio() {
 
   const doPublish = async () => {
     setPublishErr(null);
-    if (genResult.errors.length > 0) {
+    if (publishBlockedByErrors) {
       setPublishErr(t("studio.publish.errHasErrors"));
       return;
     }
-    if (fullCode.length > MAX_CODE) {
+    if (codeState.code.length > MAX_CODE) {
       setPublishErr(
         t("studio.publish.errTooLarge", {
-          size: fullCode.length.toLocaleString(),
+          size: codeState.code.length.toLocaleString(),
           limit: MAX_CODE.toLocaleString(),
         }),
       );
@@ -294,7 +362,7 @@ export function CreateAgentStudio() {
       name,
       method: "studio",
       system_prompt: systemPrompt,
-      code: fullCode,
+      code: codeState.code,
       memory: { short_term: false, long_term: false },
       studio_flow: { nodes, edges, graphMode },
       ...(extraReqs.length ? { requirements: extraReqs } : {}),
@@ -324,6 +392,8 @@ export function CreateAgentStudio() {
   const nameValid = editing || NAME_RE.test(publishName);
   const canPublish = nodes.length > 0;
   const showReadonly = noFlowNotice && nodes.length === 0 && readonlyCode !== null;
+  // Local debug needs a flow that generates valid code (or an already-applied fix).
+  const canRunLocally = !showReadonly && nodes.length > 0 && !publishBlockedByErrors;
 
   // ── launch view (replaces the canvas once a publish is in flight) ──
   if (launch) {
@@ -395,11 +465,34 @@ export function CreateAgentStudio() {
             {t("studio.toolbar.rePublishChip", { name: editAgent?.name ?? "" })}
           </Chip>
         )}
-        <div style={{ marginLeft: "auto", display: "flex", gap: 10 }}>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 10, flexWrap: "wrap" }}>
           <Btn onClick={() => setShowSamples(true)}>▦ {t("studio.toolbar.samples")}</Btn>
-          <Btn onClick={() => setCodeOpen((v) => !v)}>
-            {codeOpen ? t("studio.toolbar.hideCode") : t("studio.toolbar.generateCode")}
+          <Btn onClick={() => setDrawer((v) => (v === "code" ? null : "code"))}>
+            {drawer === "code" ? t("studio.toolbar.hideCode") : t("studio.toolbar.generateCode")}
           </Btn>
+          {!showReadonly && (
+            <>
+              <Btn
+                onClick={() => setDrawer("run")}
+                disabled={!canRunLocally}
+                title={canRunLocally ? undefined : t("studio.toolbar.debugDisabled")}
+              >
+                ▷ {t("studio.toolbar.runLocally")}
+              </Btn>
+              <Btn
+                onClick={() => setDrawer("chat")}
+                disabled={!canRunLocally}
+                title={canRunLocally ? undefined : t("studio.toolbar.debugDisabled")}
+              >
+                ◈ {t("studio.toolbar.localChat")}
+              </Btn>
+            </>
+          )}
+          {codeState.source === "ai" && (
+            <Btn onClick={regenerateFromFlow} title={t("studio.toolbar.regenHint")}>
+              ⟲ {t("studio.toolbar.regen")}
+            </Btn>
+          )}
           <Btn onClick={() => setConfirmClear(true)} disabled={nodes.length === 0 && edges.length === 0}>
             {t("studio.toolbar.clearCanvas")}
           </Btn>
@@ -443,20 +536,78 @@ export function CreateAgentStudio() {
         )}
       </div>
 
-      {codeOpen && (
-        <>
-          <div style={{ height: 14 }} />
-          {showReadonly ? (
-            <Panel title={t("studio.readonly.title")} sub={t("studio.readonly.sub")}>
-              <pre className="code" style={{ maxHeight: 420, overflow: "auto", margin: 0 }}>
-                {readonlyCode}
-              </pre>
-            </Panel>
-          ) : (
-            <CodePanel nodes={nodes} edges={edges} graphMode={graphMode} />
+      {showReadonly
+        ? drawer === "code" && (
+            <>
+              <div style={{ height: 14 }} />
+              <Panel title={t("studio.readonly.title")} sub={t("studio.readonly.sub")}>
+                <pre className="code" style={{ maxHeight: 420, overflow: "auto", margin: 0 }}>
+                  {readonlyCode}
+                </pre>
+              </Panel>
+            </>
+          )
+        : (drawer !== null || drawerOpenedRef.current) && (
+            <>
+              <div style={{ height: 14 }} />
+              <div className="studio-debug" style={{ display: drawer ? undefined : "none" }}>
+                <div className="studio-debug-tabs">
+                  <button
+                    className={`studio-debug-tab${drawer === "code" ? " on" : ""}`}
+                    onClick={() => setDrawer("code")}
+                  >
+                    {t("studio.debug.tabCode")}
+                  </button>
+                  <button
+                    className={`studio-debug-tab${drawer === "run" ? " on" : ""}`}
+                    onClick={() => setDrawer("run")}
+                  >
+                    {t("studio.debug.tabRun")}
+                  </button>
+                  <button
+                    className={`studio-debug-tab${drawer === "chat" ? " on" : ""}`}
+                    onClick={() => setDrawer("chat")}
+                  >
+                    {t("studio.debug.tabChat")}
+                  </button>
+                  <button
+                    className="studio-debug-x"
+                    onClick={() => setDrawer(null)}
+                    title={t("common.close")}
+                  >
+                    ✕
+                  </button>
+                </div>
+                <div className="studio-debug-pane" hidden={drawer !== "code"}>
+                  <CodePanel
+                    code={codeState.code}
+                    errors={genResult.errors}
+                    source={codeState.source}
+                    flowStale={codeState.flowStale}
+                  />
+                </div>
+                <div className="studio-debug-pane" hidden={drawer !== "run"}>
+                  <ExecutionDrawer
+                    code={codeState.code}
+                    flowData={flowData}
+                    graphMode={graphMode}
+                    apiKeys={debugApiKeys}
+                    onApplyFixedCode={applyFixedCode}
+                  />
+                </div>
+                <div className="studio-debug-pane" hidden={drawer !== "chat"}>
+                  <ChatDrawer
+                    active={drawer === "chat"}
+                    code={codeState.code}
+                    flowData={flowData}
+                    graphMode={graphMode}
+                    apiKeys={debugApiKeys}
+                    onApplyFixedCode={applyFixedCode}
+                  />
+                </div>
+              </div>
+            </>
           )}
-        </>
-      )}
 
       {publishOpen && (
         <div className="confirm-backdrop" onClick={() => setPublishOpen(false)}>
@@ -500,8 +651,8 @@ export function CreateAgentStudio() {
               <span className="k">{t("studio.publish.generatedCode")}</span>
               <span className="v">
                 {t("studio.publish.codeStat", {
-                  chars: fullCode.length.toLocaleString(),
-                  lines: fullCode.split("\n").length,
+                  chars: codeState.code.length.toLocaleString(),
+                  lines: codeState.code.split("\n").length,
                 })}
               </span>
             </div>
@@ -515,6 +666,28 @@ export function CreateAgentStudio() {
               <span className="k">{t("studio.publish.memory")}</span>
               <span className="v">{t("studio.publish.memoryValue")}</span>
             </div>
+
+            {codeState.source === "ai" && (
+              <div
+                className="note"
+                style={{
+                  borderColor: codeState.flowStale ? "var(--amber)" : "var(--s1)",
+                  marginTop: 12,
+                }}
+              >
+                <span
+                  className="i"
+                  style={{ color: codeState.flowStale ? "var(--amber)" : "var(--s1)" }}
+                >
+                  [✦]
+                </span>
+                <span>
+                  {codeState.flowStale
+                    ? t("studio.publish.aiFixedStale")
+                    : t("studio.publish.aiFixed")}
+                </span>
+              </div>
+            )}
 
             {missingApiKey && (
               <div className="note" style={{ borderColor: "var(--amber)", marginTop: 12 }}>

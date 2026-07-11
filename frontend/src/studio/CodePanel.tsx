@@ -1,29 +1,27 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import Editor from '@monaco-editor/react';
-import { type Node, type Edge } from '@xyflow/react';
 import { Code, Download, Copy, AlertCircle } from 'lucide-react';
-import { Btn } from '../components';
-import { generateStrandsAgentCode } from './lib/code-generator';
+import { Btn, Chip } from '../components';
 
 interface CodePanelProps {
-  nodes: Node[];
-  edges: Edge[];
-  graphMode?: boolean;
+  // The active code from the lifted CodeState (template-generated or AI-fixed).
+  code: string;
+  errors: string[];
+  source?: 'template' | 'ai';
+  flowStale?: boolean;
   className?: string;
 }
 
-export function CodePanel({ nodes, edges, graphMode = false, className = '' }: CodePanelProps) {
+export function CodePanel({
+  code,
+  errors,
+  source = 'template',
+  flowStale = false,
+  className = '',
+}: CodePanelProps) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
-
-  const { code, errors } = useMemo(() => {
-    const result = generateStrandsAgentCode(nodes, edges, graphMode);
-    return {
-      code: result.imports.join('\n') + '\n\n' + result.code,
-      errors: result.errors,
-    };
-  }, [nodes, edges, graphMode]);
 
   const handleDownload = () => {
     const blob = new Blob([code], { type: 'text/plain' });
@@ -54,6 +52,16 @@ export function CodePanel({ nodes, edges, graphMode = false, className = '' }: C
       <div className="studio-code-head">
         <Code size={14} style={{ color: 'var(--amber)' }} />
         <h3>{t('studio.code.title')}</h3>
+        {source === 'ai' && (
+          <Chip tone="blue" icon="✦">
+            {t('studio.code.aiFixed')}
+          </Chip>
+        )}
+        {flowStale && (
+          <Chip tone="warn" icon="⚠">
+            {t('studio.code.flowStale')}
+          </Chip>
+        )}
         <div className="studio-code-actions">
           <Btn onClick={handleCopy}>
             <Copy size={12} /> {copied ? t('studio.code.copied') : t('studio.code.copy')}

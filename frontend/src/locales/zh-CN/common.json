@@ -833,7 +833,12 @@
       "clearCanvas": "清空画布",
       "samples": "示例",
       "publish": "发布",
-      "rePublish": "重新发布"
+      "rePublish": "重新发布",
+      "runLocally": "本地运行",
+      "localChat": "本地对话",
+      "debugDisabled": "请先修复代码生成错误再本地运行。",
+      "regen": "从画布重新生成",
+      "regenHint": "丢弃 AI 修复的代码,从画布重新生成。"
     },
     "samples": {
       "title": "示例画廊",
@@ -883,7 +888,9 @@
       "memoryValue": "short_term 关 · long_term 关",
       "missingApiKey": "存在未填写 API 密钥的 OpenAI 或 Mantle 节点。仍允许发布(密钥可通过其他方式配置),但缺少密钥时 Agent 将在运行时失败。",
       "errHasErrors": "代码生成存在错误。请关闭并修正流程。",
-      "errTooLarge": "生成的代码为 {{size}} 字符,超出 {{limit}} 上限。"
+      "errTooLarge": "生成的代码为 {{size}} 字符,超出 {{limit}} 上限。",
+      "aiFixed": "正在发布 AI 修复的代码(未从画布重新生成)。",
+      "aiFixedStale": "正在发布 AI 修复的代码;此后画布已变更,保存的流程图可能与该代码不一致。"
     },
     "confirmClear": {
       "title": "清空画布",
@@ -968,7 +975,9 @@
       "copied": "已复制",
       "download": "下载",
       "errorsHeader": "代码生成错误",
-      "lines": "{{count}} 行"
+      "lines": "{{count}} 行",
+      "aiFixed": "AI 已修复",
+      "flowStale": "画布已变更"
     },
     "flow": {
       "graphMode": "图模式",
@@ -1092,11 +1101,59 @@
       "skillEmptyHint": "技能来源于已批准的注册表记录。请在注册表中注册并批准技能。",
       "manageInRegistry": "在注册表中管理",
       "noProps": "该节点类型没有可配置的属性。"
+    },
+    "debug": {
+      "tabCode": "代码",
+      "tabRun": "运行",
+      "tabChat": "对话"
+    },
+    "exec": {
+      "inputLabel": "输入",
+      "inputPlaceholder": "传给 agent 的可选输入…",
+      "run": "运行",
+      "stop": "停止",
+      "outputEmpty": "运行后此处显示流式输出。",
+      "ok": "耗时 {{ms}} 毫秒完成",
+      "failed": "耗时 {{ms}} 毫秒失败",
+      "stopped": "已停止",
+      "fixUnavailable": "AI 修复不可用"
+    },
+    "chat": {
+      "title": "本地对话",
+      "localBadge": "本地调试",
+      "placeholder": "给你的 agent 发消息…",
+      "send": "发送",
+      "stop": "停止",
+      "newSession": "新会话",
+      "creating": "正在启动本地会话…",
+      "empty": "发送消息以在本地运行该流程。",
+      "you": "你",
+      "agent": "智能体",
+      "streaming": "流式",
+      "staleBanner": "该会话正在运行较旧的代码。开始新会话以使用最新代码。",
+      "sessionErr": "无法启动本地会话:{{msg}}",
+      "codeSyncFailed": "无法将修复后的代码同步到会话:{{msg}}"
+    },
+    "fix": {
+      "button": "AI 修复",
+      "fixing": "AI 修复中…",
+      "failed": "AI 修复失败",
+      "dismiss": "关闭",
+      "applied": "AI 已修复代码 —— 请重新运行以验证。",
+      "appliedChat": "代码已修复 —— 请重新发送你的消息。",
+      "appliedToast": "AI 修复已应用到当前代码。",
+      "diagnosis": "AI 诊断",
+      "catCode": "代码",
+      "catConfig": "配置",
+      "catEnv": "环境",
+      "suggNodeProp": "节点‘{{label}}’ → {{property}}:{{action}}",
+      "suggNode": "节点‘{{label}}’:{{action}}"
     }
   },
   "common": {
     "cancel": "取消",
     "loading": "加载中 ▸",
-    "actionFailed": "操作失败:{{msg}}"
+    "actionFailed": "操作失败:{{msg}}",
+    "close": "关闭"
   }
 }

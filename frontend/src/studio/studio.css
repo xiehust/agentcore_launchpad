@@ -450,13 +450,13 @@
   cursor: pointer;
 }
 
-/* ---- code panel (bottom drawer) ---- */
+/* ---- code panel (fills a debug-region tab pane) ---- */
 .studio-codepanel {
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--line);
   background: var(--panel);
-  height: 420px;
+  min-height: 0;
+  width: 100%;
 }
 .studio-code-head {
   display: flex;
@@ -613,4 +613,309 @@
   .studio-prop {
     display: none;
   }
+}
+
+/* ================= local-debug region (Code / Run / Chat tabs) =================
+   A single bottom drawer that switches between the read-only code view and the
+   two local-debug surfaces (subprocess run + multi-turn chat). The region stays
+   mounted once opened (display:none when closed) so the chat session survives. */
+.studio-debug {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  height: 468px;
+}
+.studio-debug-tabs {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--line);
+  padding: 0 6px;
+  flex: none;
+}
+.studio-debug-tab {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  padding: 12px 14px;
+  cursor: pointer;
+}
+.studio-debug-tab:hover {
+  color: var(--ink-2);
+}
+.studio-debug-tab.on {
+  color: var(--amber);
+  border-bottom-color: var(--amber);
+}
+.studio-debug-x {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+  padding: 0 12px;
+}
+.studio-debug-x:hover {
+  color: var(--ink);
+}
+.studio-debug-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+/* `hidden` alone loses to `display:flex` above — force it back. */
+.studio-debug-pane[hidden] {
+  display: none;
+}
+.studio-debug-pane > * {
+  flex: 1;
+  min-height: 0;
+}
+
+/* ---- execution drawer (subprocess run + streamed stdout) ---- */
+.studio-exec {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  overflow-y: auto;
+}
+.studio-exec-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.studio-exec-lbl {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.studio-exec-input {
+  resize: vertical;
+  min-height: 42px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.studio-exec-outwrap {
+  flex: 1;
+  min-height: 120px;
+  display: flex;
+}
+.studio-exec-out {
+  flex: 1;
+  margin: 0;
+  overflow: auto;
+  background: #0e1210;
+  border: 1px solid var(--line-2);
+  padding: 11px 13px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--ink-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.studio-exec-empty {
+  color: var(--ink-3);
+}
+.studio-exec-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* ---- AI fix panel (progress log + applied notice + diagnosis card) ---- */
+.studio-fix {
+  border: 1px solid var(--line-2);
+}
+.studio-fix-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 11px;
+  background: var(--panel-2);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+.studio-fix-dismiss {
+  border: 0;
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.studio-fix-dismiss:hover {
+  color: var(--ink);
+}
+.studio-fix-events {
+  max-height: 150px;
+  overflow: auto;
+  padding: 8px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.studio-fix-ev {
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--ink-2);
+  word-break: break-word;
+}
+.studio-fix-ev.k-activity {
+  color: var(--ink-3);
+}
+.studio-fix-ev.k-validation,
+.studio-fix-ev.k-error {
+  color: var(--crit-text);
+}
+.studio-fix-applied {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(63, 185, 80, 0.35);
+  background: rgba(63, 185, 80, 0.08);
+  font-size: 12.5px;
+  color: var(--ink-2);
+  line-height: 1.5;
+}
+.studio-fix-diag {
+  border: 1px solid var(--line-2);
+  padding: 11px 13px;
+  margin-top: 10px;
+}
+.studio-fix-diag-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.studio-fix-diag-lbl {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.studio-fix-diag-sum {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  line-height: 1.5;
+  margin: 0 0 8px;
+}
+.studio-fix-diag-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.studio-fix-diag-list li {
+  font-size: 11.5px;
+  color: var(--ink-2);
+  line-height: 1.45;
+  padding-left: 12px;
+  position: relative;
+  word-break: break-word;
+}
+.studio-fix-diag-list li::before {
+  content: "•";
+  position: absolute;
+  left: 0;
+  color: var(--amber);
+}
+
+/* ---- chat drawer (LOCAL DEBUG multi-turn conversation) ---- */
+.studio-chat {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.studio-chat-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  flex: none;
+  flex-wrap: wrap;
+}
+.studio-chat-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.studio-chat-new {
+  margin-left: auto;
+}
+.studio-chat-stale {
+  display: flex;
+  gap: 8px;
+  padding: 8px 14px;
+  background: var(--amber-soft);
+  border-bottom: 1px solid rgba(255, 176, 0, 0.25);
+  font-size: 11px;
+  color: var(--ink-2);
+  flex: none;
+}
+.studio-chat-notice {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: 11.5px;
+  color: var(--ink-2);
+  flex: none;
+}
+.studio-chat-thread {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+}
+.studio-chat-empty {
+  text-align: center;
+  padding: 28px 12px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-3);
+  letter-spacing: 0.05em;
+}
+.studio-chat-fixrow {
+  border-top: 1px solid var(--line);
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-start;
+  flex: none;
+}
+.studio-chat-inputbar {
+  display: flex;
+  gap: 10px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--line);
+  flex: none;
+}
+.studio-chat-inputbar .input {
+  flex: 1;
 }
