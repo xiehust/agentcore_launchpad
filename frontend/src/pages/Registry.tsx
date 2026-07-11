@@ -109,6 +109,8 @@ export function Registry() {
   const [confirmDisable, setConfirmDisable] = useState<RegistryRecord | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<RegistryRecord | null>(null);
   const [registering, setRegistering] = useState(false);
+  const [reimporting, setReimporting] = useState(false);
+  const [reimportError, setReimportError] = useState<string | null>(null);
   const [regType, setRegType] = useState<"MCP" | "AGENT_SKILLS">("MCP");
   const [regSource, setRegSource] = useState<RegSource>("inline");
   const [regName, setRegName] = useState("");
@@ -150,6 +152,7 @@ export function Registry() {
 
   const select = async (record: RegistryRecord) => {
     setRegistering(false);
+    setReimportError(null);
     setSelected(record);
     try {
       const res = await fetch(`/api/registry/records/${record.record_id}`);
@@ -179,6 +182,30 @@ export function Registry() {
       toast(t("common.actionFailed", { msg: String(err) }));
     } finally {
       setBusy(false);
+    }
+  };
+
+  // re-run the ingestion pipeline from a git/url skill record's stored source:
+  // re-acquire → re-upload S3 → bump recordVersion. Refreshes the drawer + list.
+  const reimport = async (record: RegistryRecord) => {
+    setReimporting(true);
+    setReimportError(null);
+    try {
+      const res = await fetch(`/api/registry/records/${record.record_id}/reimport`, {
+        method: "POST",
+      });
+      const body = (await res.json().catch(() => ({}))) as RegistryRecord & { message?: string };
+      if (!res.ok) {
+        setReimportError(t("registry.drawer.reimportFailed", { msg: body.message ?? `HTTP ${res.status}` }));
+        return;
+      }
+      setSelected(body);
+      toast(t("registry.drawer.reimportOk", { name: body.name }));
+      void load();
+    } catch (err) {
+      setReimportError(t("registry.drawer.reimportFailed", { msg: String(err) }));
+    } finally {
+      setReimporting(false);
     }
   };
 
@@ -339,6 +366,7 @@ export function Registry() {
               primary={!registering}
               onClick={() => {
                 setSelected(null);
+                setReimportError(null);
                 setRegistering((v) => !v);
                 setRegSource("inline");
                 if (tab !== "A2A") setRegType(tab);
@@ -579,6 +607,19 @@ export function Registry() {
                       {t("registry.drawer.useInNewAgent")}
                     </Btn>
                   )}
+                  {selected.type === "AGENT_SKILLS" &&
+                    (skillMeta?.source?.kind === "git" || skillMeta?.source?.kind === "url") &&
+                    selected.status !== "DEPRECATED" && (
+                      <Btn
+                        disabled={busy || reimporting}
+                        onClick={() => void reimport(selected)}
+                        data-testid="reimport-btn"
+                      >
+                        {reimporting
+                          ? t("registry.drawer.reimporting")
+                          : t("registry.drawer.reimport")}
+                      </Btn>
+                    )}
                   {selected.status === "DRAFT" && (
                     <Btn disabled={busy} onClick={() => void action(selected, "submit")}>
                       {t("registry.drawer.submit")}
@@ -608,6 +649,18 @@ export function Registry() {
                     {t("registry.drawer.delete")}
                   </Btn>
                 </div>
+                {reimportError && (
+                  <div className="sect" style={{ borderBottom: 0, paddingTop: 0 }}>
+                    <div
+                      className="note"
+                      style={{ color: "var(--crit)", borderColor: "var(--crit)" }}
+                      data-testid="reimport-error"
+                    >
+                      <span className="i">!</span>
+                      <span>{reimportError}</span>
+                    </div>
+                  </div>
+                )}
               </>
             )}
           </Panel>

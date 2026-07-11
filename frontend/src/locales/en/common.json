@@ -227,7 +227,11 @@
       "approve": "APPROVE · PUBLISH",
       "disable": "DISABLE",
       "reject": "REJECT",
-      "delete": "DELETE"
+      "delete": "DELETE",
+      "reimport": "RE-IMPORT FROM SOURCE",
+      "reimporting": "Re-importing…",
+      "reimportOk": "“{{name}}” re-imported from source.",
+      "reimportFailed": "Re-import failed: {{msg}}"
     },
     "confirmDisable": {
       "title": "Disable record",
@@ -279,7 +283,12 @@
       "gitInstalling": "Installing…",
       "gitInstallOk": "git installed ({{version}}).",
       "gitInstallFailed": "Auto-install failed: {{msg}}",
-      "gitInstallHint": "Install git on the server manually (click the command to copy):"
+      "gitInstallHint": "Install git on the server manually (click the command to copy):",
+      "urlInput": "SKILL.MD OR .ZIP URL · https",
+      "urlFetch": "FETCH",
+      "urlFetching": "Fetching…",
+      "urlInvalid": "Enter a valid https:// URL.",
+      "urlNoSkill": "No SKILL.md found at the URL."
     },
     "deleted": "“{{name}}” deleted.",
     "confirmDelete": {

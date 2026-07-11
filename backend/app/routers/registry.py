@@ -202,6 +202,8 @@ def _acquire_source(source: dict[str, Any]) -> list[SkillBundle]:
             subdir=source.get("subdir") or None,
             token=source.get("token") or None,
         )
+    if kind == "url":
+        return [si.bundle_from_url(source.get("url") or "")]
     raise AppError(
         "registry.invalid_source",
         f"unsupported skill source '{kind}'",
@@ -312,6 +314,16 @@ def install_git() -> dict[str, Any]:
     server state — only called from the capabilities UI button). No-ops with a
     hint when the server lacks the privilege to install."""
     return si.install_git()
+
+
+@router.post("/records/{record_id}/reimport")
+def reimport_record(record_id: str) -> dict[str, Any]:
+    """Re-run the ingestion pipeline for a git/url-sourced skill: re-acquire from
+    the stored source, replace the S3 prefix, and bump the record version. Returns
+    the updated record (same shape as GET). inline/zip records (no retrievable
+    origin) and DEPRECATED records return 400 ``registry.not_reimportable``; a
+    failed re-acquire/validation returns 422 ``registry.skill_invalid``."""
+    return _record_out(console.reimport_skill(record_id))
 
 
 @router.delete("/records/{record_id}")

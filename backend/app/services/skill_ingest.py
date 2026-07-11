@@ -16,10 +16,12 @@ only ``inline`` and ``zip`` are implemented here.
 """
 
 import io
+import ipaddress
 import logging
 import os
 import re
 import shutil
+import socket
 import stat
 import subprocess
 import zipfile
@@ -198,6 +200,10 @@ def bundles_from_git(
     """
     if not url or not str(url).startswith(_ALLOWED_GIT_SCHEMES):
         raise SkillValidationError("git import requires an https:// repository URL")
+    # SSRF parity with the url/archive paths; file:// (tests-only scheme) has no
+    # host to judge, so the guard applies to real https URLs only.
+    if str(url).startswith("https://"):
+        _assert_public_url(url)
 
     tmp = TemporaryDirectory(prefix="skill-git-")
     try:
@@ -211,6 +217,80 @@ def bundles_from_git(
     except BaseException:
         tmp.cleanup()
         raise
+
+
+def bundle_from_url(url: str) -> SkillBundle:
+    """Acquire a single skill bundle from a direct https URL.
+
+    The body is downloaded with a 60s timeout and the per-skill 50MB cap (this
+    is one skill bundle, not a repo). A zip response — detected by content-type,
+    a ``.zip`` path, or the ``PK\\x03\\x04`` magic — goes through the same safe
+    extractor as an upload; anything else is treated as raw ``SKILL.md`` text
+    (utf-8; an undecodable body is rejected). The stored source is stamped
+    ``kind="url"`` regardless of which branch produced the files.
+    """
+    if not url or not url.startswith("https://"):
+        raise SkillValidationError("url import requires an https:// URL")
+    data, content_type = _fetch_url(url, max_bytes=SKILL_BUNDLE_MAX_BYTES)
+    if _looks_like_zip(url, content_type, data):
+        bundle = bundle_from_zip(data)  # per-skill caps apply (it IS one bundle)
+    else:
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise SkillValidationError(
+                "URL body is neither a zip archive nor valid UTF-8 SKILL.md text"
+            ) from exc
+        bundle = bundle_from_inline(text)
+    bundle.source = SkillSource(kind="url", url=url)
+    return bundle
+
+
+def bundle_from_source(source: dict[str, Any]) -> SkillBundle:
+    """Reconstruct a single owned bundle from a stored ``skillDefinition.source``
+    dict (reimport path). ``url`` sources fetch afresh; ``git`` sources re-clone
+    and, because ``source.subdir`` pins the recorded skill's directory in a
+    monorepo, resolve to exactly one bundle (the one rooted at that subdir)."""
+    kind = source.get("kind")
+    url = source.get("url") or ""
+    if kind == "url":
+        return bundle_from_url(url)
+    if kind == "git":
+        subdir = source.get("subdir") or None
+        bundles = bundles_from_git(url=url, ref=source.get("ref") or None, subdir=subdir)
+        return _single_bundle(bundles, subdir)
+    raise SkillValidationError(f"cannot reimport a '{kind}' source")
+
+
+def _single_bundle(bundles: list[SkillBundle], subdir: str | None) -> SkillBundle:
+    """Pick the one bundle a reimport expects. Zero → error (defensive; the
+    scanner normally raises first). Several → the one rooted at the recorded
+    subdir wins; staging-dir ownership is moved onto it so ``close()`` still
+    tears the whole shared tree down exactly once."""
+    if not bundles:
+        raise SkillValidationError("no skill found at the recorded source")
+    if len(bundles) == 1:
+        return bundles[0]
+    chosen = next((b for b in bundles if (b.source.subdir or None) == subdir), None)
+    if chosen is None:
+        for b in bundles:
+            b.close()
+        raise SkillValidationError(
+            "recorded source resolves to multiple skills — cannot reimport unambiguously"
+        )
+    for b in bundles:  # transfer staging ownership onto the chosen bundle
+        if b is not chosen and b._tmp is not None:
+            chosen._tmp, b._tmp = b._tmp, None
+    return chosen
+
+
+def _looks_like_zip(url: str, content_type: str, data: bytes) -> bool:
+    ct = (content_type or "").lower()
+    if "application/zip" in ct or "application/x-zip" in ct:
+        return True
+    if urlparse(url).path.lower().endswith(".zip"):
+        return True
+    return data[:4] == b"PK\x03\x04"
 
 
 # ---------- validation ----------
@@ -494,26 +574,97 @@ def _archive_request(
     return url, headers
 
 
-def _download_archive(
-    url: str, headers: dict[str, str], max_bytes: int = SKILL_BUNDLE_MAX_BYTES
-) -> bytes:
-    """Stream an archive with a 60s timeout, aborting once ``max_bytes`` bytes
-    have arrived (streamed cap, not post-hoc)."""
-    buf = bytearray()
+_BLOCKED_URL_HOSTS = ("localhost", "metadata.google.internal")
+
+
+def _assert_public_url(url: str) -> None:
+    """SSRF guard for the url acquirer + archive fallback: refuse non-web schemes
+    and hosts that resolve to a non-public address (loopback, RFC1918 private,
+    link-local incl. the 169.254.169.254 cloud-metadata endpoint, reserved,
+    multicast). The host is *resolved* and the ACTUAL IPs judged so decimal/hex/
+    IPv6 encodings and DNS names pointing at private ranges can't slip through.
+    Mirrors ``routers/tools._validate_demo_url``. Applied on the initial request
+    and every redirect hop (see :class:`_GuardingTransport`); not a complete
+    defense (a DNS-rebinding TOCTOU window remains) — proportionate for a single
+    -tenant lab tool."""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme not in ("http", "https") or not host:
+        raise SkillValidationError(f"refusing to fetch a non-web URL: {url}")
+    if host in _BLOCKED_URL_HOSTS or host.endswith(".internal"):
+        raise SkillValidationError(f"refusing to fetch from an internal host: {host}")
     try:
-        with httpx.stream(
-            "GET", url, headers=headers, timeout=60.0, follow_redirects=True
-        ) as resp:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+        addresses = [ipaddress.ip_address(info[4][0]) for info in infos]
+    except (OSError, ValueError):
+        addresses = []  # unresolvable — let the download itself fail
+    if any(
+        ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+        or ip.is_multicast or ip.is_unspecified
+        for ip in addresses
+    ):
+        raise SkillValidationError(
+            f"refusing to fetch from a non-public address (host '{host}')"
+        )
+
+
+class _GuardingTransport(httpx.BaseTransport):
+    """Wraps the default transport so :func:`_assert_public_url` runs on the
+    initial request AND every redirect hop — httpx routes each hop through the
+    transport, so this closes the redirect-based SSRF that a one-shot pre-check
+    would miss, while keeping ``follow_redirects=True`` (the github→codeload
+    archive redirect still works)."""
+
+    def __init__(self, inner: httpx.BaseTransport) -> None:
+        self._inner = inner
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        _assert_public_url(str(request.url))
+        return self._inner.handle_request(request)
+
+    def close(self) -> None:
+        self._inner.close()
+
+
+def _stream_download(
+    url: str, headers: dict[str, str], max_bytes: int
+) -> tuple[bytes, str]:
+    """Stream a GET with a 60s timeout, aborting once ``max_bytes`` bytes have
+    arrived (streamed cap, not post-hoc). Every request hop is SSRF-guarded via
+    the guarding transport. Returns (body, content-type)."""
+    buf = bytearray()
+    content_type = ""
+    try:
+        transport = _GuardingTransport(httpx.HTTPTransport())
+        with httpx.Client(
+            timeout=60.0, follow_redirects=True, transport=transport
+        ) as client, client.stream("GET", url, headers=headers) as resp:
             resp.raise_for_status()
+            content_type = resp.headers.get("content-type", "")
             for chunk in resp.iter_bytes(_CHUNK):
                 buf.extend(chunk)
                 if len(buf) > max_bytes:
                     raise SkillValidationError(
-                        f"archive exceeds the {max_bytes} byte limit"
+                        f"download exceeds the {max_bytes} byte limit"
                     )
     except httpx.HTTPError as exc:
-        raise SkillValidationError(f"failed to download archive: {exc}") from exc
-    return bytes(buf)
+        raise SkillValidationError(f"failed to download: {exc}") from exc
+    return bytes(buf), content_type
+
+
+def _download_archive(
+    url: str, headers: dict[str, str], max_bytes: int = SKILL_BUNDLE_MAX_BYTES
+) -> bytes:
+    """Download a repo archive zip; content-type is irrelevant here (always a
+    zip), so only the bytes are returned."""
+    data, _ = _stream_download(url, headers, max_bytes)
+    return data
+
+
+def _fetch_url(url: str, max_bytes: int = SKILL_BUNDLE_MAX_BYTES) -> tuple[bytes, str]:
+    """Downloader seam for the url acquirer — returns (body, content-type) so
+    ``bundle_from_url`` can tell a zip archive from a raw SKILL.md."""
+    return _stream_download(url, {}, max_bytes)
 
 
 def _inject_token(url: str, token: str | None) -> str:

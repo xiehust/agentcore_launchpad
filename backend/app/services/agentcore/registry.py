@@ -116,8 +116,13 @@ def upsert_record(
     description: str,
     descriptor_type: str,
     descriptors: dict[str, Any],
+    record_version: str | None = None,
 ) -> tuple[dict[str, Any], bool]:
-    """Create the record or refresh its descriptors. Returns (record, created)."""
+    """Create the record or refresh its descriptors. Returns (record, created).
+
+    ``record_version`` is only meaningful on the update branch (reimport bumps it
+    to a fresh revision, e.g. ``1.1.0``); create always starts at ``1.0.0``.
+    """
     existing = find_record(client, registry_id, name, descriptor_type)
     if existing is None:
         created = client.create_registry_record(
@@ -131,12 +136,15 @@ def upsert_record(
         # CreateRegistryRecord returns only {recordArn, status}
         record_id = created["recordArn"].split("/")[-1]
         return {**created, "recordId": record_id}, True
-    updated = client.update_registry_record(
-        registryId=registry_id,
-        recordId=existing["recordId"],
-        description={"optionalValue": description},
-        descriptors=wrap_descriptors_for_update(descriptors),
-    )
+    kwargs: dict[str, Any] = {
+        "registryId": registry_id,
+        "recordId": existing["recordId"],
+        "description": {"optionalValue": description},
+        "descriptors": wrap_descriptors_for_update(descriptors),
+    }
+    if record_version is not None:
+        kwargs["recordVersion"] = record_version
+    updated = client.update_registry_record(**kwargs)
     return updated, False
 
 

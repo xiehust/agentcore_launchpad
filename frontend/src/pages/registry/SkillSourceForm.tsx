@@ -35,6 +35,7 @@ interface ImportResponse {
 }
 
 const NAME_RE = /^[a-z][a-z0-9-]{2,63}$/;
+const URL_RE = /^https:\/\/.+/i;
 
 interface SkillSourceFormProps {
   source: RegSource;
@@ -50,7 +51,7 @@ const SOURCES: { key: RegSource; labelKey: string; enabled: boolean }[] = [
   { key: "inline", labelKey: "registry.register.sourceInline", enabled: true },
   { key: "zip", labelKey: "registry.register.sourceZip", enabled: true },
   { key: "git", labelKey: "registry.register.sourceGit", enabled: true },
-  { key: "url", labelKey: "registry.register.sourceUrl", enabled: false },
+  { key: "url", labelKey: "registry.register.sourceUrl", enabled: true },
 ];
 
 export function SkillSourceForm({
@@ -71,8 +72,9 @@ export function SkillSourceForm({
   const [importing, setImporting] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
   const [itemError, setItemError] = useState<string | null>(null);
+  const [urlInput, setUrlInput] = useState("");
 
-  const resetZip = useCallback(() => {
+  const resetStaged = useCallback(() => {
     setStagingId(null);
     setPreview(null);
     setEditName("");
@@ -81,13 +83,16 @@ export function SkillSourceForm({
     setImporting(false);
     setFileError(null);
     setItemError(null);
+    setUrlInput("");
     if (fileRef.current) fileRef.current.value = "";
   }, []);
 
-  // leaving the zip source clears any staged preview so re-entering starts fresh
+  // switching source clears any staged preview so each branch starts fresh.
+  // zip and url share the staging state + preview card, so leaving either
+  // (or hopping between them) must reset before the next acquire.
   useEffect(() => {
-    if (source !== "zip") resetZip();
-  }, [source, resetZip]);
+    resetStaged();
+  }, [source, resetStaged]);
 
   const handlePick = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -149,7 +154,7 @@ export function SkillSourceForm({
       });
       if (res.status === 410) {
         setFileError(t("registry.register.previewExpired"));
-        resetZip();
+        resetStaged();
         return;
       }
       const body = (await res.json().catch(() => ({}))) as ImportResponse & { message?: string };
@@ -169,6 +174,126 @@ export function SkillSourceForm({
       setImporting(false);
     }
   };
+
+  // url branch: acquire a single skill from a raw SKILL.md or .zip URL, then
+  // hand off to the exact same preview card + import flow as zip.
+  const runUrlInspect = async () => {
+    const u = urlInput.trim();
+    if (!URL_RE.test(u)) return;
+    setFileError(null);
+    setItemError(null);
+    setPreview(null);
+    setStagingId(null);
+    setInspecting(true);
+    try {
+      const res = await fetch("/api/registry/skills/inspect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source: { kind: "url", url: u } }),
+      });
+      if (res.status === 410) {
+        setFileError(t("registry.register.previewExpired"));
+        return;
+      }
+      const body = (await res.json().catch(() => ({}))) as InspectResponse & { message?: string };
+      if (!res.ok) {
+        setFileError(body.message ?? `HTTP ${res.status}`);
+        return;
+      }
+      const skill = body.skills?.[0];
+      if (!skill) {
+        setFileError(t("registry.register.urlNoSkill"));
+        return;
+      }
+      setStagingId(body.staging_id);
+      setPreview(skill);
+      setEditName(skill.name ?? "");
+      setEditDesc(skill.description ?? "");
+    } catch (err) {
+      setFileError(String(err));
+    } finally {
+      setInspecting(false);
+    }
+  };
+
+  const trimmedUrl = urlInput.trim();
+  // backend/fetch error wins; else flag a locally-invalid (non-https) url
+  const urlErrorMsg =
+    fileError ?? (trimmedUrl && !URL_RE.test(trimmedUrl) ? t("registry.register.urlInvalid") : null);
+
+  // shared preview card — reached from both the zip upload and the url fetch,
+  // so its testids stay `zip-*`/`import-btn` for both flows
+  const previewCard = preview && (
+    <div data-testid="zip-preview">
+      <div className="field">
+        <label htmlFor="zip-name">{t("registry.register.name")}</label>
+        <input
+          id="zip-name"
+          className="input mono"
+          value={editName}
+          onChange={(e) => setEditName(e.target.value)}
+          data-testid="zip-name-input"
+        />
+      </div>
+      <div className="field">
+        <label htmlFor="zip-desc">{t("registry.register.description")}</label>
+        <input
+          id="zip-desc"
+          className="input"
+          value={editDesc}
+          onChange={(e) => setEditDesc(e.target.value)}
+          data-testid="zip-desc-input"
+        />
+      </div>
+      <div className="kv">
+        <span className="k">{t("registry.register.zipVersion")}</span>
+        <span className="v">{preview.version || "—"}</span>
+      </div>
+      <div className="field" style={{ marginTop: 10 }}>
+        <label>{t("registry.register.zipFiles", { n: preview.files.length })}</label>
+        <div
+          className="code"
+          style={{ maxHeight: 160, overflowY: "auto" }}
+          data-testid="zip-files"
+        >
+          {preview.files.join("\n")}
+        </div>
+      </div>
+      {(!preview.valid || preview.errors.length > 0) && (
+        <div
+          className="note"
+          style={{ color: "var(--crit)", borderColor: "var(--crit)" }}
+          data-testid="zip-validation"
+        >
+          <span className="i">!</span>
+          <span>{preview.errors.join("; ") || t("registry.register.invalidBundle")}</span>
+        </div>
+      )}
+      {itemError && (
+        <div
+          className="note"
+          style={{ marginTop: 10, color: "var(--crit)", borderColor: "var(--crit)" }}
+          data-testid="import-error"
+        >
+          <span className="i">!</span>
+          <span>{itemError}</span>
+        </div>
+      )}
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 9, marginTop: 12 }}>
+        <Btn disabled={importing} onClick={resetStaged} data-testid="zip-reset-btn">
+          {t("registry.register.zipReset")}
+        </Btn>
+        <Btn
+          primary
+          disabled={importing || !preview.valid || !nameValid}
+          onClick={() => void runImport()}
+          data-testid="import-btn"
+        >
+          ▲ {t("registry.register.submit")}
+        </Btn>
+      </div>
+    </div>
+  );
 
   return (
     <div className="field" data-testid="skill-source-form">
@@ -233,87 +358,51 @@ export function SkillSourceForm({
               )}
             </div>
           )}
-
-          {preview && (
-            <div data-testid="zip-preview">
-              <div className="field">
-                <label htmlFor="zip-name">{t("registry.register.name")}</label>
-                <input
-                  id="zip-name"
-                  className="input mono"
-                  value={editName}
-                  onChange={(e) => setEditName(e.target.value)}
-                  data-testid="zip-name-input"
-                />
-              </div>
-              <div className="field">
-                <label htmlFor="zip-desc">{t("registry.register.description")}</label>
-                <input
-                  id="zip-desc"
-                  className="input"
-                  value={editDesc}
-                  onChange={(e) => setEditDesc(e.target.value)}
-                  data-testid="zip-desc-input"
-                />
-              </div>
-              <div className="kv">
-                <span className="k">{t("registry.register.zipVersion")}</span>
-                <span className="v">{preview.version || "—"}</span>
-              </div>
-              <div className="field" style={{ marginTop: 10 }}>
-                <label>{t("registry.register.zipFiles", { n: preview.files.length })}</label>
-                <div
-                  className="code"
-                  style={{ maxHeight: 160, overflowY: "auto" }}
-                  data-testid="zip-files"
-                >
-                  {preview.files.join("\n")}
-                </div>
-              </div>
-              {(!preview.valid || preview.errors.length > 0) && (
-                <div
-                  className="note"
-                  style={{ color: "var(--crit)", borderColor: "var(--crit)" }}
-                  data-testid="zip-validation"
-                >
-                  <span className="i">!</span>
-                  <span>{preview.errors.join("; ") || t("registry.register.invalidBundle")}</span>
-                </div>
-              )}
-              {itemError && (
-                <div
-                  className="note"
-                  style={{ marginTop: 10, color: "var(--crit)", borderColor: "var(--crit)" }}
-                  data-testid="import-error"
-                >
-                  <span className="i">!</span>
-                  <span>{itemError}</span>
-                </div>
-              )}
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: 9, marginTop: 12 }}>
-                <Btn disabled={importing} onClick={resetZip} data-testid="zip-reset-btn">
-                  {t("registry.register.zipReset")}
-                </Btn>
-                <Btn
-                  primary
-                  disabled={importing || !preview.valid || !nameValid}
-                  onClick={() => void runImport()}
-                  data-testid="import-btn"
-                >
-                  ▲ {t("registry.register.submit")}
-                </Btn>
-              </div>
-            </div>
-          )}
+          {previewCard}
         </div>
       )}
 
       {source === "git" && <GitSourcePanel onImported={onImported} />}
 
       {source === "url" && (
-        <div className="note" style={{ marginTop: 14 }} data-testid="source-placeholder">
-          <span className="i">[i]</span>
-          <span>{t("registry.register.comingSoonBody")}</span>
+        <div style={{ marginTop: 14 }}>
+          {!preview && (
+            <div>
+              <div className="field">
+                <label htmlFor="reg-url-src">{t("registry.register.urlInput")}</label>
+                <input
+                  id="reg-url-src"
+                  className="input mono"
+                  value={urlInput}
+                  onChange={(e) => setUrlInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && URL_RE.test(trimmedUrl) && void runUrlInspect()}
+                  placeholder="https://example.com/SKILL.md · https://example.com/bundle.zip"
+                  data-testid="url-input"
+                />
+              </div>
+              <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 10 }}>
+                <Btn
+                  primary
+                  disabled={inspecting || !URL_RE.test(trimmedUrl)}
+                  onClick={() => void runUrlInspect()}
+                  data-testid="url-fetch-btn"
+                >
+                  {inspecting ? t("registry.register.urlFetching") : t("registry.register.urlFetch")}
+                </Btn>
+              </div>
+              {urlErrorMsg && (
+                <div
+                  className="note"
+                  style={{ marginTop: 10, color: "var(--crit)", borderColor: "var(--crit)" }}
+                  data-testid="url-error"
+                >
+                  <span className="i">!</span>
+                  <span>{urlErrorMsg}</span>
+                </div>
+              )}
+            </div>
+          )}
+          {previewCard}
         </div>
       )}
     </div>

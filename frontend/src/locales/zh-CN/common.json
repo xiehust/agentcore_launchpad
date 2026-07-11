@@ -227,7 +227,11 @@
       "approve": "批准 · 发布",
       "disable": "停用",
       "reject": "驳回",
-      "delete": "删除"
+      "delete": "删除",
+      "reimport": "从来源重新导入",
+      "reimporting": "重新导入中……",
+      "reimportOk": "已从来源重新导入“{{name}}”。",
+      "reimportFailed": "重新导入失败：{{msg}}"
     },
     "confirmDisable": {
       "title": "停用记录",
@@ -279,7 +283,12 @@
       "gitInstalling": "安装中……",
       "gitInstallOk": "git 已安装（{{version}}）。",
       "gitInstallFailed": "自动安装失败：{{msg}}",
-      "gitInstallHint": "请在服务器上手动安装 git（点击命令可复制）："
+      "gitInstallHint": "请在服务器上手动安装 git（点击命令可复制）：",
+      "urlInput": "SKILL.MD 或 .ZIP 的 URL · https",
+      "urlFetch": "拉取",
+      "urlFetching": "拉取中……",
+      "urlInvalid": "请输入有效的 https:// URL。",
+      "urlNoSkill": "该 URL 未找到 SKILL.md。"
     },
     "deleted": "已删除“{{name}}”。",
     "confirmDelete": {

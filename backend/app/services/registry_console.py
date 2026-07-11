@@ -24,6 +24,7 @@ from app.services.skill_ingest import (
     SkillBundle,
     SkillValidationError,
     bundle_from_inline,
+    bundle_from_source,
     parse_frontmatter,
     validate_bundle,
 )
@@ -375,3 +376,141 @@ def register_skill(name: str, description: str, skill_md: str) -> dict[str, Any]
         )
     finally:
         bundle.close()
+
+
+def _bump_minor(version: str) -> str:
+    """Bump the minor component of a dotted version (``1.0.0`` → ``1.1.0``). A
+    version whose major/minor don't parse resets to a clean bumped baseline
+    rather than failing the reimport."""
+    parts = (version or "").split(".")
+    try:
+        major = int(parts[0])
+    except (ValueError, IndexError):
+        return "1.1.0"
+    try:
+        minor = int(parts[1])
+    except (ValueError, IndexError):
+        minor = 0
+    return f"{major}.{minor + 1}.0"
+
+
+def _delete_prefix(s3: Any, bucket: str, prefix: str) -> None:
+    """Delete every object under ``prefix`` (paginated list, not a single call —
+    a bundle can exceed one list page). Used before a reimport re-upload so files
+    removed at the source don't linger in S3."""
+    keys: list[str] = []
+    for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
+        keys.extend(obj["Key"] for obj in page.get("Contents", []))
+    _delete_keys(s3, bucket, keys)
+
+
+def reimport_skill(record_id: str) -> dict[str, Any]:
+    """Re-run the ingestion pipeline for a git/url-sourced skill record: re-acquire
+    from the stored provenance, replace the whole S3 prefix, and update the record
+    with a bumped ``recordVersion`` and a refreshed ``imported_at``.
+
+    Only git/url records carry a retrievable origin — inline/zip records raise
+    ``registry.not_reimportable`` (400), as do DEPRECATED records (terminal). The
+    record's registered name is kept even if the source's frontmatter name
+    changed, since the S3 prefix and record identity are keyed by name. Private
+    git repos have no persisted token, so a private reimport surfaces the (token-
+    redacted) clone/download error — accepted by design.
+    """
+    client = control_client()
+    registry_id = _registry_id()
+    record = reg.get_record(client, registry_id, record_id)
+    if record.get("status") == "DEPRECATED":
+        raise AppError(
+            "registry.not_reimportable",
+            "a DEPRECATED record is terminal and cannot be reimported",
+            status_code=400,
+        )
+    name = (record.get("name") or "").strip()
+    try:
+        old_definition = json.loads(
+            record["descriptors"]["agentSkills"]["skillDefinition"]["inlineContent"]
+        )
+    except (KeyError, ValueError, TypeError) as exc:
+        raise AppError(
+            "registry.not_reimportable",
+            "record has no readable skill descriptor to reimport",
+            status_code=400,
+        ) from exc
+    source = old_definition.get("source") or {}
+    kind = source.get("kind")
+    if kind not in ("git", "url"):
+        raise AppError(
+            "registry.not_reimportable",
+            f"only git/url-sourced skills can be reimported (source kind: {kind or 'none'})",
+            status_code=400,
+        )
+
+    bundle = bundle_from_source(source)
+    try:
+        return _reupload_and_update(client, registry_id, record, name, bundle)
+    finally:
+        bundle.close()
+
+
+def _reupload_and_update(
+    client: Any,
+    registry_id: str,
+    record: dict[str, Any],
+    name: str,
+    bundle: SkillBundle,
+) -> dict[str, Any]:
+    """Validate the re-acquired bundle, clear the old S3 prefix, upload the fresh
+    files, and update the record (bumped recordVersion, refreshed provenance)."""
+    if not SKILL_NAME_RE.match(name):
+        raise SkillValidationError(f"record name '{name}' is not a valid skill name")
+    validate_bundle(bundle)
+
+    settings = get_settings()
+    bucket = settings.resources.get("artifacts_bucket")
+    if not bucket:
+        raise RuntimeError("artifacts_bucket missing — run scripts/bootstrap.py")
+
+    prefix = f"skills/{name}/"
+    description = (record.get("description") or bundle.description or "").strip()
+    source = replace(bundle.source, imported_at=_utcnow_iso())
+    new_version = _bump_minor(record.get("recordVersion") or "1.0.0")
+    definition = {
+        "name": name,
+        "description": description,
+        "version": bundle.version,
+        "path": f"s3://{bucket}/{prefix}",
+        "files": bundle.files,
+        "source": asdict(source),
+    }
+    definition_bytes = len(json.dumps(definition).encode("utf-8"))
+    if definition_bytes > SKILL_MD_MAX_BYTES:
+        raise SkillValidationError(
+            f"skill descriptor is {definition_bytes} bytes — exceeds the "
+            f"{SKILL_MD_MAX_BYTES} byte limit (too many files or paths too long)"
+        )
+
+    s3 = boto3.client("s3", region_name=settings.region)
+    # Clear the old prefix FIRST so files dropped at the source don't linger, then
+    # upload the fresh set. Unlike the create path we deliberately do NOT roll back
+    # the upload if the record update later fails: the record already exists and
+    # points at this prefix, so the freshly uploaded files are the correct contents
+    # to leave behind (the consumer downloads the whole prefix, not the descriptor's
+    # file list). Rolling them back would strand the live record over an empty
+    # prefix — strictly worse. A failed update leaves only stale descriptor
+    # metadata (version/files/imported_at), corrected on the next reimport.
+    _delete_prefix(s3, bucket, prefix)
+    for rel in bundle.files:
+        key = f"{prefix}{rel}"
+        s3.upload_file(str(bundle.root / rel), bucket, key)
+    reg.upsert_record(
+        client,
+        registry_id,
+        name=name,
+        description=(description or name)[:200],
+        descriptor_type="AGENT_SKILLS",
+        descriptors=reg.build_skills_descriptors(
+            skill_md=bundle.skill_md, definition=definition
+        ),
+        record_version=new_version,
+    )
+    return reg.wait_record_settled(client, registry_id, record["recordId"])

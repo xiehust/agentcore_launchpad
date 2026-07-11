@@ -131,6 +131,13 @@ def test_git_rejects_non_https():
             si.bundles_from_git(bad)
 
 
+def test_git_rejects_non_public_host():
+    # SSRF parity with the url acquirer: cloud-metadata / loopback hosts refused
+    for bad in ("https://169.254.169.254/repo.git", "https://127.0.0.1/o/r"):
+        with pytest.raises(si.SkillValidationError):
+            si.bundles_from_git(bad)
+
+
 # ---------- token redaction ----------
 
 def test_git_clone_redacts_token_on_failure(tmp_path, monkeypatch):
@@ -347,8 +354,9 @@ def test_inspect_git_source_json_branch(client, monkeypatch):
 
 
 def test_inspect_unsupported_source_kind_400(client):
+    # "url" is a supported kind now (P2); a genuinely unknown kind still 400s.
     res = client.post(
-        "/api/registry/skills/inspect", json={"source": {"kind": "url", "url": "x"}}
+        "/api/registry/skills/inspect", json={"source": {"kind": "svn", "url": "x"}}
     )
     assert res.status_code == 400
     assert res.json()["code"] == "registry.invalid_source"
