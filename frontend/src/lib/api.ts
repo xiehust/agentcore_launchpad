@@ -59,6 +59,10 @@ export interface AgentSpecInput {
   tools?: { type: string; name: string; config?: Record<string, unknown> }[];
   skills?: string[];
   memory?: { short_term: boolean; long_term: boolean };
+  code?: string;
+  requirements?: string[];
+  env?: Record<string, string>;
+  studio_flow?: { nodes: unknown[]; edges: unknown[]; graphMode: boolean };
 }
 
 export class ApiError extends Error {

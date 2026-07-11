@@ -40,6 +40,8 @@ class AgentSpec(BaseModel):
     requirements: list[str] = Field(default_factory=list)
     # pre-generated agent code (studio method) — bypasses the strands template
     code: str | None = Field(default=None, max_length=200000)
+    # Strands Studio canvas graph {nodes, edges, graphMode} — persisted for later edit/re-publish
+    studio_flow: dict[str, Any] | None = None
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     env: dict[str, str] = Field(default_factory=dict)
     max_iterations: int = Field(default=10, ge=1, le=100)
