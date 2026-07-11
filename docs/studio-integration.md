@@ -1,13 +1,22 @@
 # Strands Studio Integration / Studio 集成
 
 Strands Studio (方式C) is the platform's visual creation method: a
-drag-and-drop canvas that generates Strands Agent SDK code, vendored as a
-sub-app under `apps/studio/` and rewired so its one-click deploy lands in the
-platform's unified pipeline, ledger and registry.
+drag-and-drop canvas that generates Strands Agent SDK code. It exists in two
+forms:
+
+1. **Native canvas (paved path, 2026-07-11)** — `/create/studio` inside the
+   platform frontend (`frontend/src/pages/CreateAgentStudio.tsx` +
+   `frontend/src/studio/`). Fully bilingual, publishes through
+   `POST /api/agents`, persists the flow graph for edit/re-publish. See
+   [Native canvas](#native-canvas--原生画布) below.
+2. **Vendored standalone app** — `apps/studio/` (port 5273, own backend
+   :8100), kept as-is for standalone use; its Launchpad deploy section still
+   works but does not persist a flow graph.
 
 Strands Studio(方式C)是平台的可视化创建方式:拖拽式画布生成 Strands Agent
-SDK 代码,以子应用形式集成在 `apps/studio/`,其一键部署已改接平台统一的
-部署管道、台账与注册表。
+SDK 代码。现有两种形态:平台内置的原生画布 `/create/studio`(主路径,双语、
+经 `POST /api/agents` 发布、持久化画布图以支持再编辑);以及保留的独立子应用
+`apps/studio/`(维持原样,可独立使用,但不持久化画布图)。
 
 ## Provenance / 来源
 
@@ -90,17 +99,114 @@ generated import line always references.
 | studio backend | 8100 | `STUDIO_API_PORT` |
 | studio frontend | 5273 | `STUDIO_UI_PORT` |
 
-Cross-navigation: the platform's Create Agent 方式C card links to studio
-(`VITE_STUDIO_URL`, default `http://localhost:5273`); studio's topbar has
-"← Launchpad" back to the platform.
+Cross-navigation: the platform's Create Agent 方式C card links to the NATIVE
+canvas (`/create/studio`, internal route — `VITE_STUDIO_URL` is no longer used
+by the platform frontend); studio's topbar has "← Launchpad" back to the
+platform.
 
 ## i18n exception / 国际化例外
 
-The studio UI itself stays English-only — it is a vendored third-party app and
-forking every string would defeat the small-diff rule. Only the platform-side
-方式C strings (method card, badges, link) are bilingual. This is the declared
-vendored-app exception to the platform's i18n parity rule.
+Only the vendored `apps/studio/` app stays English-only (third-party code,
+small-diff rule). The NATIVE canvas is a first-class platform page and is
+fully bilingual (`studio.*` namespace, en + zh-CN parity enforced by
+`scripts/verify.sh`).
 
-Studio 界面本身保持英文——它是第三方 vendored 应用,全量翻译会违背"最小改动"
-原则。仅平台侧的方式C文案(方法卡片、徽标、链接)为双语,此为 i18n 平价规则
-中已声明的 vendored 应用例外。
+仅 vendored 的 `apps/studio/` 保持英文(第三方代码、最小改动原则)。原生画布
+是平台一等页面,完整双语(`studio.*` 命名空间,en 与 zh-CN 平价由
+`scripts/verify.sh` 校验)。
+
+## Native canvas / 原生画布
+
+Code-spec for the native canvas publish contract (task
+`07-11-strands-studio-canvas`; research + design in that task dir).
+
+### 1. Scope / Trigger
+
+Cross-layer contract: the canvas page composes a flow, generates Strands code
+client-side, and publishes via the platform API. One additive schema field
+(`AgentSpec.studio_flow`) carries the graph for later edit/re-publish.
+
+### 2. Signatures
+
+- Frontend codegen (pure, no IO): `generateStrandsAgentCode(nodes: Node[],
+  edges: Edge[], graphMode = false) → { code: string; imports: string[];
+  errors: string[] }` (`frontend/src/studio/lib/code-generator.ts`).
+  Final file = `imports.join('\n') + '\n\n' + code`. `errors.length > 0 ⇒
+  code === ''` and publish must be blocked.
+- API: `POST /api/agents` (create) / `POST /api/agents/{id}/redeploy`
+  (re-publish; `name` and `method` immutable — backend 400s on change).
+- Schema: `AgentSpec.studio_flow: dict | None = None`
+  (`backend/app/schemas/agent.py`) — stored verbatim inside the `Agent.spec`
+  JSON column; every pipeline stage ignores it.
+
+### 3. Contracts
+
+Publish body assembled by `CreateAgentStudio.tsx`:
+
+| Field | Value | Constraint |
+| --- | --- | --- |
+| `name` | user input (locked on re-publish) | `^[a-z][a-z0-9-]{2,47}$` |
+| `method` | `"studio"` | fixed |
+| `system_prompt` | execution agent's systemPrompt (the agent/orchestrator/swarm reached from the input node), fallback `"Strands Studio generated agent"` | trimmed to 20000; doubles as the registry A2A card description |
+| `code` | `imports + '\n\n' + code` | ≤ 200000 chars (client-checked; schema max) |
+| `requirements` | `["strands-agents[openai]"]` iff any node `data.modelProvider === 'OpenAI'`, else omitted | base reqs + mem0 extra come from the backend, never sent by the client |
+| `memory` | `{short_term: false, long_term: false}` | generated code manages no launchpad memory |
+| `studio_flow` | `{nodes, edges, graphMode}` (React Flow arrays verbatim) | round-trips into edit mode |
+
+Edit mode (`/create/studio?agent=<id>`): `GET /api/agents/{id}` →
+`spec.studio_flow` restores the canvas. Studio agents WITHOUT `studio_flow`
+(published by `apps/studio/`) degrade: banner + read-only `spec.code`, publish
+disabled until a flow exists.
+
+### 4. Validation & Error Matrix
+
+| Condition | Behavior |
+| --- | --- |
+| generation `errors[]` non-empty | toast + code drawer opens; publish blocked |
+| name fails regex | publish button disabled |
+| full code > 200000 chars | toast error, no POST |
+| invalid canvas connection | `onInvalidConnection` callback → toast (never `alert()`) |
+| redeploy with changed name/method | backend 400 (client locks name field instead) |
+| `?agent=` id missing/non-studio | toast + redirect `/create` |
+
+### 5. Good/Base/Bad Cases
+
+- Good: input+agent+tool+output flow → publish → `active`, chat/eval work
+  (verified end-to-end 2026-07-11, agent `studio-canvas-e2e`).
+- Base: agent-only edits (prompt/model) re-published to the same ARN, new
+  runtime version, revision +1.
+- Bad: flow without an input or output node → generator returns errors, code
+  empty, publish blocked.
+
+### 6. Tests Required
+
+- `scripts/verify.sh` (backend ruff/pytest, frontend eslint/tsc/build, i18n
+  parity) — the standing gate.
+- E2E (manual/browser): canvas build → publish → LaunchSequence completes →
+  chat responds → eval run completes → edit restores flow → re-publish.
+- Round-trip assertion: `GET /api/agents/{id}` echoes `spec.studio_flow`
+  with the exact `{nodes, edges, graphMode}` that was posted.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+Editing a studio agent through the wizard (`startEdit` → `buildSpec()`):
+`buildSpec()` does not carry `code`, so redeploy would silently replace the
+canvas-generated module with template code.
+
+#### Correct
+
+`CreateAgent.tsx` routes Edit for `method === "studio"` to
+`/create/studio?agent=<id>`; the canvas regenerates `code` from the restored
+flow and posts it together with the updated `studio_flow`.
+
+### Porting invariants / 移植不变量
+
+`frontend/src/studio/lib/*` are copied VERBATIM from `apps/studio/src/lib/`
+(eslint-ignored, still tsc-checked) with exactly one documented deviation: the
+`file_write` tool mapping fix (import line + tool map in both generators).
+When re-vendoring upstream, re-apply that deviation. Node components must
+preserve every React Flow Handle `id`/`type`/`Position` and every node `data`
+key + destructuring default — the generators read them. Styling is launchpad
+CSS tokens only (namespaced `studio.css`); no Tailwind.
