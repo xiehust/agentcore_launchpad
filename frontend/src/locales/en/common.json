@@ -911,6 +911,10 @@
       "customTool": {
         "name": "Custom Tool",
         "desc": "Define custom tools with Python code"
+      },
+      "skill": {
+        "name": "Skill Node",
+        "desc": "Attach a Studio skill from the registry to agents"
       }
     },
     "nodeCard": {
@@ -931,6 +935,9 @@
       "command": "Command:",
       "url": "URL:",
       "inputDesc": "Connects user input to agents",
+      "skill": "Skill:",
+      "skillUnset": "not selected",
+      "skillSelectHint": "Select a skill in the property panel",
       "deleteTitle": "Delete node"
     },
     "code": {
@@ -953,6 +960,13 @@
       "modelProvider": "Model provider",
       "model": "Model",
       "modelNamePlaceholder": "Enter model name (e.g., gpt-4o, gpt-3.5-turbo)",
+      "customModelOption": "Custom model ID…",
+      "customModelPlaceholder": "e.g. us.anthropic.claude-sonnet-5",
+      "mantleRegion": "Region",
+      "mantleModelPlaceholder": "e.g. xai.grok-4.3",
+      "bedrockApiKey": "Bedrock API key",
+      "bedrockApiKeyPlaceholder": "Enter your Bedrock API key",
+      "bedrockApiKeyHint": "Stored as the BEDROCK_API_KEY environment variable",
       "apiKey": "API key",
       "apiKeyPlaceholder": "Enter your OpenAI API key",
       "apiKeyHint": "API key will be stored securely as OPENAI_API_KEY environment variable",
@@ -963,12 +977,18 @@
       "temperatureLocked": "Temperature is locked to 1.0 when thinking is enabled (Bedrock only)",
       "advancedSettings": "Advanced settings",
       "enableThinking": "Enable thinking",
-      "thinkingHint": "Enable extended thinking for more complex reasoning",
-      "thinkingBudget": "Thinking budget tokens: {{value}}",
+      "thinkingHint": "Claude → adaptive thinking; GPT / Grok → reasoning effort",
+      "adaptiveThinkingNote": "Adaptive thinking — Claude decides thinking depth per request. Temperature is pinned to 1 while thinking is on.",
+      "promptCaching": "Prompt caching (Claude)",
+      "cacheConversation": "Cache conversation (auto)",
+      "cacheTools": "Cache tools",
+      "cachingHint": "Reuses cached prompt context across requests to cut cost and latency. Cache expires after ~5 min idle.",
       "reasoningEffort": "Reasoning effort",
       "effortLow": "Low",
       "effortMedium": "Medium",
       "effortHigh": "High",
+      "effortXHigh": "Extra High",
+      "effortMax": "Max",
       "enableStreaming": "Enable streaming",
       "streamingHintOn": "Stream responses in real-time for better user experience",
       "streamingHintOff": "Connect an Output node to enable streaming mode",
@@ -1032,6 +1052,17 @@
       "debugLogsHint": "Enable debug logging for graph execution",
       "optionalPlaceholder": "Optional",
       "noTimeoutHint": "Leave empty for no timeout",
+      "label": "Label",
+      "skillLabelPlaceholder": "Skill",
+      "skill": "Skill",
+      "skillSelectPlaceholder": "— Select a skill —",
+      "skillMissingOption": "{{name}} (not in registry)",
+      "skillMissingWarn": "Skill \"{{name}}\" is not an approved registry skill. Approve it in the registry or pick another.",
+      "skillRefresh": "Refresh skills",
+      "skillLoadError": "Skill registry unavailable.",
+      "skillTrustWarning": "Only attach skills you trust — skill instructions can direct the agent to run bundled scripts.",
+      "skillEmptyHint": "Skills are sourced from APPROVED registry records. Register and approve skills in the Registry.",
+      "manageInRegistry": "Manage in Registry",
       "noProps": "No properties available for this node type."
     }
   },

@@ -6,3 +6,4 @@ export { InputNode } from './input-node';
 export { OutputNode } from './output-node';
 export { CustomToolNode } from './custom-tool-node';
 export { MCPToolNode, type MCPToolNodeData } from './mcp-tool-node';
+export { SkillNode } from './skill-node';

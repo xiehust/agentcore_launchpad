@@ -911,6 +911,10 @@
       "customTool": {
         "name": "自定义工具",
         "desc": "用 Python 代码定义自定义工具"
+      },
+      "skill": {
+        "name": "技能节点",
+        "desc": "将注册表中的 Studio 技能挂载到 Agent"
       }
     },
     "nodeCard": {
@@ -931,6 +935,9 @@
       "command": "命令:",
       "url": "URL:",
       "inputDesc": "将用户输入连接到 Agent",
+      "skill": "技能:",
+      "skillUnset": "未选择",
+      "skillSelectHint": "请在属性面板中选择技能",
       "deleteTitle": "删除节点"
     },
     "code": {
@@ -953,6 +960,13 @@
       "modelProvider": "模型提供方",
       "model": "模型",
       "modelNamePlaceholder": "输入模型名称(如 gpt-4o、gpt-3.5-turbo)",
+      "customModelOption": "自定义模型 ID…",
+      "customModelPlaceholder": "例如 us.anthropic.claude-sonnet-5",
+      "mantleRegion": "区域",
+      "mantleModelPlaceholder": "例如 xai.grok-4.3",
+      "bedrockApiKey": "Bedrock API 密钥",
+      "bedrockApiKeyPlaceholder": "输入你的 Bedrock API 密钥",
+      "bedrockApiKeyHint": "作为 BEDROCK_API_KEY 环境变量存储",
       "apiKey": "API 密钥",
       "apiKeyPlaceholder": "输入你的 OpenAI API 密钥",
       "apiKeyHint": "API 密钥将作为 OPENAI_API_KEY 环境变量安全存储",
@@ -963,12 +977,18 @@
       "temperatureLocked": "启用思考时温度锁定为 1.0(仅 Bedrock)",
       "advancedSettings": "高级设置",
       "enableThinking": "启用思考",
-      "thinkingHint": "启用扩展思考以进行更复杂的推理",
-      "thinkingBudget": "思考预算 token:{{value}}",
+      "thinkingHint": "Claude → 自适应思考;GPT / Grok → 推理强度",
+      "adaptiveThinkingNote": "自适应思考 —— Claude 会按每次请求自行决定思考深度。开启思考时温度固定为 1。",
+      "promptCaching": "提示词缓存(Claude)",
+      "cacheConversation": "缓存对话(自动)",
+      "cacheTools": "缓存工具",
+      "cachingHint": "跨请求复用缓存的提示词上下文,降低成本与延迟。缓存约 5 分钟空闲后过期。",
       "reasoningEffort": "推理强度",
       "effortLow": "低",
       "effortMedium": "中",
       "effortHigh": "高",
+      "effortXHigh": "较高",
+      "effortMax": "最高",
       "enableStreaming": "启用流式",
       "streamingHintOn": "实时流式返回回复,提升使用体验",
       "streamingHintOff": "连接一个输出节点以启用流式模式",
@@ -1032,6 +1052,17 @@
       "debugLogsHint": "为图执行启用调试日志",
       "optionalPlaceholder": "可选",
       "noTimeoutHint": "留空表示不设超时",
+      "label": "标签",
+      "skillLabelPlaceholder": "技能",
+      "skill": "技能",
+      "skillSelectPlaceholder": "—— 选择一个技能 ——",
+      "skillMissingOption": "{{name}}(不在注册表中)",
+      "skillMissingWarn": "技能“{{name}}”不是已批准的注册表技能。请在注册表中批准它,或另选一个。",
+      "skillRefresh": "刷新技能",
+      "skillLoadError": "技能注册表不可用。",
+      "skillTrustWarning": "仅挂载你信任的技能 —— 技能说明可能指示 Agent 运行随附的脚本。",
+      "skillEmptyHint": "技能来源于已批准的注册表记录。请在注册表中注册并批准技能。",
+      "manageInRegistry": "在注册表中管理",
       "noProps": "该节点类型没有可配置的属性。"
     }
   },

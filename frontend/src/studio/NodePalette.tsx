@@ -9,6 +9,7 @@ import {
   Server,
   Crown,
   Users,
+  Sparkles,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -77,6 +78,13 @@ const nodeTypes: NodeTypeItem[] = [
     nameKey: 'studio.nodes.customTool.name',
     descKey: 'studio.nodes.customTool.desc',
     icon: Code,
+    category: 'Core',
+  },
+  {
+    type: 'skill',
+    nameKey: 'studio.nodes.skill.name',
+    descKey: 'studio.nodes.skill.desc',
+    icon: Sparkles,
     category: 'Core',
   },
 ];

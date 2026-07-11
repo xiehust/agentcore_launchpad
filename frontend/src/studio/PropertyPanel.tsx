@@ -1,6 +1,20 @@
+import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
 import { type Node, type Edge } from '@xyflow/react';
-import { Settings, X } from 'lucide-react';
+import { Settings, X, RefreshCw, Library } from 'lucide-react';
+import {
+  BEDROCK_MODELS,
+  CUSTOM_MODEL_OPTION,
+  CUSTOM_MODEL_NAME,
+  isCustomModel,
+  MANTLE_PROVIDER,
+  MANTLE_MODELS,
+  DEFAULT_MANTLE_REGION,
+  DEFAULT_MANTLE_MODEL_ID,
+  mantleBaseUrl,
+  isCustomMantleModel,
+} from './lib/models';
 
 // Union of every field the node data objects can carry across all node types.
 // Keeping them optional lets each render function read only what it needs while
@@ -18,13 +32,22 @@ interface StudioNodeData {
   apiKey?: string;
   baseUrl?: string;
   thinkingEnabled?: boolean;
+  // thinkingBudgetTokens is no longer written (adaptive thinking); kept optional
+  // so existing saved graphs that carry the key still type-check.
   thinkingBudgetTokens?: number;
   reasoningEffort?: string;
+  // Bedrock prompt caching
+  cacheMessages?: boolean;
+  cacheTools?: boolean;
+  // Mantle (Amazon Bedrock via OpenAI Responses API)
+  region?: string;
   coordinationPrompt?: string;
   // tool
   toolType?: string;
   toolName?: string;
   description?: string;
+  // skill
+  skillName?: string;
   // mcp-tool
   serverName?: string;
   transportType?: string;
@@ -57,6 +80,128 @@ interface PropertyPanelProps {
   edges?: Edge[];
   nodes?: Node[];
   className?: string;
+}
+
+// APPROVED AGENT_SKILLS registry records offered as skill sources. Shape matches
+// GET /api/registry/attachables .skills[] (see pages/CreateAgent.tsx).
+interface AttachableSkill {
+  name: string;
+  description: string;
+  path?: string;
+  record_id?: string;
+}
+
+// The skill node's picker lists launchpad's own registry skills (APPROVED only),
+// replacing upstream's studio skill-library backend. It has its own fetch state,
+// so it lives in a dedicated component (hooks can't run inside the switch).
+function SkillNodeProperties({
+  node,
+  onUpdateNode,
+}: {
+  node: Node;
+  onUpdateNode: (nodeId: string, data: Record<string, unknown>) => void;
+}) {
+  const { t } = useTranslation();
+  const data = node.data as StudioNodeData;
+  const [skills, setSkills] = useState<AttachableSkill[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const loadSkills = useCallback(() => {
+    setLoading(true);
+    setLoadError(null);
+    fetch('/api/registry/attachables')
+      .then((res) => (res.ok ? res.json() : { mcp_servers: [], skills: [] }))
+      .then((d: { skills?: AttachableSkill[] }) => setSkills(d.skills || []))
+      .catch(() => {
+        setSkills([]);
+        setLoadError(t('studio.prop.skillLoadError'));
+      })
+      .finally(() => setLoading(false));
+  }, [t]);
+
+  useEffect(() => {
+    loadSkills();
+  }, [loadSkills]);
+
+  const handleSelect = (name: string) => {
+    const skill = skills.find((s) => s.name === name);
+    onUpdateNode(node.id, {
+      ...node.data,
+      skillName: name,
+      description: skill?.description || '',
+    });
+  };
+
+  const selectedMissing =
+    !!data.skillName && !loading && !skills.some((s) => s.name === data.skillName);
+
+  return (
+    <div>
+      <div className="studio-note">{t('studio.prop.skillTrustWarning')}</div>
+
+      <div className="field">
+        <label>{t('studio.prop.label')}</label>
+        <input
+          className="input"
+          type="text"
+          value={data.label || ''}
+          onChange={(e) => onUpdateNode(node.id, { ...node.data, label: e.target.value })}
+          placeholder={t('studio.prop.skillLabelPlaceholder')}
+        />
+      </div>
+
+      <div className="field">
+        <label>{t('studio.prop.skill')}</label>
+        <div className="studio-prop-inline">
+          <select
+            className="input"
+            style={{ flex: 1 }}
+            value={data.skillName || ''}
+            onChange={(e) => handleSelect(e.target.value)}
+            disabled={loading}
+          >
+            <option value="">{t('studio.prop.skillSelectPlaceholder')}</option>
+            {skills.map((skill) => (
+              <option key={skill.name} value={skill.name}>
+                {skill.name}
+                {skill.description ? ` — ${skill.description}` : ''}
+              </option>
+            ))}
+            {selectedMissing && (
+              <option value={data.skillName}>
+                {t('studio.prop.skillMissingOption', { name: data.skillName })}
+              </option>
+            )}
+          </select>
+          <button
+            type="button"
+            className="btn"
+            onClick={loadSkills}
+            disabled={loading}
+            title={t('studio.prop.skillRefresh')}
+          >
+            <RefreshCw size={14} className={loading ? 'studio-spin' : undefined} />
+          </button>
+        </div>
+        {loadError && <div className="studio-warn">{loadError}</div>}
+        {selectedMissing && !loadError && (
+          <div className="studio-warn">
+            {t('studio.prop.skillMissingWarn', { name: data.skillName })}
+          </div>
+        )}
+        {data.description && <div className="studio-prop-hint">{data.description}</div>}
+      </div>
+
+      <div className="field">
+        <Link to="/registry" className="btn">
+          <Library size={14} />
+          {t('studio.prop.manageInRegistry')}
+        </Link>
+        <div className="studio-prop-hint">{t('studio.prop.skillEmptyHint')}</div>
+      </div>
+    </div>
+  );
 }
 
 export function PropertyPanel({
@@ -104,59 +249,125 @@ export function PropertyPanel({
     }
   };
 
-  const bedrockModels = [
-    {
-      model_id: 'global.anthropic.claude-sonnet-4-6',
-      model_name: 'Claude Sonnet 4.6 (global, launchpad default)',
-    },
-    {
-      model_id: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
-      model_name: 'Claude 4.5 Haiku (global)',
-    },
-    { model_id: 'us.anthropic.claude-haiku-4-5-20251001-v1:0', model_name: 'Claude 4.5 Haiku (US)' },
-    { model_id: 'eu.anthropic.claude-haiku-4-5-20251001-v1:0', model_name: 'Claude 4.5 Haiku (EU)' },
-    {
-      model_id: 'global.anthropic.claude-sonnet-4-5-20250929-v1:0',
-      model_name: 'Claude 4.5 Sonnet (global)',
-    },
-    {
-      model_id: 'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
-      model_name: 'Claude 4.5 Sonnet (US)',
-    },
-    {
-      model_id: 'eu.anthropic.claude-sonnet-4-5-20250929-v1:0',
-      model_name: 'Claude 4.5 Sonnet (EU)',
-    },
-    {
-      model_id: 'global.anthropic.claude-sonnet-4-20250514-v1:0',
-      model_name: 'Claude 4 Sonnet (global)',
-    },
-    { model_id: 'us.anthropic.claude-sonnet-4-20250514-v1:0', model_name: 'Claude 4 Sonnet (US)' },
-    { model_id: 'eu.anthropic.claude-sonnet-4-20250514-v1:0', model_name: 'Claude 4 Sonnet (EU)' },
-    {
-      model_id: 'apac.anthropic.claude-sonnet-4-20250514-v1:0',
-      model_name: 'Claude 4 Sonnet (APAC)',
-    },
-    {
-      model_id: 'us.anthropic.claude-3-7-sonnet-20250219-v1:0',
-      model_name: 'Claude 3.7 Sonnet (US)',
-    },
-    {
-      model_id: 'eu.anthropic.claude-3-7-sonnet-20250219-v1:0',
-      model_name: 'Claude 3.7 Sonnet (EU)',
-    },
-    {
-      model_id: 'apac.anthropic.claude-3-7-sonnet-20250219-v1:0',
-      model_name: 'Claude 3.7 Sonnet (APAC)',
-    },
-    { model_id: 'openai.gpt-oss-120b-1:0', model_name: 'GPT-OSS-120B' },
-    { model_id: 'qwen.qwen3-235b-a22b-2507-v1:0', model_name: 'Qwen3 235B A22B 2507' },
-    { model_id: 'qwen.qwen3-32b-v1:0', model_name: 'Qwen3 32B (dense)' },
-    { model_id: 'qwen.qwen3-coder-480b-a35b-v1:0', model_name: 'Qwen3 Coder 480B A35B Instruct' },
-    { model_id: 'deepseek.v3-v1:0', model_name: 'DeepSeek-V3.1' },
-    { model_id: 'us.amazon.nova-premier-v1:0', model_name: 'Amazon Nova Premier v1' },
-    { model_id: 'us.amazon.nova-pro-v1:0', model_name: 'Amazon Nova Pro v1' },
-  ];
+  const bedrockModels = BEDROCK_MODELS;
+
+  // Seed provider-specific defaults when the provider dropdown changes so the
+  // model field/codegen always has a coherent id (mirrors upstream :494-521).
+  const applyProviderChange = (provider: string) => {
+    if (provider === 'AWS Bedrock') {
+      onUpdateNode(node.id, {
+        ...node.data,
+        modelProvider: provider,
+        modelId: bedrockModels[0].model_id,
+        modelName: bedrockModels[0].model_name,
+      });
+    } else if (provider === MANTLE_PROVIDER) {
+      const region = (node.data as StudioNodeData).region || DEFAULT_MANTLE_REGION;
+      onUpdateNode(node.id, {
+        ...node.data,
+        modelProvider: provider,
+        region,
+        baseUrl: mantleBaseUrl(region),
+        // Mantle model ids flow through the non-Bedrock (modelName) codegen path.
+        modelId: DEFAULT_MANTLE_MODEL_ID,
+        modelName: DEFAULT_MANTLE_MODEL_ID,
+      });
+    } else {
+      // OpenAI / other free-text providers
+      onUpdateNode(node.id, {
+        ...node.data,
+        modelProvider: provider,
+        modelId: '',
+        modelName: '',
+      });
+    }
+  };
+
+  // Mantle: region (drives baseUrl) + model dropdown (with custom id) + BEDROCK_API_KEY.
+  const renderMantleFields = (data: StudioNodeData) => {
+    const region = data.region || DEFAULT_MANTLE_REGION;
+    const custom = isCustomMantleModel(data.modelId, data.modelName);
+    return (
+      <>
+        <div className="field">
+          <label>{t('studio.prop.mantleRegion')}</label>
+          <input
+            className="input"
+            type="text"
+            value={region}
+            onChange={(e) => {
+              const r = e.target.value;
+              onUpdateNode(node.id, {
+                ...node.data,
+                region: r,
+                baseUrl: mantleBaseUrl(r),
+              });
+            }}
+            placeholder={DEFAULT_MANTLE_REGION}
+          />
+          <div className="studio-prop-hint mono">{mantleBaseUrl(region)}</div>
+        </div>
+
+        <div className="field">
+          <label>{t('studio.prop.model')}</label>
+          <select
+            className="input"
+            value={custom ? CUSTOM_MODEL_OPTION : data.modelId || DEFAULT_MANTLE_MODEL_ID}
+            onChange={(e) => {
+              if (e.target.value === CUSTOM_MODEL_OPTION) {
+                onUpdateNode(node.id, {
+                  ...node.data,
+                  modelId: '',
+                  modelName: CUSTOM_MODEL_NAME,
+                });
+                return;
+              }
+              onUpdateNode(node.id, {
+                ...node.data,
+                modelId: e.target.value,
+                modelName: e.target.value,
+              });
+            }}
+          >
+            {MANTLE_MODELS.map((m) => (
+              <option key={m.model_id} value={m.model_id}>
+                {m.model_name}
+              </option>
+            ))}
+            <option value={CUSTOM_MODEL_OPTION}>{t('studio.prop.customModelOption')}</option>
+          </select>
+          {custom && (
+            <input
+              className="input"
+              style={{ marginTop: 8 }}
+              type="text"
+              value={data.modelId || ''}
+              onChange={(e) =>
+                onUpdateNode(node.id, {
+                  ...node.data,
+                  modelId: e.target.value,
+                  modelName: e.target.value ? e.target.value : CUSTOM_MODEL_NAME,
+                })
+              }
+              placeholder={t('studio.prop.mantleModelPlaceholder')}
+            />
+          )}
+        </div>
+
+        <div className="field">
+          <label>{t('studio.prop.bedrockApiKey')}</label>
+          <input
+            className="input"
+            type="password"
+            value={data.apiKey || ''}
+            onChange={(e) => handleInputChange('apiKey', e.target.value)}
+            placeholder={t('studio.prop.bedrockApiKeyPlaceholder')}
+          />
+          <div className="studio-prop-hint">{t('studio.prop.bedrockApiKeyHint')}</div>
+        </div>
+      </>
+    );
+  };
 
   // Shared model block. `allowAnthropic` mirrors upstream: the orchestrator's
   // provider dropdown offered Anthropic (agent's did not). There is no Anthropic
@@ -169,63 +380,83 @@ export function PropertyPanel({
         <select
           className="input"
           value={data.modelProvider || 'AWS Bedrock'}
-          onChange={(e) => {
-            if (e.target.value === 'AWS Bedrock') {
-              onUpdateNode(node.id, {
-                ...node.data,
-                modelProvider: e.target.value,
-                modelId: bedrockModels[0].model_id,
-                modelName: bedrockModels[0].model_name,
-              });
-            } else {
-              onUpdateNode(node.id, {
-                ...node.data,
-                modelProvider: e.target.value,
-                modelId: '',
-                modelName: '',
-              });
-            }
-          }}
+          onChange={(e) => applyProviderChange(e.target.value)}
         >
           <option value="AWS Bedrock">AWS Bedrock</option>
+          <option value={MANTLE_PROVIDER}>{MANTLE_PROVIDER}</option>
           <option value="OpenAI">OpenAI</option>
           {allowAnthropic && <option value="Anthropic">Anthropic</option>}
         </select>
       </div>
 
-      <div className="field">
-        <label>{t('studio.prop.model')}</label>
-        {data.modelProvider === 'AWS Bedrock' || !data.modelProvider ? (
-          <select
-            className="input"
-            value={data.modelId || bedrockModels[0].model_id}
-            onChange={(e) => {
-              const selectedModel = bedrockModels.find((m) => m.model_id === e.target.value);
-              if (selectedModel) {
-                onUpdateNode(node.id, {
-                  ...node.data,
-                  modelId: selectedModel.model_id,
-                  modelName: selectedModel.model_name,
-                });
-              }
-            }}
-          >
-            {bedrockModels.map((model) => (
-              <option key={model.model_id} value={model.model_id}>
-                {model.model_name}
-              </option>
-            ))}
-          </select>
-        ) : (
-          <input
-            className="input"
-            type="text"
-            value={data.modelName || ''}
-            onChange={(e) => handleInputChange('modelName', e.target.value)}
-            placeholder={t('studio.prop.modelNamePlaceholder')}
-          />
-        )}
-      </div>
+      {data.modelProvider === MANTLE_PROVIDER ? (
+        renderMantleFields(data)
+      ) : (
+        <div className="field">
+          <label>{t('studio.prop.model')}</label>
+          {data.modelProvider === 'AWS Bedrock' || !data.modelProvider ? (
+            <>
+              <select
+                className="input"
+                value={
+                  isCustomModel(data.modelId, data.modelName)
+                    ? CUSTOM_MODEL_OPTION
+                    : data.modelId || bedrockModels[0].model_id
+                }
+                onChange={(e) => {
+                  if (e.target.value === CUSTOM_MODEL_OPTION) {
+                    onUpdateNode(node.id, {
+                      ...node.data,
+                      modelId: '',
+                      modelName: CUSTOM_MODEL_NAME,
+                    });
+                    return;
+                  }
+                  const selectedModel = bedrockModels.find((m) => m.model_id === e.target.value);
+                  if (selectedModel) {
+                    onUpdateNode(node.id, {
+                      ...node.data,
+                      modelId: selectedModel.model_id,
+                      modelName: selectedModel.model_name,
+                    });
+                  }
+                }}
+              >
+                {bedrockModels.map((model) => (
+                  <option key={model.model_id} value={model.model_id}>
+                    {model.model_name}
+                  </option>
+                ))}
+                <option value={CUSTOM_MODEL_OPTION}>{t('studio.prop.customModelOption')}</option>
+              </select>
+              {isCustomModel(data.modelId, data.modelName) && (
+                <input
+                  className="input"
+                  style={{ marginTop: 8 }}
+                  type="text"
+                  value={data.modelId || ''}
+                  onChange={(e) =>
+                    onUpdateNode(node.id, {
+                      ...node.data,
+                      modelId: e.target.value,
+                      modelName: CUSTOM_MODEL_NAME,
+                    })
+                  }
+                  placeholder={t('studio.prop.customModelPlaceholder')}
+                />
+              )}
+            </>
+          ) : (
+            <input
+              className="input"
+              type="text"
+              value={data.modelName || ''}
+              onChange={(e) => handleInputChange('modelName', e.target.value)}
+              placeholder={t('studio.prop.modelNamePlaceholder')}
+            />
+          )}
+        </div>
+      )}
 
       {data.modelProvider === 'OpenAI' && (
         <>
@@ -285,59 +516,72 @@ export function PropertyPanel({
     );
   };
 
-  const renderThinkingSection = (data: StudioNodeData) => (
-    <div className="studio-prop-sect">
-      <div className="kicker" style={{ marginBottom: 10 }}>
-        {t('studio.prop.advancedSettings')}
-      </div>
-      <div className="field">
-        <label className="studio-check">
-          <input
-            type="checkbox"
-            checked={data.thinkingEnabled || false}
-            onChange={(e) => handleInputChange('thinkingEnabled', e.target.checked)}
-          />
-          <span>{t('studio.prop.enableThinking')}</span>
-        </label>
-        <div className="studio-prop-hint">{t('studio.prop.thinkingHint')}</div>
-      </div>
-
-      {data.thinkingEnabled &&
-        (data.modelProvider === 'AWS Bedrock' || !data.modelProvider ? (
-          <div className="field">
-            <label>
-              {t('studio.prop.thinkingBudget', { value: data.thinkingBudgetTokens || 2048 })}
-            </label>
+  const renderThinkingSection = (data: StudioNodeData) => {
+    const isBedrock = data.modelProvider === 'AWS Bedrock' || !data.modelProvider;
+    return (
+      <div className="studio-prop-sect">
+        <div className="kicker" style={{ marginBottom: 10 }}>
+          {t('studio.prop.advancedSettings')}
+        </div>
+        <div className="field">
+          <label className="studio-check">
             <input
-              className="studio-range"
-              type="range"
-              min="1024"
-              max="8192"
-              step="512"
-              value={data.thinkingBudgetTokens || 2048}
-              onChange={(e) => handleInputChange('thinkingBudgetTokens', parseInt(e.target.value))}
+              type="checkbox"
+              checked={data.thinkingEnabled || false}
+              onChange={(e) => handleInputChange('thinkingEnabled', e.target.checked)}
             />
-            <div className="studio-range-ends">
-              <span>1,024</span>
-              <span>8,192</span>
+            <span>{t('studio.prop.enableThinking')}</span>
+          </label>
+          <div className="studio-prop-hint">{t('studio.prop.thinkingHint')}</div>
+        </div>
+
+        {data.thinkingEnabled &&
+          (isBedrock ? (
+            // Bedrock/Claude uses adaptive thinking — no budget knob; temperature pinned to 1.
+            <div className="studio-note">{t('studio.prop.adaptiveThinkingNote')}</div>
+          ) : (
+            <div className="field">
+              <label>{t('studio.prop.reasoningEffort')}</label>
+              <select
+                className="input"
+                // legacy 'minimal' coerced to 'low' (upstream :845)
+                value={data.reasoningEffort === 'minimal' ? 'low' : data.reasoningEffort || 'medium'}
+                onChange={(e) => handleInputChange('reasoningEffort', e.target.value)}
+              >
+                <option value="low">{t('studio.prop.effortLow')}</option>
+                <option value="medium">{t('studio.prop.effortMedium')}</option>
+                <option value="high">{t('studio.prop.effortHigh')}</option>
+                <option value="xhigh">{t('studio.prop.effortXHigh')}</option>
+                <option value="max">{t('studio.prop.effortMax')}</option>
+              </select>
             </div>
+          ))}
+
+        {isBedrock && (
+          <div className="field" style={{ marginTop: 14 }}>
+            <label>{t('studio.prop.promptCaching')}</label>
+            <label className="studio-check" style={{ marginTop: 6 }}>
+              <input
+                type="checkbox"
+                checked={data.cacheMessages || false}
+                onChange={(e) => handleInputChange('cacheMessages', e.target.checked)}
+              />
+              <span>{t('studio.prop.cacheConversation')}</span>
+            </label>
+            <label className="studio-check" style={{ marginTop: 6 }}>
+              <input
+                type="checkbox"
+                checked={data.cacheTools || false}
+                onChange={(e) => handleInputChange('cacheTools', e.target.checked)}
+              />
+              <span>{t('studio.prop.cacheTools')}</span>
+            </label>
+            <div className="studio-prop-hint">{t('studio.prop.cachingHint')}</div>
           </div>
-        ) : (
-          <div className="field">
-            <label>{t('studio.prop.reasoningEffort')}</label>
-            <select
-              className="input"
-              value={data.reasoningEffort || 'medium'}
-              onChange={(e) => handleInputChange('reasoningEffort', e.target.value)}
-            >
-              <option value="low">{t('studio.prop.effortLow')}</option>
-              <option value="medium">{t('studio.prop.effortMedium')}</option>
-              <option value="high">{t('studio.prop.effortHigh')}</option>
-            </select>
-          </div>
-        ))}
-    </div>
-  );
+        )}
+      </div>
+    );
+  };
 
   const renderStreamingField = (data: StudioNodeData) => (
     <div className="field">
@@ -902,6 +1146,8 @@ export function PropertyPanel({
         return renderInputProperties();
       case 'custom-tool':
         return renderCustomToolProperties(data);
+      case 'skill':
+        return <SkillNodeProperties key={node.id} node={node} onUpdateNode={onUpdateNode} />;
       default:
         return <div className="studio-prop-empty">{t('studio.prop.noProps')}</div>;
     }
