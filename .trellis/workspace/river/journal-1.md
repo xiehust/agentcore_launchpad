@@ -263,3 +263,67 @@ User-reported: Registry detail's USE IN NEW AGENT was clickable for unpublished 
 ### Next Steps
 
 - None - task complete
+
+---
+
+## 2026-07-12 — Agent SDK create: registry capabilities + custom skill sources + filesystem config
+
+**Date**: 2026-07-12
+**Task**: 07-12-agent-sdk-capabilities-fs
+**Package**: launchpad (backend + frontend)
+**Branch**: `main`
+
+### Summary
+
+Claude Agent SDK (container) create flow now consumes the Registry: APPROVED
+remote MCP records and AGENT_SKILLS render as selectable chips (was: two
+hardcoded chips; skills were harness-only). Selected MCP servers merge into the
+rendered MCP_SERVERS (registry wins over free-text JSON) with proper
+`mcp__{server}` allow-list entries; selected skills are downloaded at build time
+into the image's `.claude/skills/{name}/`. Added attach-without-record custom
+skill sources (`POST /api/agent-skills/import` consuming the registry inspect
+staging; zip auto-attach, git monorepo picker with ONE batched attach call) —
+uploads to `agent-skills/{uid8}/{name}/`, no registry record. Added AgentCore
+filesystemConfigurations to the container config: managed session storage
+default-ON at /mnt/workspace (disable-able), up to 2 BYO S3 Files + 2 EFS
+access-point mounts; BYO flips networkMode PUBLIC→VPC (subnets/SGs required,
+enforced by AgentSpec model_validator) and the provision stage syncs an inline
+execution-role policy `launchpad-fs-{agent}` (deleted on mounts-removed and
+agent delete). Verified botocore 1.43.44 union shapes; system python lacks BYO
+members — venv only.
+
+### Main Changes
+
+- backend: schemas/agent.py (FilesystemConfig/VpcNetwork/validators),
+  runtime.py (fs+vpc kwargs), deployer/container.py (_build_context skills
+  bundling, _filesystem_configurations/_vpc/_fs_policy_document/_sync_fs_policy),
+  zip_runtime.py (bundle_skill_paths_into refactor), routers/agent_skills.py
+  (new), registry_console.upload_bundle_files (factored, incremental keys),
+  main.py mount.
+- frontend: CreateAgent.tsx (container MCP chips, shared skills picker w/
+  zip/git custom sources + monorepo picker, FILESYSTEM group w/ VPC reveal +
+  validation gating LAUNCH), lib/api.ts (inspectSkillZip/inspectSkillGit/
+  attachSkillSources, FilesystemInput), locales en+zh-CN.
+- specs: .trellis/spec/launchpad/container-capabilities-filesystem.md (new) +
+  ingestion guide cross-note (staging now dual-consumer).
+
+### Testing
+
+- [OK] backend: 416 passed (58 new across 6 files: spec validators, runtime
+  param shapes, IAM policy lifecycle, skill bundling, template render, attach
+  endpoint, agents API round-trip)
+- [OK] frontend: eslint clean (1 pre-existing warning), tsc+vite build clean
+- [OK] browser evidence: frontend/scripts/sdk_caps_fs_evidence.mjs →
+  design/screenshots/agent-sdk-caps-fs/ (9 shots: registry-linked capabilities,
+  zip auto-attach, git picker, attached chips, session toggle, BYO S3+VPC
+  required w/ LAUNCH disabled asserted true, VPC filled re-enables, edit
+  reload round-trip, zh-CN)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Optional: "promote to registry" action for custom-attached skills; TTL sweep
+  for orphaned agent-skills/ prefixes (documented non-goals)
