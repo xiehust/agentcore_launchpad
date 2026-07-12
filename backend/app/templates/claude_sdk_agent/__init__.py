@@ -3,6 +3,7 @@
 import json
 import shutil
 from pathlib import Path
+from typing import Any
 
 from app.schemas.agent import AgentSpec
 
@@ -12,13 +13,36 @@ TEMPLATE_DIR = Path(__file__).parent
 DEFAULT_ALLOWED_TOOLS = ["Task"]  # Task = subagent dispatch; Bash/Edit stay off by default
 
 
-def render_main_py(spec: AgentSpec) -> str:
-    mcp_servers = spec.env.get("LAUNCHPAD_MCP_SERVERS", "")
+def skill_name_from_path(path: str) -> str:
+    """s3://…/skills/web-analyzer/ → web-analyzer (registry and custom prefixes)."""
+    return path.rstrip("/").rsplit("/", 1)[-1]
+
+
+def _mcp_servers(spec: AgentSpec) -> dict[str, Any]:
+    """Free-text LAUNCHPAD_MCP_SERVERS JSON ∪ registry-selected remote servers.
+
+    Registry chips are explicit UI selections — they win on key collision."""
+    raw = spec.env.get("LAUNCHPAD_MCP_SERVERS", "")
     try:
-        mcp_config = json.loads(mcp_servers) if mcp_servers else {}
+        free = json.loads(raw) if raw else {}
     except ValueError:
-        mcp_config = {}
-    allowed = [t.name for t in spec.tools if t.type == "mcp"] or DEFAULT_ALLOWED_TOOLS
+        free = {}
+    if not isinstance(free, dict):
+        free = {}
+    registry = {
+        t.name: {"type": "http", "url": t.config["url"]}
+        for t in spec.tools
+        if t.type == "mcp" and t.config.get("url")
+    }
+    return {**free, **registry}
+
+
+def render_main_py(spec: AgentSpec) -> str:
+    mcp_config = _mcp_servers(spec)
+    allowed = list(DEFAULT_ALLOWED_TOOLS)
+    if spec.skills:
+        allowed.append("Skill")  # the tool Claude Code invokes agent skills through
+    allowed += [f"mcp__{name}" for name in mcp_config]
     source = (TEMPLATE_DIR / "main.py.tmpl").read_text(encoding="utf-8")
     return (
         source.replace("__LAUNCHPAD_AGENT_NAME__", spec.name)
@@ -31,7 +55,10 @@ def render_main_py(spec: AgentSpec) -> str:
 
 
 def assemble_build_context(spec: AgentSpec, target_dir: Path) -> Path:
-    """Copy the static template files + rendered main.py into target_dir."""
+    """Copy the static template files + rendered main.py into target_dir.
+
+    Pure filesystem work — spec.skills S3 download happens in the deployer
+    (bundle_skill_paths_into) so this stays testable without AWS."""
     if target_dir.exists():
         shutil.rmtree(target_dir)
     target_dir.mkdir(parents=True)

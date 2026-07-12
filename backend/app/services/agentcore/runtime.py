@@ -40,6 +40,20 @@ def create_code_runtime(
     return client.create_agent_runtime(**params)
 
 
+def _network_configuration(vpc: dict[str, Any] | None) -> dict[str, Any]:
+    """PUBLIC by default; VPC mode when a networkModeConfig is supplied
+    (required for BYO file systems — S3 Files / EFS access points)."""
+    if not vpc:
+        return {"networkMode": "PUBLIC"}
+    return {
+        "networkMode": "VPC",
+        "networkModeConfig": {
+            "subnets": list(vpc["subnets"]),
+            "securityGroups": list(vpc["security_groups"]),
+        },
+    }
+
+
 def create_container_runtime(
     client: Any,
     *,
@@ -47,6 +61,8 @@ def create_container_runtime(
     container_uri: str,
     role_arn: str,
     environment: dict[str, str] | None = None,
+    filesystem_configurations: list[dict[str, Any]] | None = None,
+    vpc: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """CreateAgentRuntime from an ECR image (Claude SDK container path)."""
     params: dict[str, Any] = {
@@ -54,11 +70,13 @@ def create_container_runtime(
         "agentRuntimeArtifact": {
             "containerConfiguration": {"containerUri": container_uri}
         },
-        "networkConfiguration": {"networkMode": "PUBLIC"},
+        "networkConfiguration": _network_configuration(vpc),
         "roleArn": role_arn,
     }
     if environment:
         params["environmentVariables"] = dict(environment)
+    if filesystem_configurations:
+        params["filesystemConfigurations"] = filesystem_configurations
     return client.create_agent_runtime(**params)
 
 
@@ -101,16 +119,21 @@ def update_container_runtime(
     container_uri: str,
     role_arn: str,
     environment: dict[str, str] | None = None,
+    filesystem_configurations: list[dict[str, Any]] | None = None,
+    vpc: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """UpdateAgentRuntime with a new container image — new version, same ARN."""
+    """UpdateAgentRuntime with a new container image — new version, same ARN.
+    NB: a version bump resets managed session storage (documented UI note)."""
     params: dict[str, Any] = {
         "agentRuntimeId": runtime_id,
         "agentRuntimeArtifact": {"containerConfiguration": {"containerUri": container_uri}},
-        "networkConfiguration": {"networkMode": "PUBLIC"},
+        "networkConfiguration": _network_configuration(vpc),
         "roleArn": role_arn,
     }
     if environment:
         params["environmentVariables"] = dict(environment)
+    if filesystem_configurations:
+        params["filesystemConfigurations"] = filesystem_configurations
     return client.update_agent_runtime(**params)
 
 

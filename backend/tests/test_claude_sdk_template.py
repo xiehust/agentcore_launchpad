@@ -33,6 +33,46 @@ def test_render_parses_mcp_servers_from_env():
     )
     code = render_main_py(spec)
     assert "'docs'" in code and "'uvx'" in code
+    # every configured server is allow-listed with Claude Code's mcp__ prefix
+    assert "'mcp__docs'" in code
+
+
+def test_render_default_allowed_tools():
+    code = render_main_py(SPEC)
+    assert "ALLOWED_TOOLS: list[str] = ['Task']" in code
+
+
+def test_render_skills_enable_skill_tool():
+    spec = SPEC.model_copy(update={"skills": ["s3://bkt/skills/web-analyzer/"]})
+    code = render_main_py(spec)
+    assert "ALLOWED_TOOLS: list[str] = ['Task', 'Skill']" in code
+
+
+def test_render_merges_registry_mcp_over_free_text():
+    """Registry-selected servers (spec.tools mcp refs) merge into MCP_SERVERS and
+    win over a same-named free-text entry; both get mcp__ allow-list entries."""
+    spec = AgentSpec(
+        **{
+            **SPEC.model_dump(),
+            "tools": [
+                {"type": "mcp", "name": "deepwiki", "config": {"url": "https://mcp.deepwiki.com/mcp"}},
+                {"type": "mcp", "name": "docs", "config": {"url": "https://registry.example/mcp"}},
+            ],
+            "env": {"LAUNCHPAD_MCP_SERVERS": '{"docs": {"command": "uvx", "args": ["x"]}}'},
+        }
+    )
+    code = render_main_py(spec)
+    assert "'deepwiki': {'type': 'http', 'url': 'https://mcp.deepwiki.com/mcp'}" in code
+    assert "'docs': {'type': 'http', 'url': 'https://registry.example/mcp'}" in code  # registry wins
+    assert "'mcp__deepwiki'" in code and "'mcp__docs'" in code
+    assert "'uvx'" not in code  # the shadowed free-text entry is gone
+
+
+def test_render_tolerates_bad_mcp_json():
+    spec = SPEC.model_copy(update={"env": {"LAUNCHPAD_MCP_SERVERS": "{not json"}})
+    code = render_main_py(spec)
+    assert "MCP_SERVERS: dict[str, Any] = {}" in code
+    assert "ALLOWED_TOOLS: list[str] = ['Task']" in code
 
 
 def test_rendered_main_compiles(tmp_path: Path):

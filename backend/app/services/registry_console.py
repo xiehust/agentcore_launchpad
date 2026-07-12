@@ -336,10 +336,7 @@ def register_skill_bundle(
     s3 = boto3.client("s3", region_name=settings.region)
     uploaded: list[str] = []
     try:
-        for rel in bundle.files:
-            key = f"{prefix}{rel}"
-            s3.upload_file(str(bundle.root / rel), bucket, key)
-            uploaded.append(key)
+        upload_bundle_files(bundle, bucket, prefix, s3, uploaded=uploaded)
 
         record, _ = reg.upsert_record(
             client,
@@ -355,6 +352,26 @@ def register_skill_bundle(
     except Exception:
         _delete_keys(s3, bucket, uploaded)  # best-effort orphan cleanup
         raise
+
+
+def upload_bundle_files(
+    bundle: SkillBundle,
+    bucket: str,
+    prefix: str,
+    s3: Any,
+    *,
+    uploaded: list[str] | None = None,
+) -> list[str]:
+    """Upload every file under ``bundle.root`` to ``{prefix}{rel}``. Keys are
+    appended to ``uploaded`` AS they land so a mid-batch failure leaves the
+    caller an exact cleanup list. Shared by the registry funnel and the
+    attach-without-record path (/api/agent-skills)."""
+    keys = uploaded if uploaded is not None else []
+    for rel in bundle.files:
+        key = f"{prefix}{rel}"
+        s3.upload_file(str(bundle.root / rel), bucket, key)
+        keys.append(key)
+    return keys
 
 
 def _delete_keys(s3: Any, bucket: str, keys: list[str]) -> None:

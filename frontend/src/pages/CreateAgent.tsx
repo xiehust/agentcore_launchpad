@@ -4,11 +4,17 @@ import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { Btn, Chip, ConfirmDialog, LaunchSequence, Panel, useToast, ViewHead } from "../components";
-import type { AgentInfo, DeploymentInfo, JobInfo } from "../lib/api";
+import type { AgentInfo, DeploymentInfo, InspectedSkill, JobInfo } from "../lib/api";
 import { api, ApiError } from "../lib/api";
 
 const DEFAULT_MODEL = "global.anthropic.claude-sonnet-4-6";
 const BUILTIN_TOOLS = ["code-interpreter", "browser"] as const;
+// AgentCore mount-path contract: exactly one level under /mnt
+const MOUNT_RE = /^\/mnt\/[a-zA-Z0-9._-]+$/;
+const DEFAULT_SESSION_MOUNT = "/mnt/workspace";
+
+const splitIds = (s: string) => s.split(/[\s,]+/).filter(Boolean);
+const skillNameFromPath = (path: string) => path.replace(/\/+$/, "").split("/").pop() ?? path;
 
 type Step = 1 | 2 | 3;
 
@@ -27,6 +33,17 @@ interface StoredSpec {
   skills?: string[];
   memory?: { long_term?: boolean };
   env?: Record<string, string>;
+  filesystem?: {
+    session_storage?: { mount_path?: string } | null;
+    s3_files?: { access_point_arn?: string; mount_path?: string }[];
+    efs?: { access_point_arn?: string; mount_path?: string }[];
+  };
+  network?: { subnets?: string[]; security_groups?: string[] };
+}
+
+interface MountRow {
+  arn: string;
+  path: string;
 }
 
 // APPROVED registry records the wizard offers for mounting.
@@ -65,6 +82,24 @@ export function CreateAgent() {
   const [selectedMcp, setSelectedMcp] = useState<string[]>([]);
   const [longTerm, setLongTerm] = useState(true);
   const [mcpServers, setMcpServers] = useState("");
+  // custom skill sources attached without a registry record (name shown on the chip)
+  const [customSkills, setCustomSkills] = useState<{ name: string; path: string }[]>([]);
+  const [pendingSkills, setPendingSkills] = useState<{
+    stagingId: string;
+    skills: InspectedSkill[];
+    picked: number[];
+  } | null>(null);
+  const [gitOpen, setGitOpen] = useState(false);
+  const [gitUrl, setGitUrl] = useState("");
+  const [srcBusy, setSrcBusy] = useState(false);
+  const skillFileRef = useRef<HTMLInputElement>(null);
+  // AgentCore Runtime filesystem configuration (container method only)
+  const [sessionFs, setSessionFs] = useState(true);
+  const [sessionMount, setSessionMount] = useState(DEFAULT_SESSION_MOUNT);
+  const [s3Mounts, setS3Mounts] = useState<MountRow[]>([]);
+  const [efsMounts, setEfsMounts] = useState<MountRow[]>([]);
+  const [vpcSubnets, setVpcSubnets] = useState("");
+  const [vpcSgs, setVpcSgs] = useState("");
   // when set, the wizard edits an existing agent and the launch button re-publishes it
   const [editing, setEditing] = useState<{ id: string; name: string; method: Method } | null>(null);
   const [detailsMode, setDetailsMode] = useState(false);
@@ -149,8 +184,20 @@ export function CreateAgent() {
     setSkills([]);
     setLongTerm(true);
     setMcpServers("");
+    setCustomSkills([]);
+    setPendingSkills(null);
+    setGitOpen(false);
+    setGitUrl("");
+    setSessionFs(true);
+    setSessionMount(DEFAULT_SESSION_MOUNT);
+    setS3Mounts([]);
+    setEfsMounts([]);
+    setVpcSubnets("");
+    setVpcSgs("");
     setSubmitError(null);
   };
+
+  const byoMounts = s3Mounts.length > 0 || efsMounts.length > 0;
 
   const buildSpec = () => ({
     name,
@@ -167,11 +214,28 @@ export function CreateAgent() {
               return server ? [{ type: "mcp", name: n, config: { url: server.url } }] : [];
             }),
           ]
-        : [],
+        : method === "container"
+          ? selectedMcp.flatMap((n) => {
+              const server = remoteMcp.find((m) => m.name === n);
+              return server ? [{ type: "mcp", name: n, config: { url: server.url } }] : [];
+            })
+          : [],
     memory: { short_term: true, long_term: longTerm },
-    ...(method === "harness" && skills.length ? { skills } : {}),
+    ...((method === "harness" || method === "container") && skills.length ? { skills } : {}),
     ...(method === "container" && mcpServers.trim()
       ? { env: { LAUNCHPAD_MCP_SERVERS: mcpServers.trim() } }
+      : {}),
+    ...(method === "container"
+      ? {
+          filesystem: {
+            session_storage: sessionFs ? { mount_path: sessionMount } : null,
+            s3_files: s3Mounts.map((m) => ({ access_point_arn: m.arn, mount_path: m.path })),
+            efs: efsMounts.map((m) => ({ access_point_arn: m.arn, mount_path: m.path })),
+          },
+          ...(byoMounts
+            ? { network: { subnets: splitIds(vpcSubnets), security_groups: splitIds(vpcSgs) } }
+            : {}),
+        }
       : {}),
   });
 
@@ -209,6 +273,24 @@ export function CreateAgent() {
     setSkills(spec.skills ?? []);
     setLongTerm(spec.memory?.long_term ?? true);
     setMcpServers(spec.env?.LAUNCHPAD_MCP_SERVERS ?? "");
+    // custom (non-registry) skill paths get their chip name from the path tail
+    setCustomSkills(
+      (spec.skills ?? [])
+        .filter((p) => p.includes("/agent-skills/"))
+        .map((p) => ({ name: skillNameFromPath(p), path: p })),
+    );
+    setPendingSkills(null);
+    const fs = spec.filesystem;
+    setSessionFs(fs ? fs.session_storage != null : true);
+    setSessionMount(fs?.session_storage?.mount_path ?? DEFAULT_SESSION_MOUNT);
+    setS3Mounts(
+      (fs?.s3_files ?? []).map((m) => ({ arn: m.access_point_arn ?? "", path: m.mount_path ?? "" })),
+    );
+    setEfsMounts(
+      (fs?.efs ?? []).map((m) => ({ arn: m.access_point_arn ?? "", path: m.mount_path ?? "" })),
+    );
+    setVpcSubnets((spec.network?.subnets ?? []).join(", "));
+    setVpcSgs((spec.network?.security_groups ?? []).join(", "));
     setSubmitError(null);
     setStep(2);
   };
@@ -239,7 +321,89 @@ export function CreateAgent() {
   const toggleTool = (tool: string) =>
     setTools((prev) => (prev.includes(tool) ? prev.filter((x) => x !== tool) : [...prev, tool]));
 
-  const configValid = /^[a-z][a-z0-9-]{2,47}$/.test(name) && systemPrompt.trim().length > 0;
+  /* ── custom skill sources: inspect (zip/git) → pick → attach ──────────── */
+
+  const apiMsg = (err: unknown) =>
+    err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : String(err);
+
+  const attachStaged = useCallback(
+    async (stagingId: string, indices: number[]) => {
+      const res = await api.attachSkillSources(
+        stagingId,
+        indices.map((index) => ({ index })),
+      );
+      const attached = res.skills.filter((s) => s.ok && s.path);
+      const failed = res.skills.filter((s) => !s.ok);
+      if (attached.length) {
+        setSkills((prev) => [...prev, ...attached.map((s) => s.path as string)]);
+        setCustomSkills((prev) => [
+          ...prev,
+          ...attached.map((s) => ({ name: s.name, path: s.path as string })),
+        ]);
+      }
+      for (const item of failed) toast(`${item.name}: ${item.error ?? "attach failed"}`);
+      return failed.length === 0;
+    },
+    [toast],
+  );
+
+  const inspectSource = async (input: File | { url: string }) => {
+    setSrcBusy(true);
+    try {
+      const res =
+        input instanceof File
+          ? await api.inspectSkillZip(input)
+          : await api.inspectSkillGit(input.url);
+      const valid = res.skills.filter((s) => s.valid);
+      if (valid.length === 1 && res.skills.length === 1) {
+        // single-skill source (typical zip) — attach straight away
+        if (await attachStaged(res.staging_id, [valid[0].index])) {
+          setGitOpen(false);
+          setGitUrl("");
+        }
+      } else {
+        // monorepo — let the user pick which skills to attach
+        setPendingSkills({ stagingId: res.staging_id, skills: res.skills, picked: [] });
+      }
+    } catch (err) {
+      toast(apiMsg(err));
+    } finally {
+      setSrcBusy(false);
+    }
+  };
+
+  const attachPicked = async () => {
+    if (!pendingSkills || pendingSkills.picked.length === 0) return;
+    setSrcBusy(true);
+    try {
+      if (await attachStaged(pendingSkills.stagingId, pendingSkills.picked)) {
+        setPendingSkills(null);
+        setGitOpen(false);
+        setGitUrl("");
+      }
+    } catch (err) {
+      toast(apiMsg(err));
+    } finally {
+      setSrcBusy(false);
+    }
+  };
+
+  /* ── filesystem validation (container) ────────────────────────────────── */
+
+  const fsPaths = [
+    ...(sessionFs ? [sessionMount] : []),
+    ...s3Mounts.map((m) => m.path),
+    ...efsMounts.map((m) => m.path),
+  ];
+  const fsValid =
+    method !== "container" ||
+    ((!sessionFs || MOUNT_RE.test(sessionMount)) &&
+      [...s3Mounts, ...efsMounts].every((m) => m.arn.trim().length > 0 && MOUNT_RE.test(m.path)) &&
+      new Set(fsPaths).size === fsPaths.length &&
+      (!byoMounts || (splitIds(vpcSubnets).length > 0 && splitIds(vpcSgs).length > 0)));
+
+  const configValid =
+    /^[a-z][a-z0-9-]{2,47}$/.test(name) && systemPrompt.trim().length > 0 && fsValid;
 
   return (
     <section>
@@ -452,6 +616,24 @@ export function CreateAgent() {
                   <>
                     <span className="selchip on">Task · subagents ✓</span>
                     <span className="selchip on">fact-checker · .claude/agents ✓</span>
+                    {remoteMcp.map((server) => (
+                      <button
+                        key={server.name}
+                        type="button"
+                        className={`selchip${selectedMcp.includes(server.name) ? " on" : ""}`}
+                        style={{ cursor: "pointer" }}
+                        title={server.url}
+                        onClick={() =>
+                          setSelectedMcp((prev) =>
+                            prev.includes(server.name)
+                              ? prev.filter((x) => x !== server.name)
+                              : [...prev, server.name],
+                          )
+                        }
+                      >
+                        {server.name} · mcp {selectedMcp.includes(server.name) ? "✓" : "+"}
+                      </button>
+                    ))}
                   </>
                 ) : (
                   <>
@@ -479,7 +661,7 @@ export function CreateAgent() {
                 />
               </div>
             )}
-            {method === "harness" && (skillCatalog.length > 0 || skills.length > 0) && (
+            {(method === "harness" || method === "container") && (
               <div className="field">
                 <label>{t("create.configure.skills")}</label>
                 <div className="selchips">
@@ -503,17 +685,219 @@ export function CreateAgent() {
                   ))}
                   {skills
                     .filter((path) => !skillCatalog.some((s) => s.path === path))
-                    .map((skill) => (
-                      <button
-                        key={skill}
-                        type="button"
-                        className="selchip on"
-                        style={{ cursor: "pointer" }}
-                        onClick={() => setSkills((prev) => prev.filter((s) => s !== skill))}
+                    .map((path) => {
+                      const custom = customSkills.find((c) => c.path === path);
+                      return (
+                        <button
+                          key={path}
+                          type="button"
+                          className="selchip on"
+                          style={{ cursor: "pointer" }}
+                          title={path}
+                          onClick={() => {
+                            setSkills((prev) => prev.filter((s) => s !== path));
+                            setCustomSkills((prev) => prev.filter((c) => c.path !== path));
+                          }}
+                        >
+                          {custom
+                            ? `${custom.name} · custom ✕`
+                            : `${skillNameFromPath(path)} · registry ✕`}
+                        </button>
+                      );
+                    })}
+                  <button
+                    type="button"
+                    className="selchip"
+                    style={{ cursor: "pointer" }}
+                    disabled={srcBusy}
+                    onClick={() => skillFileRef.current?.click()}
+                  >
+                    ⬆ {t("create.configure.skillsUploadZip")}
+                  </button>
+                  <button
+                    type="button"
+                    className={`selchip${gitOpen ? " on" : ""}`}
+                    style={{ cursor: "pointer" }}
+                    disabled={srcBusy}
+                    onClick={() => setGitOpen((v) => !v)}
+                  >
+                    ⇣ {t("create.configure.skillsFromGit")}
+                  </button>
+                  <input
+                    ref={skillFileRef}
+                    type="file"
+                    accept=".zip"
+                    style={{ display: "none" }}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = "";
+                      if (file) void inspectSource(file);
+                    }}
+                  />
+                </div>
+                {gitOpen && (
+                  <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                    <input
+                      className="input mono"
+                      style={{ flex: 1 }}
+                      value={gitUrl}
+                      onChange={(e) => setGitUrl(e.target.value)}
+                      placeholder="https://github.com/org/repo[/subdir][@ref]"
+                    />
+                    <Btn
+                      disabled={srcBusy || !gitUrl.trim().startsWith("https://")}
+                      onClick={() => void inspectSource({ url: gitUrl.trim() })}
+                    >
+                      {srcBusy ? "…" : t("create.configure.skillsGitFetch")}
+                    </Btn>
+                  </div>
+                )}
+                {pendingSkills && (
+                  <div style={{ marginTop: 8 }}>
+                    <label>{t("create.configure.skillsPending")}</label>
+                    <div className="selchips">
+                      {pendingSkills.skills.map((s) => (
+                        <button
+                          key={s.index}
+                          type="button"
+                          className={`selchip${pendingSkills.picked.includes(s.index) ? " on" : ""}`}
+                          style={{ cursor: s.valid ? "pointer" : "not-allowed", opacity: s.valid ? 1 : 0.4 }}
+                          title={s.valid ? s.description : s.errors.join("; ")}
+                          disabled={!s.valid}
+                          onClick={() =>
+                            setPendingSkills((prev) =>
+                              prev && {
+                                ...prev,
+                                picked: prev.picked.includes(s.index)
+                                  ? prev.picked.filter((i) => i !== s.index)
+                                  : [...prev.picked, s.index],
+                              },
+                            )
+                          }
+                        >
+                          {s.name} {pendingSkills.picked.includes(s.index) ? "✓" : "+"}
+                        </button>
+                      ))}
+                      <Btn
+                        disabled={srcBusy || pendingSkills.picked.length === 0}
+                        onClick={() => void attachPicked()}
                       >
-                        {skill} · registry ✕
-                      </button>
-                    ))}
+                        {t("create.configure.skillsAttach", { n: pendingSkills.picked.length })}
+                      </Btn>
+                      <Btn onClick={() => setPendingSkills(null)}>✕</Btn>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            {method === "container" && (
+              <div className="field" data-testid="fs-config">
+                <label>{t("create.configure.filesystem")}</label>
+                <div className="selchips">
+                  <button
+                    type="button"
+                    className={`selchip${sessionFs ? " on" : ""}`}
+                    style={{ cursor: "pointer" }}
+                    onClick={() => setSessionFs((v) => !v)}
+                  >
+                    {t("create.configure.fsSession")} {sessionFs ? "✓" : "+"}
+                  </button>
+                  <button
+                    type="button"
+                    className="selchip"
+                    style={{ cursor: "pointer", opacity: s3Mounts.length >= 2 ? 0.4 : 1 }}
+                    disabled={s3Mounts.length >= 2}
+                    onClick={() => setS3Mounts((prev) => [...prev, { arn: "", path: "" }])}
+                  >
+                    {t("create.configure.fsAddS3")}
+                  </button>
+                  <button
+                    type="button"
+                    className="selchip"
+                    style={{ cursor: "pointer", opacity: efsMounts.length >= 2 ? 0.4 : 1 }}
+                    disabled={efsMounts.length >= 2}
+                    onClick={() => setEfsMounts((prev) => [...prev, { arn: "", path: "" }])}
+                  >
+                    {t("create.configure.fsAddEfs")}
+                  </button>
+                </div>
+                {sessionFs && (
+                  <input
+                    className="input mono"
+                    style={{ marginTop: 8 }}
+                    value={sessionMount}
+                    onChange={(e) => setSessionMount(e.target.value)}
+                    placeholder={DEFAULT_SESSION_MOUNT}
+                    aria-label={t("create.configure.fsSessionMount")}
+                  />
+                )}
+                {[
+                  { kind: "s3" as const, rows: s3Mounts, set: setS3Mounts },
+                  { kind: "efs" as const, rows: efsMounts, set: setEfsMounts },
+                ].map(({ kind, rows, set }) =>
+                  rows.map((row, i) => (
+                    <div key={`${kind}-${i}`} style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                      <span className="selchip on" style={{ alignSelf: "center" }}>
+                        {kind === "s3" ? "S3 FILES" : "EFS"}
+                      </span>
+                      <input
+                        className="input mono"
+                        style={{ flex: 2 }}
+                        value={row.arn}
+                        onChange={(e) =>
+                          set((prev) =>
+                            prev.map((r, j) => (j === i ? { ...r, arn: e.target.value } : r)),
+                          )
+                        }
+                        placeholder={t(
+                          kind === "s3"
+                            ? "create.configure.fsS3ArnPlaceholder"
+                            : "create.configure.fsEfsArnPlaceholder",
+                        )}
+                      />
+                      <input
+                        className="input mono"
+                        style={{ flex: 1 }}
+                        value={row.path}
+                        onChange={(e) =>
+                          set((prev) =>
+                            prev.map((r, j) => (j === i ? { ...r, path: e.target.value } : r)),
+                          )
+                        }
+                        placeholder="/mnt/data"
+                      />
+                      <Btn onClick={() => set((prev) => prev.filter((_, j) => j !== i))}>✕</Btn>
+                    </div>
+                  )),
+                )}
+                {byoMounts && (
+                  <div style={{ marginTop: 8 }}>
+                    <label>{t("create.configure.fsVpc")}</label>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <input
+                        className="input mono"
+                        style={{ flex: 1 }}
+                        value={vpcSubnets}
+                        onChange={(e) => setVpcSubnets(e.target.value)}
+                        placeholder="subnet-0abc, subnet-0def"
+                        aria-label={t("create.configure.fsSubnets")}
+                      />
+                      <input
+                        className="input mono"
+                        style={{ flex: 1 }}
+                        value={vpcSgs}
+                        onChange={(e) => setVpcSgs(e.target.value)}
+                        placeholder="sg-0abc"
+                        aria-label={t("create.configure.fsSgs")}
+                      />
+                    </div>
+                  </div>
+                )}
+                <div className="note" style={{ marginTop: 8 }}>
+                  <span className="i">[i]</span>
+                  <span>
+                    {byoMounts ? t("create.configure.fsNoteByo") : t("create.configure.fsNote")}
+                  </span>
                 </div>
               </div>
             )}

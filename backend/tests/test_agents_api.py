@@ -170,3 +170,65 @@ def test_job_not_found_envelope(client):
     res = client.get("/api/jobs/nope")
     assert res.status_code == 404
     assert res.json()["code"] == "job.not_found"
+
+
+CONTAINER_SPEC = {
+    "name": "sdk-fs-agent",
+    "method": "container",
+    "system_prompt": "hi",
+    "tools": [{"type": "mcp", "name": "deepwiki", "config": {"url": "https://mcp.deepwiki.com/mcp"}}],
+    "skills": ["s3://bkt/skills/web-analyzer/", "s3://bkt/agent-skills/ab12cd34/notes/"],
+    "filesystem": {
+        "session_storage": {"mount_path": "/mnt/workspace"},
+        "s3_files": [{
+            "access_point_arn":
+                "arn:aws:s3files:us-west-2:111122223333:file-system/fs-a/access-point/ap-1",
+            "mount_path": "/mnt/datasets",
+        }],
+        "efs": [],
+    },
+    "network": {"subnets": ["subnet-a"], "security_groups": ["sg-1"]},
+}
+
+
+def test_create_container_agent_with_capabilities_and_fs(client):
+    res = client.post("/api/agents", json=CONTAINER_SPEC)
+    assert res.status_code == 202
+    agent_id = res.json()["agent"]["id"]
+    spec = client.get(f"/api/agents/{agent_id}").json()["spec"]
+    assert spec["skills"] == CONTAINER_SPEC["skills"]
+    assert spec["tools"][0]["config"]["url"] == "https://mcp.deepwiki.com/mcp"
+    assert spec["filesystem"]["session_storage"]["mount_path"] == "/mnt/workspace"
+    assert spec["filesystem"]["s3_files"][0]["mount_path"] == "/mnt/datasets"
+    assert spec["network"]["subnets"] == ["subnet-a"]
+
+
+def test_container_agent_byo_without_vpc_422(client):
+    bad = {**CONTAINER_SPEC, "name": "sdk-bad-agent"}
+    bad.pop("network")
+    res = client.post("/api/agents", json=bad)
+    assert res.status_code == 422
+    assert res.json()["code"] == "validation.invalid_request"
+
+
+def test_container_agent_invalid_mount_422(client):
+    bad = {
+        **CONTAINER_SPEC,
+        "name": "sdk-bad-mount",
+        "filesystem": {"session_storage": {"mount_path": "/data/x"}},
+        "network": None,
+    }
+    res = client.post("/api/agents", json=bad)
+    assert res.status_code == 422
+
+
+def test_container_redeploy_preserves_fs_fields(client, no_real_deploy):
+    agent_id = client.post("/api/agents", json=CONTAINER_SPEC).json()["agent"]["id"]
+    _activate(agent_id)
+    edited = {**CONTAINER_SPEC, "filesystem": {**CONTAINER_SPEC["filesystem"],
+                                               "session_storage": None}}
+    res = client.post(f"/api/agents/{agent_id}/redeploy", json=edited)
+    assert res.status_code == 202
+    spec = client.get(f"/api/agents/{agent_id}").json()["spec"]
+    assert spec["filesystem"]["session_storage"] is None  # user disabled it
+    assert spec["filesystem"]["s3_files"]  # BYO mount kept

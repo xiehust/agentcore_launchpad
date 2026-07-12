@@ -15,6 +15,7 @@ from app.deployer.pipeline import resume_pending_jobs
 from app.evaluation.routers import router as evaluation_router
 from app.evaluation.service import resume_interrupted_runs
 from app.optimization.routers import router as experiments_router
+from app.routers.agent_skills import router as agent_skills_router
 from app.routers.agents import router as agents_router
 from app.routers.apikeys import router as apikeys_router
 from app.routers.chat import router as chat_router
@@ -59,6 +60,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     init_db()
     app.include_router(overview_router)
     app.include_router(agents_router)
+    app.include_router(agent_skills_router)  # attach-without-registering skill sources
     app.include_router(tools_router)
     app.include_router(registry_router)
     app.include_router(chat_router)

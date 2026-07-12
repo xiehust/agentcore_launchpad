@@ -197,23 +197,53 @@ def bundle_skills_into(
     studio local-debug executor (which has no AgentSpec — it bundles skills into
     the run's temp workdir so ``Path(__file__).parent/"skills"`` resolves them).
     Any skill issue logs + skips — never raises."""
-    empty = {"bundled": [], "files": 0, "bytes": 0}
     names = extract_skill_names(code)
     if not names:
-        return empty
+        return {"bundled": [], "files": 0, "bytes": 0}
     if skill_records is None:
         skill_records = _approved_skill_paths(log)
+    pairs: list[tuple[str, str]] = []
+    for name in names:
+        path = skill_records.get(name)
+        if not path:
+            log(f"skill '{name}' not found in registry — skipped")
+            continue
+        pairs.append((name, path))
+    return _download_named_skills(pairs, dest_parent, log, s3_client=s3_client)
+
+
+def bundle_skill_paths_into(
+    paths: list[str],
+    dest_parent: Path,
+    log: Callable[[str], None],
+    *,
+    s3_client: Any = None,
+) -> dict[str, Any]:
+    """``spec.skills`` consumer (container path): download each explicit
+    ``s3://bucket/…/{name}/`` prefix into ``dest_parent/skills/{name}/`` — the
+    name is the prefix tail. No registry lookup, no code parsing; same
+    log-and-skip posture as ``bundle_skills_into``."""
+    pairs = [(p.rstrip("/").rsplit("/", 1)[-1], p) for p in paths if p and p.strip()]
+    return _download_named_skills(pairs, dest_parent, log, s3_client=s3_client)
+
+
+def _download_named_skills(
+    pairs: list[tuple[str, str]],
+    dest_parent: Path,
+    log: Callable[[str], None],
+    *,
+    s3_client: Any = None,
+) -> dict[str, Any]:
+    """Download each (name, s3 prefix uri) into dest_parent/skills/{name}/."""
+    if not pairs:
+        return {"bundled": [], "files": 0, "bytes": 0}
     if s3_client is None:
         s3_client = boto3.client("s3", region_name=get_settings().region)
 
     bundled: list[str] = []
     total_files = 0
     total_bytes = 0
-    for name in names:
-        path = skill_records.get(name)
-        if not path:
-            log(f"skill '{name}' not found in registry — skipped")
-            continue
+    for name, path in pairs:
         bucket, prefix = _parse_s3_uri(path)
         dest = dest_parent / "skills" / name
         try:

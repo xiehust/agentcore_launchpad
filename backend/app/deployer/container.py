@@ -12,6 +12,7 @@
 import shutil
 import time
 from pathlib import Path
+from typing import Any
 
 import boto3
 
@@ -24,7 +25,7 @@ from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client
 from app.templates.claude_sdk_agent import assemble_build_context
 
-from .zip_runtime import sanitize_runtime_name
+from .zip_runtime import bundle_skill_paths_into, sanitize_runtime_name
 
 
 def _image_ref(settings, agent: Agent) -> tuple[str, str, str]:
@@ -34,9 +35,18 @@ def _image_ref(settings, agent: Agent) -> tuple[str, str, str]:
     return registry, repo, tag
 
 
+def _build_context(spec: AgentSpec, agent: Agent, log) -> Path:
+    """Template files + rendered main.py, then spec.skills S3 prefixes into
+    .claude/skills/{name}/ so the claude CLI discovers them next to agents/."""
+    context_dir = assemble_build_context(spec, Path(f"/tmp/launchpad_ctx_{agent.name}"))
+    if spec.skills:
+        bundle_skill_paths_into(spec.skills, context_dir / ".claude", log)
+    return context_dir
+
+
 def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
     spec = AgentSpec(**agent.spec)
-    context_dir = assemble_build_context(spec, Path(f"/tmp/launchpad_ctx_{agent.name}"))
+    context_dir = _build_context(spec, agent, ctx.log)
     files = sorted(str(p.relative_to(context_dir)) for p in context_dir.rglob("*") if p.is_file())
     ctx.scratch["context_dir"] = str(context_dir)
     ctx.log(f"build context assembled: {', '.join(files)}")
@@ -82,12 +92,91 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
     return StageResult(detail=f"codebuild · arm64 · {mins:.1f}m → :{tag}")
 
 
-def _stage_provision(ctx: StageContext, agent: Agent) -> StageResult:
+def _filesystem_configurations(spec: AgentSpec) -> list[dict]:
+    """spec.filesystem → the filesystemConfigurations union list (AWS shapes)."""
+    fs = spec.filesystem
+    out: list[dict] = []
+    if fs.session_storage:
+        out.append({"sessionStorage": {"mountPath": fs.session_storage.mount_path}})
+    for mount in fs.s3_files:
+        out.append({"s3FilesAccessPoint": {
+            "accessPointArn": mount.access_point_arn, "mountPath": mount.mount_path,
+        }})
+    for mount in fs.efs:
+        out.append({"efsAccessPoint": {
+            "accessPointArn": mount.access_point_arn, "mountPath": mount.mount_path,
+        }})
+    return out
+
+
+def _vpc(spec: AgentSpec) -> dict | None:
+    """networkModeConfig input — only when BYO mounts force VPC mode."""
+    if not (spec.filesystem.byo and spec.network):
+        return None
+    return {"subnets": spec.network.subnets, "security_groups": spec.network.security_groups}
+
+
+def _fs_policy_document(spec: AgentSpec) -> dict | None:
+    """Execution-role inline policy granting mount access to the BYO access
+    points. S3 Files APs embed the file-system ARN (strip '/access-point/…');
+    EFS APs don't — Resource '*' scoped by the AccessPointArn condition."""
+    statements: list[dict] = []
+    if spec.filesystem.s3_files:
+        arns = [m.access_point_arn for m in spec.filesystem.s3_files]
+        statements.append({
+            "Effect": "Allow",
+            "Action": ["s3files:ClientMount", "s3files:ClientWrite", "s3files:GetAccessPoint"],
+            "Resource": sorted({a.split("/access-point/")[0] for a in arns}),
+            "Condition": {"ArnEquals": {"s3files:AccessPointArn": arns}},
+        })
+    if spec.filesystem.efs:
+        arns = [m.access_point_arn for m in spec.filesystem.efs]
+        statements.append({
+            "Effect": "Allow",
+            "Action": ["elasticfilesystem:ClientMount", "elasticfilesystem:ClientWrite"],
+            "Resource": "*",
+            "Condition": {"ArnEquals": {"elasticfilesystem:AccessPointArn": arns}},
+        })
+    if not statements:
+        return None
+    return {"Version": "2012-10-17", "Statement": statements}
+
+
+def _fs_policy_name(agent_name: str) -> str:
+    return f"launchpad-fs-{agent_name}"
+
+
+def _sync_fs_policy(iam: Any, role_arn: str, agent: Agent, spec: AgentSpec, log) -> str:
+    """Attach the BYO-mount inline policy (or drop a stale one when the mounts
+    were removed on re-publish). Returns a short detail string."""
+    import json as _json
+
+    role_name = role_arn.rsplit("/", 1)[-1]
+    policy = _fs_policy_document(spec)
+    name = _fs_policy_name(agent.name)
+    if policy:
+        iam.put_role_policy(
+            RoleName=role_name, PolicyName=name, PolicyDocument=_json.dumps(policy)
+        )
+        log(f"inline policy {name} attached to {role_name} (BYO file-system mounts)")
+        return f" · fs policy {name}"
+    try:
+        iam.delete_role_policy(RoleName=role_name, PolicyName=name)
+        log(f"inline policy {name} removed (no BYO mounts)")
+    except Exception:  # absent on most agents — nothing to clean
+        pass
+    return ""
+
+
+def _stage_provision(ctx: StageContext, agent: Agent, iam_client: Any = None) -> StageResult:
     role_arn = get_settings().resources.get("execution_role_arn")
     if not role_arn:
         raise RuntimeError("execution_role_arn missing — run scripts/bootstrap.py")
     ctx.scratch["execution_role_arn"] = role_arn
-    return StageResult(detail="iam role reused · launchpad-base")
+    spec = AgentSpec(**agent.spec)
+    iam = iam_client or boto3.client("iam", region_name=get_settings().region)
+    detail = _sync_fs_policy(iam, role_arn, agent, spec, ctx.log)
+    return StageResult(detail=f"iam role reused · launchpad-base{detail}")
 
 
 def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
@@ -106,6 +195,8 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 "role_arn": ctx.scratch.get("execution_role_arn")
                 or settings.resources.get("execution_role_arn", ""),
                 "environment": spec.env or None,
+                "filesystem_configurations": _filesystem_configurations(spec) or None,
+                "vpc": _vpc(spec),
             }
 
         if mode == "update" and row.resource_id:  # re-publish → UpdateAgentRuntime (new version)
@@ -158,7 +249,7 @@ STAGES = {
 register_method("container", STAGES)
 
 
-def delete_agent_resources(agent: Agent) -> None:
+def delete_agent_resources(agent: Agent, iam_client: Any = None) -> None:
     if not agent.resource_id:
         return
     client = control_client()
@@ -166,3 +257,15 @@ def delete_agent_resources(agent: Agent) -> None:
         rt.delete_runtime(client, agent.resource_id)
     except client.exceptions.ResourceNotFoundException:
         pass
+    # BYO-mount inline policy is per-agent — best-effort cleanup
+    settings = get_settings()
+    role_arn = settings.resources.get("execution_role_arn", "")
+    if role_arn:
+        try:
+            iam = iam_client or boto3.client("iam", region_name=settings.region)
+            iam.delete_role_policy(
+                RoleName=role_arn.rsplit("/", 1)[-1],
+                PolicyName=_fs_policy_name(agent.name),
+            )
+        except Exception:
+            pass

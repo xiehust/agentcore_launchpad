@@ -32,6 +32,16 @@ or alter validation caps. Introduced by task `07-11-registry-skill-multi-source`
 > a2d6be2): register/edit are standalone `?view=` sub-pages and records are
 > editable via `PUT /records/{id}` — see §8 below.
 
+> Extended by task `07-12-agent-sdk-capabilities-fs`: the inspect staging now
+> has a SECOND consumer — `POST /api/agent-skills/import` uploads selected
+> staged bundles to `agent-skills/{uid8}/{name}/` **without creating a registry
+> record** (create-wizard custom skill sources). It shares `_staging`,
+> `_match_bundle` and `upload_bundle_files` (factored out of
+> `register_skill_bundle`; keys append to the caller's list AS they land so a
+> mid-batch failure leaves an exact cleanup list). Changing staging semantics
+> or the upload loop now affects both consumers — see
+> [container-capabilities-filesystem.md](./container-capabilities-filesystem.md).
+
 ### 2. Signatures
 
 Backend service (`app/services/skill_ingest.py`) — every acquirer returns the

@@ -51,6 +51,22 @@ export interface JobInfo {
   events: JobEvent[];
 }
 
+export interface ByoMountInput {
+  access_point_arn: string;
+  mount_path: string;
+}
+
+export interface FilesystemInput {
+  session_storage: { mount_path: string } | null;
+  s3_files: ByoMountInput[];
+  efs: ByoMountInput[];
+}
+
+export interface VpcNetworkInput {
+  subnets: string[];
+  security_groups: string[];
+}
+
 export interface AgentSpecInput {
   name: string;
   method: string;
@@ -63,6 +79,29 @@ export interface AgentSpecInput {
   requirements?: string[];
   env?: Record<string, string>;
   studio_flow?: { nodes: unknown[]; edges: unknown[]; graphMode: boolean };
+  filesystem?: FilesystemInput;
+  network?: VpcNetworkInput;
+}
+
+/** One skill discovered by /api/registry/skills/inspect (zip or git source). */
+export interface InspectedSkill {
+  index: number;
+  name: string;
+  description: string;
+  version: string;
+  files: string[];
+  valid: boolean;
+  errors: string[];
+}
+
+/** Result row from /api/agent-skills/import (attach-without-registering). */
+export interface AttachedSkill {
+  name: string;
+  ok: boolean;
+  path?: string;
+  description?: string;
+  error?: string;
+  error_code?: string;
 }
 
 export class ApiError extends Error {
@@ -80,6 +119,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { "Content-Type": "application/json" },
     ...init,
   });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    const env = (body ?? {}) as { code?: string; message?: string; detail?: unknown };
+    throw new ApiError(env.code ?? `http.${res.status}`, env.message ?? res.statusText, env.detail);
+  }
+  return body as T;
+}
+
+/** multipart POST — the browser sets the boundary Content-Type itself. */
+async function requestForm<T>(path: string, form: FormData): Promise<T> {
+  const res = await fetch(path, { method: "POST", body: form });
   const body = await res.json().catch(() => null);
   if (!res.ok) {
     const env = (body ?? {}) as { code?: string; message?: string; detail?: unknown };
@@ -317,6 +367,24 @@ export const api = {
     ),
   deleteAgent: (id: string) =>
     request<{ deleted: boolean }>(`/api/agents/${id}`, { method: "DELETE" }),
+  inspectSkillZip: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return requestForm<{ staging_id: string; skills: InspectedSkill[] }>(
+      "/api/registry/skills/inspect",
+      form,
+    );
+  },
+  inspectSkillGit: (url: string, ref?: string, subdir?: string) =>
+    request<{ staging_id: string; skills: InspectedSkill[] }>("/api/registry/skills/inspect", {
+      method: "POST",
+      body: JSON.stringify({ source: { kind: "git", url, ref, subdir } }),
+    }),
+  attachSkillSources: (stagingId: string, selections: { index: number }[]) =>
+    request<{ skills: AttachedSkill[] }>("/api/agent-skills/import", {
+      method: "POST",
+      body: JSON.stringify({ staging_id: stagingId, selections }),
+    }),
   obsDashboard: (range: string, force = false) =>
     request<ObsDashboard>(`/api/observability/dashboard?${obsQuery(range, force)}`),
   obsTraces: (range: string, force = false) =>
