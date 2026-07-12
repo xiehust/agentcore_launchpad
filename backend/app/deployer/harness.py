@@ -81,12 +81,22 @@ def build_create_params(
     if tools:
         params["tools"] = tools
     if spec.skills:
-        params["skills"] = [{"path": path} for path in spec.skills]
+        params["skills"] = [_skill_source(path) for path in spec.skills]
     if spec.env:
         params["environmentVariables"] = dict(spec.env)
     if (spec.memory.short_term or spec.memory.long_term) and memory_arn:
         params["memory"] = {"agentCoreMemoryConfiguration": {"arn": memory_arn}}
     return params
+
+
+def _skill_source(path: str) -> dict[str, Any]:
+    """spec.skills entry → HarnessSkills member. The API's ``path`` member is a
+    *filesystem* path — S3 URIs sent there pass validation but are silently
+    never loaded at runtime; S3 sources belong in {"s3": {"uri": <dir prefix>}}.
+    Legacy specs may carry `…/SKILL.md` file paths — normalize to the directory."""
+    if path.startswith("s3://"):
+        return {"s3": {"uri": path.removesuffix("SKILL.md")}}
+    return {"path": path}
 
 
 def _gateway_config(resources: dict[str, Any]) -> dict[str, str] | None:

@@ -64,6 +64,24 @@ def test_build_params_tools_skills_env_no_memory():
     assert "memory" not in params
 
 
+def test_build_params_s3_skills_use_s3_source():
+    """Registry skills are S3 prefixes and must ride {"s3": {"uri": …}} — the
+    `path` member is a FILESYSTEM path; s3 URIs there deploy fine but the
+    harness silently never loads the skill. Legacy `…/SKILL.md` entries
+    normalize to their directory."""
+    s = spec(skills=[
+        "s3://bkt/skills/pirate-speak/",
+        "s3://bkt/skills/meeting-summarizer/SKILL.md",  # pre-bundle record format
+        "core-skills/builtin",  # non-s3 → filesystem path passthrough
+    ])
+    params = build_create_params(s, ROLE_ARN, MEM_ARN)
+    assert params["skills"] == [
+        {"s3": {"uri": "s3://bkt/skills/pirate-speak/"}},
+        {"s3": {"uri": "s3://bkt/skills/meeting-summarizer/"}},
+        {"path": "core-skills/builtin"},
+    ]
+
+
 def test_wrap_params_for_update_wraps_memory():
     """UpdateHarness's memory shape is {"optionalValue": …}, unlike create —
     sending the create shape raises ParamValidationError (unknown parameter

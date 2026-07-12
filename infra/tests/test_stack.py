@@ -63,6 +63,38 @@ def test_execution_role_trusts_agentcore(template: Template):
     )
 
 
+def test_execution_role_reads_skill_bundles(template: Template):
+    """Harness runtimes fetch attached S3 skill bundles with the exec role —
+    without skills/-scoped GetObject + ListBucket, invoke dies on AccessDenied."""
+    template.has_resource_properties(
+        "AWS::IAM::Policy",
+        Match.object_like(
+            {
+                "PolicyDocument": Match.object_like(
+                    {
+                        "Statement": Match.array_with(
+                            [
+                                Match.object_like(
+                                    {"Sid": "SkillBundleObjects", "Action": "s3:GetObject"}
+                                ),
+                                Match.object_like(
+                                    {
+                                        "Sid": "SkillBundleList",
+                                        "Action": "s3:ListBucket",
+                                        "Condition": {
+                                            "StringLike": {"s3:prefix": "skills/*"}
+                                        },
+                                    }
+                                ),
+                            ]
+                        )
+                    }
+                )
+            }
+        ),
+    )
+
+
 def test_outputs_exported(template: Template):
     outputs = template.to_json()["Outputs"]
     for key in (

@@ -114,7 +114,8 @@ def test_search_caps_max_results():
 
 
 def test_harness_skills_round_trip():
-    """spec.skills paths land as skills[{path}] in CreateHarness params."""
+    """Registry skill prefixes land as skills[{s3:{uri}}] in CreateHarness
+    params — the `path` member is a filesystem path and never loads from S3."""
     from app.deployer.harness import build_create_params
     from app.schemas.agent import AgentSpec
 
@@ -123,4 +124,4 @@ def test_harness_skills_round_trip():
         skills=["s3://bkt/skills/expense-report-writer/"],
     )
     params = build_create_params(spec, "arn:role", None)
-    assert params["skills"] == [{"path": "s3://bkt/skills/expense-report-writer/"}]
+    assert params["skills"] == [{"s3": {"uri": "s3://bkt/skills/expense-report-writer/"}}]

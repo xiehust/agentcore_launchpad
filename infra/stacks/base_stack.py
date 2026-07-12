@@ -236,6 +236,23 @@ class LaunchpadBaseStack(Stack):
                 resources=["*"],
             )
         )
+        # Harness runtimes fetch attached skill bundles ({"s3": {"uri": …}})
+        # from the artifacts bucket under skills/ using this role.
+        exec_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="SkillBundleObjects",
+                actions=["s3:GetObject"],
+                resources=[artifacts.arn_for_objects("skills/*")],
+            )
+        )
+        exec_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="SkillBundleList",
+                actions=["s3:ListBucket"],
+                resources=[artifacts.bucket_arn],
+                conditions={"StringLike": {"s3:prefix": "skills/*"}},
+            )
+        )
         exec_role.add_to_policy(
             iam.PolicyStatement(
                 sid="ABTestOrchestration",
