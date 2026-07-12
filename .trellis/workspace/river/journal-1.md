@@ -160,3 +160,38 @@ Registry /registry skill registration extended from inline-only to four sources 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 5: Registry register/edit standalone sub-pages + record update endpoint
+
+**Date**: 2026-07-12
+**Task**: Registry register/edit standalone sub-pages + record update endpoint
+**Package**: lab4-interactive
+**Branch**: `main`
+
+### Summary
+
+Registry /registry register drawer replaced by an Evaluation-style ?view=register sub-page (RegisterView.tsx: ViewHead + back + eval-grid form/how-it-works panels; browser-back returns to list; record-type preselects from active tab via initialType) and a NEW record-edit capability: ?view=edit&record=<id> (EditView.tsx) backed by PUT /api/registry/records/{id} with four branches — desc-only (descriptors resent unchanged, NO version bump), MCP url rebuild, skill_md overwrite of ONLY skills/{name}/SKILL.md (supporting files + definition files/source preserved, legacy records without files/source safe), and zip full-replace via the existing inspect staging (paginated prefix clear, name always forced to record name — name immutable). Gating: A2A + DEPRECATED not editable (400 registry.not_editable, no edit button). Check agent closed 3 test gaps (legacy definition fallback, unparseable definition, staging index OOR). All ACs live browser-verified: desc edit kept 1.0.0, SKILL.md edit bumped 1.1.0 with S3 sibling untouched, zip replace 1.2.0 with prefix swap, MCP url /v1->/v2, no edit entry on A2A/DISABLED. Backend 362 pytest + ruff clean; frontend tsc/lint/build clean. Spec §8 added to registry-skill-ingestion.md. Gotcha recorded: LIST endpoint returns descriptors:null — EditView must GET by id.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `67d7348` | (see git log) |
+| `a2d6be2` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
