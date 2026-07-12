@@ -229,3 +229,37 @@ Follow-up to the anthropics/skills load test: bundle_errors now enforces SKILL_D
 ### Next Steps
 
 - None - task complete
+
+
+## Session 7: Gate USE IN NEW AGENT on APPROVED status
+
+**Date**: 2026-07-12
+**Task**: Gate USE IN NEW AGENT on APPROVED status
+**Package**: lab4-interactive
+**Branch**: `main`
+
+### Summary
+
+User-reported: Registry detail's USE IN NEW AGENT was clickable for unpublished records, but the wizard attachables catalog is APPROVED-only so the prefill silently no-oped. Button now visible-but-disabled with an approval-gate tooltip when status != APPROVED (data-testid use-in-wizard-btn). Cleaned stale registry.register.comingSoonBody key (i18n unused-key report now clean; remaining strict failures are pre-existing vendored studio hardcoded strings). Live-verified both states: docx DRAFT disabled+tooltip, product-selection-sop APPROVED navigates to /create?skill=s3://...
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5893cf1` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

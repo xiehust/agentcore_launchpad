@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 6
+- **Total Sessions**: 7
 - **Last Active**: 2026-07-12
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~231 | Active |
+| `journal-1.md` | ~265 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 7 | 2026-07-12 | Gate USE IN NEW AGENT on APPROVED status | `5893cf1` | `main` |
 | 6 | 2026-07-12 | Pre-validate skill frontmatter description (AWS 1024-char cap) | `f8f217e` | `main` |
 | 5 | 2026-07-12 | Registry register/edit standalone sub-pages + record update endpoint | `67d7348`, `a2d6be2` | `main` |
 | 4 | 2026-07-11 | Registry skill multi-source ingestion (zip/git/url + reimport) | `2b7f47f`, `2d39ca3`, `cbbb8e6` | `main` |
