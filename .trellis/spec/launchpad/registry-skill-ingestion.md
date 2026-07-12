@@ -16,6 +16,12 @@ or alter validation caps. Introduced by task `07-11-registry-skill-multi-source`
   each ≤ **102,400** bytes. No zip/git/S3 source exists AWS-side.
 - `synchronizationType: URL` is MCP/A2A-only — **not available for skills**.
   All source diversity therefore lives in the Launchpad layer.
+- **AWS parses the skillMd frontmatter and enforces `description` ≤ 1024
+  chars** (hit live 2026-07-12: anthropics/skills `claude-api` has a 1068-char
+  description → `ValidationException: agentSkills.skillMd 'description' must
+  not exceed 1024 characters` AFTER S3 upload; pipeline cleanup removed all 66
+  objects). Launchpad does NOT pre-validate this yet — a known gap: adding a
+  ≤1024 check to `bundle_errors` would fail fast at inspect with zero S3 churn.
 - Multi-file bundle bytes live at `s3://{artifacts_bucket}/skills/{name}/`;
   the deploy-time consumer (`deployer/zip_runtime.py:bundle_skills_into`)
   downloads the whole prefix, so producer-side changes need no consumer edits.
