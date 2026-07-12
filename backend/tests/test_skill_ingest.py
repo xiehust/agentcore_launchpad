@@ -150,3 +150,26 @@ def test_parse_frontmatter_robust():
     assert si.parse_frontmatter("no frontmatter") == {}
     assert si.parse_frontmatter("---\nname: x\n---\nbody")["name"] == "x"
     assert si.parse_frontmatter("---\n: : bad yaml : :\n---\n") == {}
+
+
+def test_description_over_1024_chars_invalid():
+    # AWS parses skillMd frontmatter and rejects description >1024 chars at
+    # CreateRegistryRecord (post-upload) — we fail fast at validation instead.
+    md = f"---\nname: long-desc\ndescription: {'d' * 1025}\n---\n# x\n"
+    bundle = si.bundle_from_inline(md)
+    try:
+        errors = si.bundle_errors(bundle)
+        assert any("1024" in e for e in errors)
+        with pytest.raises(SkillValidationError, match="1024"):
+            si.validate_bundle(bundle)
+    finally:
+        bundle.close()
+
+
+def test_description_exactly_1024_chars_valid():
+    md = f"---\nname: max-desc\ndescription: {'d' * 1024}\n---\n# x\n"
+    bundle = si.bundle_from_inline(md)
+    try:
+        assert si.bundle_errors(bundle) == []
+    finally:
+        bundle.close()

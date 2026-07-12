@@ -44,6 +44,9 @@ _logger = logging.getLogger("launchpad.registry")
 SKILL_MD_MAX_BYTES = 102_400  # AWS skillMd.inlineContent cap
 SKILL_BUNDLE_MAX_BYTES = 50 * 1024 * 1024  # per-skill S3 bundle cap
 SKILL_FILE_COUNT_MAX = 200
+# AWS parses the skillMd frontmatter server-side and rejects longer descriptions
+# with a post-upload ValidationException (hit live 2026-07-12 on claude-api).
+SKILL_DESCRIPTION_MAX_CHARS = 1024
 SKILL_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{2,63}$")
 
 _DEFAULT_VERSION = "0.1.0"
@@ -308,6 +311,11 @@ def bundle_errors(bundle: SkillBundle) -> list[str]:
             errors.append(
                 f"SKILL.md is {md_bytes} bytes — exceeds the {SKILL_MD_MAX_BYTES} byte limit"
             )
+    if len(bundle.description) > SKILL_DESCRIPTION_MAX_CHARS:
+        errors.append(
+            f"frontmatter description is {len(bundle.description)} chars — AWS rejects "
+            f"skillMd descriptions over {SKILL_DESCRIPTION_MAX_CHARS} chars"
+        )
     if len(bundle.files) > SKILL_FILE_COUNT_MAX:
         errors.append(f"{len(bundle.files)} files — exceeds the {SKILL_FILE_COUNT_MAX} file limit")
     total = _dir_size(bundle.root)

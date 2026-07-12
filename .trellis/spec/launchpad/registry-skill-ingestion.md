@@ -20,8 +20,10 @@ or alter validation caps. Introduced by task `07-11-registry-skill-multi-source`
   chars** (hit live 2026-07-12: anthropics/skills `claude-api` has a 1068-char
   description → `ValidationException: agentSkills.skillMd 'description' must
   not exceed 1024 characters` AFTER S3 upload; pipeline cleanup removed all 66
-  objects). Launchpad does NOT pre-validate this yet — a known gap: adding a
-  ≤1024 check to `bundle_errors` would fail fast at inspect with zero S3 churn.
+  objects). Launchpad pre-validates this since task
+  `07-12-skill-desc-1024-prevalidation`: `SKILL_DESCRIPTION_MAX_CHARS = 1024`
+  checked in `bundle_errors` — fails at inspect (422 / invalid row) with zero
+  S3 churn.
 - Multi-file bundle bytes live at `s3://{artifacts_bucket}/skills/{name}/`;
   the deploy-time consumer (`deployer/zip_runtime.py:bundle_skills_into`)
   downloads the whole prefix, so producer-side changes need no consumer edits.
