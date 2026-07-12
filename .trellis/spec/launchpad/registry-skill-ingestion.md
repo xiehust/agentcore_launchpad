@@ -20,6 +20,10 @@ or alter validation caps. Introduced by task `07-11-registry-skill-multi-source`
   the deploy-time consumer (`deployer/zip_runtime.py:bundle_skills_into`)
   downloads the whole prefix, so producer-side changes need no consumer edits.
 
+> Extended by task `07-12-registry-subpage-register-edit` (commits 67d7348 /
+> a2d6be2): register/edit are standalone `?view=` sub-pages and records are
+> editable via `PUT /records/{id}` — see §8 below.
+
 ### 2. Signatures
 
 Backend service (`app/services/skill_ingest.py`) — every acquirer returns the
@@ -153,3 +157,36 @@ def _extract_zip_safely(data, dest, *, max_files=None, max_bytes=None):
 - **SSRF guard** (`_assert_public_url` + `_GuardingTransport`) applies to url
   fetch, archive fallback, AND git clone; every redirect hop re-checked.
   DNS-rebinding TOCTOU accepted for this lab deployment.
+
+## 8. Record update (`PUT /api/registry/records/{record_id}`)
+
+Frontend surfaces: `?view=register` (RegisterView.tsx, Evaluation-style
+sub-page, replaces the old inline drawer) and `?view=edit&record=<id>`
+(EditView.tsx; edit entry hidden for A2A / DEPRECATED). Registry.tsx
+dispatches on `searchParams.get("view")`; enter with push (browser back →
+list), leave with `{replace:true}`.
+
+Request (all optional, ≥1 required):
+`{description? (≤500), url? (MCP only), skill_md? (≤102400, AGENT_SKILLS
+only), staging_id? + index?=0 (AGENT_SKILLS only)}` — `skill_md` and
+`staging_id` mutually exclusive; `staging_id` comes from the SAME
+`/skills/inspect` staging as import (consumed on success, kept on failure).
+
+Branch semantics (`registry_console.update_record`):
+- desc-only → resend existing descriptors unchanged, **no version bump**
+- MCP url → `build_mcp_descriptors` rebuild, minor bump
+- skill_md → overwrite ONLY `skills/{name}/SKILL.md`; definition keeps
+  `files`+`source` from the old definition (legacy/missing/unparseable →
+  safe fallbacks), version from new frontmatter (fallback old), rebuilt
+  definition re-guarded ≤102,400B; minor bump
+- staging bundle → full replace (paginated old-prefix delete → upload →
+  fresh definition), **name always forced to the record's registered name**
+  (name is immutable — S3 prefix/attachables/deploy dirs key on it); minor bump
+
+Error additions to the §4 matrix: 400 `registry.nothing_to_update` /
+`registry.field_conflict` / `registry.field_type_mismatch` /
+`registry.not_editable` (DEPRECATED or A2A) / `registry.skill_not_staged`
+(index out of range). 200 returns the refreshed `<record_out>`.
+
+Gotcha: the LIST endpoint returns `descriptors: null` — only
+`GET /records/{id}` carries descriptors; EditView must load via GET-by-id.

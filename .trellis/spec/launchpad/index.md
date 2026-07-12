@@ -7,6 +7,6 @@
 
 | Guide | Description | Status |
 |-------|-------------|--------|
-| [Registry Skill Ingestion](./registry-skill-ingestion.md) | Multi-source skill pipeline: SkillBundle, inspect→import staging, git/url acquirers, reimport | Active |
+| [Registry Skill Ingestion](./registry-skill-ingestion.md) | Multi-source skill pipeline: SkillBundle, inspect→import staging, git/url acquirers, reimport, record update (PUT) + register/edit sub-pages | Active |
 
 **Language**: All documentation should be written in **English**.
