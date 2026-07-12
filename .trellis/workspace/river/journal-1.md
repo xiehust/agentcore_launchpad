@@ -195,3 +195,37 @@ Registry /registry register drawer replaced by an Evaluation-style ?view=registe
 ### Next Steps
 
 - None - task complete
+
+
+## Session 6: Pre-validate skill frontmatter description (AWS 1024-char cap)
+
+**Date**: 2026-07-12
+**Task**: Pre-validate skill frontmatter description (AWS 1024-char cap)
+**Package**: lab4-interactive
+**Branch**: `main`
+
+### Summary
+
+Follow-up to the anthropics/skills load test: bundle_errors now enforces SKILL_DESCRIPTION_MAX_CHARS=1024 (AWS parses skillMd frontmatter at CreateRegistryRecord and rejects >1024-char descriptions post-upload). Oversized skills now fail at inspect — 422 for single-bundle, invalid non-selectable row in git multi-select — with zero S3 writes. Live-verified on claude-api (1068 chars): 422 with precise message, 0 S3 objects. Boundary tests 1024/1025. 364 pytest + ruff clean. Spec AWS-facts note updated from 'known gap' to 'pre-validated'.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f8f217e` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
