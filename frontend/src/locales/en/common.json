@@ -240,6 +240,8 @@
     "register": {
       "cta": "REGISTER",
       "title": "REGISTER RECORD",
+      "pageTitle": "Register Record",
+      "pageMeta": "MCP tool or AGENT_SKILLS skill · starts in DRAFT",
       "type": "RECORD TYPE",
       "typeMcp": "MCP · remote server",
       "typeSkill": "AGENT_SKILLS · skill",
@@ -288,7 +290,16 @@
       "urlFetch": "FETCH",
       "urlFetching": "Fetching…",
       "urlInvalid": "Enter a valid https:// URL.",
-      "urlNoSkill": "No SKILL.md found at the URL."
+      "urlNoSkill": "No SKILL.md found at the URL.",
+      "how": {
+        "title": "HOW REGISTRATION WORKS",
+        "sub": "DRAFT → submit → approve",
+        "s1": "REGISTER — the record is created in DRAFT",
+        "s2": "SUBMIT — moves to PENDING_APPROVAL for review",
+        "s3": "APPROVE — published as APPROVED",
+        "s4": "ATTACH — only APPROVED records are attachable to agents",
+        "note": "Skills are uploaded to the artifacts bucket (SKILL.md ≤ 100KB, bundle ≤ 50MB); MCP records point at the remote server URL."
+      }
     },
     "deleted": "“{{name}}” deleted.",
     "confirmDelete": {

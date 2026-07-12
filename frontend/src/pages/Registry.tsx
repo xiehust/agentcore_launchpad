@@ -1,12 +1,11 @@
 import type { CSSProperties } from "react";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { Btn, Chip, ConfirmDialog, Panel, useToast, ViewHead } from "../components";
 import type { ChipTone } from "../components";
-import type { RegSource } from "./registry/SkillSourceForm";
-import { SkillSourceForm } from "./registry/SkillSourceForm";
+import { RegisterView } from "./registry/RegisterView";
 
 type RecordType = "A2A" | "MCP" | "AGENT_SKILLS";
 
@@ -100,6 +99,10 @@ export function Registry() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const toast = useToast();
+  // "?view=register" renders a standalone sub-page instead of the list — it is
+  // linkable and the browser back button returns to the list (like Evaluation).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const view = searchParams.get("view");
   const [records, setRecords] = useState<RegistryRecord[] | null>(null);
   const [tab, setTab] = useState<RecordType>("A2A");
   const [selected, setSelected] = useState<RegistryRecord | null>(null);
@@ -108,15 +111,8 @@ export function Registry() {
   const [busy, setBusy] = useState(false);
   const [confirmDisable, setConfirmDisable] = useState<RegistryRecord | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<RegistryRecord | null>(null);
-  const [registering, setRegistering] = useState(false);
   const [reimporting, setReimporting] = useState(false);
   const [reimportError, setReimportError] = useState<string | null>(null);
-  const [regType, setRegType] = useState<"MCP" | "AGENT_SKILLS">("MCP");
-  const [regSource, setRegSource] = useState<RegSource>("inline");
-  const [regName, setRegName] = useState("");
-  const [regDesc, setRegDesc] = useState("");
-  const [regUrl, setRegUrl] = useState("");
-  const [regMd, setRegMd] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -151,7 +147,6 @@ export function Registry() {
   };
 
   const select = async (record: RegistryRecord) => {
-    setRegistering(false);
     setReimportError(null);
     setSelected(record);
     try {
@@ -209,55 +204,19 @@ export function Registry() {
     }
   };
 
-  const regValid =
-    /^[a-z][a-z0-9-]{2,63}$/.test(regName) &&
-    (regType === "MCP" ? /^https?:\/\/.+/.test(regUrl) : regMd.trim().length > 0);
-
-  // shared success tail for both the inline POST /records path and the zip import path
-  const finishRegistration = useCallback(
-    async (record: RegistryRecord | null, name: string, resultTab: RecordType) => {
+  // Success tail for the register sub-page (inline/MCP POST + zip/git/url
+  // import share it): return to the list, toast, reload, and select the record.
+  const handleRegistered = useCallback(
+    async (record: RegistryRecord | null, name: string) => {
+      setSearchParams({}, { replace: true });
       toast(t("registry.register.done", { name }));
-      setRegistering(false);
-      setRegName("");
-      setRegDesc("");
-      setRegUrl("");
-      setRegMd("");
-      setRegSource("inline");
-      setTab(resultTab);
       setSearching(false);
+      if (record) setTab(record.type);
       await load();
       if (record) setSelected(record);
     },
-    [load, t, toast],
+    [load, setSearchParams, t, toast],
   );
-
-  const submitRegistration = async () => {
-    setBusy(true);
-    try {
-      const res = await fetch("/api/registry/records", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type: regType,
-          name: regName,
-          description: regDesc,
-          ...(regType === "MCP" ? { url: regUrl } : { skill_md: regMd }),
-        }),
-      });
-      const body = (await res.json().catch(() => ({}))) as RegistryRecord & {
-        message?: string;
-      };
-      if (!res.ok) {
-        toast(t("common.actionFailed", { msg: body.message ?? `HTTP ${res.status}` }));
-        return;
-      }
-      await finishRegistration(body, regName, regType);
-    } catch (err) {
-      toast(t("common.actionFailed", { msg: String(err) }));
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const deleteRecord = async (record: RegistryRecord) => {
     setBusy(true);
@@ -301,6 +260,16 @@ export function Registry() {
       navigate(`/create?skill=${encodeURIComponent(path)}`);
     }
   };
+
+  // ── Register sub-page (?view=register) ────────────────────────────────────
+  if (view === "register") {
+    return (
+      <RegisterView
+        onBack={() => setSearchParams({}, { replace: true })}
+        onDone={(record, name) => void handleRegistered(record, name)}
+      />
+    );
+  }
 
   const loading = records === null;
   const skillMeta = selected ? parseSkillDefinition(selected) : null;
@@ -363,17 +332,11 @@ export function Registry() {
           {searching && <span className="tab active">{t("registry.searchResults")}</span>}
           <div style={{ marginLeft: "auto", alignSelf: "center" }}>
             <Btn
-              primary={!registering}
-              onClick={() => {
-                setSelected(null);
-                setReimportError(null);
-                setRegistering((v) => !v);
-                setRegSource("inline");
-                if (tab !== "A2A") setRegType(tab);
-              }}
+              primary
+              onClick={() => setSearchParams({ view: "register" })}
               data-testid="register-btn"
             >
-              {registering ? `✕ ${t("common.cancel")}` : `+ ${t("registry.register.cta")}`}
+              + {t("registry.register.cta")}
             </Btn>
           </div>
         </div>
@@ -441,9 +404,8 @@ export function Registry() {
 
           <Panel
             className="drawer"
-            title={registering ? t("registry.register.title") : (selected?.name ?? "—")}
+            title={selected?.name ?? "—"}
             end={
-              !registering &&
               selected &&
               (() => {
                 const chip = STATUS_CHIP[selected.status] ?? STATUS_CHIP.DRAFT;
@@ -453,91 +415,7 @@ export function Registry() {
             pad={false}
             style={{ borderColor: "var(--line-2)" }}
           >
-            {registering && (
-              <div className="sect" style={{ borderBottom: 0 }} data-testid="register-form">
-                <div className="field">
-                  <label>{t("registry.register.type")}</label>
-                  <div className="selchips">
-                    {(["MCP", "AGENT_SKILLS"] as const).map((k) => (
-                      <button
-                        key={k}
-                        type="button"
-                        className={`selchip${regType === k ? " on" : ""}`}
-                        style={{ cursor: "pointer" }}
-                        onClick={() => setRegType(k)}
-                      >
-                        {k === "MCP"
-                          ? t("registry.register.typeMcp")
-                          : t("registry.register.typeSkill")}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                {(regType === "MCP" || regSource === "inline") && (
-                  <>
-                    <div className="field">
-                      <label htmlFor="reg-name">{t("registry.register.name")}</label>
-                      <input
-                        id="reg-name"
-                        className="input mono"
-                        value={regName}
-                        onChange={(e) => setRegName(e.target.value)}
-                        placeholder={regType === "MCP" ? "team-search-mcp" : "report-writer"}
-                      />
-                    </div>
-                    <div className="field">
-                      <label htmlFor="reg-desc">{t("registry.register.description")}</label>
-                      <input
-                        id="reg-desc"
-                        className="input"
-                        value={regDesc}
-                        onChange={(e) => setRegDesc(e.target.value)}
-                      />
-                    </div>
-                  </>
-                )}
-                {regType === "MCP" ? (
-                  <div className="field">
-                    <label htmlFor="reg-url">{t("registry.register.url")}</label>
-                    <input
-                      id="reg-url"
-                      className="input mono"
-                      value={regUrl}
-                      onChange={(e) => setRegUrl(e.target.value)}
-                      placeholder="https://mcp.example.com/sse"
-                    />
-                  </div>
-                ) : (
-                  <SkillSourceForm
-                    source={regSource}
-                    onSourceChange={setRegSource}
-                    md={regMd}
-                    onMdChange={setRegMd}
-                    onImported={(record, name) =>
-                      void finishRegistration(record, name, "AGENT_SKILLS")
-                    }
-                  />
-                )}
-                {(regType === "MCP" || regSource === "inline") && (
-                  <>
-                    <div className="note">
-                      <span className="i">[i]</span>
-                      <span>{t("registry.register.note")}</span>
-                    </div>
-                    <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
-                      <Btn
-                        primary
-                        disabled={busy || !regValid}
-                        onClick={() => void submitRegistration()}
-                      >
-                        ▲ {t("registry.register.submit")}
-                      </Btn>
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
-            {!registering && selected && (
+            {selected && (
               <>
                 <div className="sect">
                   <div className="kv">

@@ -240,6 +240,8 @@
     "register": {
       "cta": "注册",
       "title": "注册记录",
+      "pageTitle": "注册记录",
+      "pageMeta": "MCP 工具或 AGENT_SKILLS 技能 · 以 DRAFT 起步",
       "type": "记录类型",
       "typeMcp": "MCP · 远程服务器",
       "typeSkill": "AGENT_SKILLS · 技能",
@@ -288,7 +290,16 @@
       "urlFetch": "拉取",
       "urlFetching": "拉取中……",
       "urlInvalid": "请输入有效的 https:// URL。",
-      "urlNoSkill": "该 URL 未找到 SKILL.md。"
+      "urlNoSkill": "该 URL 未找到 SKILL.md。",
+      "how": {
+        "title": "注册流程",
+        "sub": "DRAFT → 提交 → 批准",
+        "s1": "注册——记录以 DRAFT 状态创建",
+        "s2": "提交——转入 PENDING_APPROVAL 等待审批",
+        "s3": "批准——发布为 APPROVED",
+        "s4": "挂载——只有 APPROVED 记录可挂载到 Agent",
+        "note": "技能会上传到制品桶（SKILL.md ≤ 100KB，bundle ≤ 50MB）；MCP 记录指向远程服务器 URL。"
+      }
     },
     "deleted": "已删除“{{name}}”。",
     "confirmDelete": {
