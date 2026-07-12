@@ -232,7 +232,8 @@
       "reimporting": "Re-importing…",
       "reimportOk": "“{{name}}” re-imported from source.",
       "reimportFailed": "Re-import failed: {{msg}}",
-      "edit": "EDIT"
+      "edit": "EDIT",
+      "useNeedsApproved": "Only APPROVED records are attachable to agents — submit and approve first"
     },
     "confirmDisable": {
       "title": "Disable record",
@@ -256,7 +257,6 @@
       "sourceGit": "IMPORT FROM GIT",
       "sourceUrl": "FETCH URL",
       "comingSoon": "coming soon",
-      "comingSoonBody": "This source is coming soon — for now use Paste SKILL.MD, Upload ZIP, or Import from Git.",
       "zipPick": "Choose a .zip file (SKILL.md + supporting files)",
       "zipInspecting": "Inspecting…",
       "zipVersion": "Version",

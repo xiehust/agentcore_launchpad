@@ -507,6 +507,13 @@ export function Registry() {
                     <Btn
                       primary
                       style={{ flex: 1, justifyContent: "center" }}
+                      disabled={selected.status !== "APPROVED"}
+                      title={
+                        selected.status !== "APPROVED"
+                          ? t("registry.drawer.useNeedsApproved")
+                          : undefined
+                      }
+                      data-testid="use-in-wizard-btn"
                       onClick={() => openInWizard(selected)}
                     >
                       {t("registry.drawer.useInNewAgent")}

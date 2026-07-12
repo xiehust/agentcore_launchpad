@@ -232,7 +232,8 @@
       "reimporting": "重新导入中……",
       "reimportOk": "已从来源重新导入“{{name}}”。",
       "reimportFailed": "重新导入失败：{{msg}}",
-      "edit": "编辑"
+      "edit": "编辑",
+      "useNeedsApproved": "仅已发布（APPROVED）的记录可挂载到 Agent——请先提交并批准"
     },
     "confirmDisable": {
       "title": "停用记录",
@@ -256,7 +257,6 @@
       "sourceGit": "从 GIT 导入",
       "sourceUrl": "URL 拉取",
       "comingSoon": "即将支持",
-      "comingSoonBody": "该来源即将支持,当前可用「粘贴 SKILL.MD」「上传 ZIP」「从 GIT 导入」。",
       "zipPick": "选择 .zip 文件（含 SKILL.md 及支撑文件）",
       "zipInspecting": "解析中……",
       "zipVersion": "版本",
