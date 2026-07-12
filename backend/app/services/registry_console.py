@@ -458,9 +458,16 @@ def _reupload_and_update(
     record: dict[str, Any],
     name: str,
     bundle: SkillBundle,
+    *,
+    description: str | None = None,
 ) -> dict[str, Any]:
     """Validate the re-acquired bundle, clear the old S3 prefix, upload the fresh
-    files, and update the record (bumped recordVersion, refreshed provenance)."""
+    files, and update the record (bumped recordVersion, refreshed provenance).
+
+    ``description`` overrides the record's current description (the edit sub-page
+    passes a new one alongside the bundle); ``None`` keeps the existing one, which
+    is what reimport wants.
+    """
     if not SKILL_NAME_RE.match(name):
         raise SkillValidationError(f"record name '{name}' is not a valid skill name")
     validate_bundle(bundle)
@@ -471,7 +478,9 @@ def _reupload_and_update(
         raise RuntimeError("artifacts_bucket missing — run scripts/bootstrap.py")
 
     prefix = f"skills/{name}/"
-    description = (record.get("description") or bundle.description or "").strip()
+    if description is None:
+        description = record.get("description") or bundle.description
+    description = (description or "").strip()
     source = replace(bundle.source, imported_at=_utcnow_iso())
     new_version = _bump_minor(record.get("recordVersion") or "1.0.0")
     definition = {
@@ -511,6 +520,171 @@ def _reupload_and_update(
         descriptors=reg.build_skills_descriptors(
             skill_md=bundle.skill_md, definition=definition
         ),
+        record_version=new_version,
+    )
+    return reg.wait_record_settled(client, registry_id, record["recordId"])
+
+
+def update_record(
+    record_id: str,
+    *,
+    description: str | None = None,
+    url: str | None = None,
+    skill_md: str | None = None,
+    bundle: SkillBundle | None = None,
+) -> dict[str, Any]:
+    """Edit an existing MCP/AGENT_SKILLS record from the console edit sub-page.
+
+    Partial update: a description-only change resends the current descriptors
+    WITHOUT bumping ``recordVersion``; any content change rebuilds the descriptors
+    and bumps the minor version (``1.0.0``→``1.1.0``). A new ``description`` given
+    alongside a content change lands in the same update call. Content branches:
+
+    - ``url`` (MCP only): rebuild the server descriptor for the new endpoint.
+    - ``skill_md`` (AGENT_SKILLS only): overwrite just ``skills/{name}/SKILL.md``,
+      keeping every supporting file and the recorded provenance (only
+      ``imported_at`` refreshes); the descriptor's ``files``/``source`` are kept.
+    - ``bundle`` (AGENT_SKILLS only): whole-bundle replace — clear the prefix,
+      upload the new files, and write a fresh descriptor (reuses the reimport
+      re-upload path); the record's registered name is always preserved.
+
+    The record's registered name is never editable (the S3 prefix and record
+    identity are keyed by it). DEPRECATED records are terminal and A2A records are
+    owned by agent deploys — both refuse editing (400 ``registry.not_editable``).
+    """
+    client = control_client()
+    registry_id = _registry_id()
+    record = reg.get_record(client, registry_id, record_id)
+    if record.get("status") == "DEPRECATED":
+        raise AppError(
+            "registry.not_editable",
+            "a DEPRECATED record is terminal and cannot be edited",
+            status_code=400,
+        )
+    rtype = record.get("descriptorType")
+    if rtype == "A2A":
+        raise AppError(
+            "registry.not_editable",
+            "A2A records are managed by agent deploys and cannot be edited here",
+            status_code=400,
+        )
+
+    name = (record.get("name") or "").strip()
+    new_desc = description if description is not None else (record.get("description") or "")
+
+    if url is not None:
+        return _update_mcp_url(client, registry_id, record, name, url, new_desc)
+    if skill_md is not None:
+        return _update_skill_md(client, registry_id, record, name, skill_md, new_desc)
+    if bundle is not None:
+        return _reupload_and_update(
+            client, registry_id, record, name, bundle, description=description
+        )
+    # description-only: resend the current descriptors unchanged (AWS update
+    # always requires descriptors) with the new description, no version bump.
+    reg.upsert_record(
+        client,
+        registry_id,
+        name=name,
+        description=(new_desc or name)[:200],
+        descriptor_type=rtype,
+        descriptors=record.get("descriptors") or {},
+    )
+    return reg.wait_record_settled(client, registry_id, record["recordId"])
+
+
+def _update_mcp_url(
+    client: Any,
+    registry_id: str,
+    record: dict[str, Any],
+    name: str,
+    url: str,
+    description: str,
+) -> dict[str, Any]:
+    """Rebuild an MCP record's server descriptor for a new endpoint URL and bump
+    the minor version."""
+    new_version = _bump_minor(record.get("recordVersion") or "1.0.0")
+    reg.upsert_record(
+        client,
+        registry_id,
+        name=name,
+        description=(description or name)[:200],
+        descriptor_type="MCP",
+        descriptors=reg.build_mcp_descriptors(
+            target=name, description=description, gateway_url=url, tools=None
+        ),
+        record_version=new_version,
+    )
+    return reg.wait_record_settled(client, registry_id, record["recordId"])
+
+
+def _update_skill_md(
+    client: Any,
+    registry_id: str,
+    record: dict[str, Any],
+    name: str,
+    skill_md: str,
+    description: str,
+) -> dict[str, Any]:
+    """Overwrite ONLY ``skills/{name}/SKILL.md`` and refresh the descriptor,
+    leaving every supporting file in the prefix untouched (no prefix clear). The
+    definition keeps its ``files``/``source`` list; ``version`` follows the new
+    frontmatter (falling back to the old value) and ``source.imported_at`` is
+    refreshed. Minor version bump."""
+    md_bytes = len(skill_md.encode("utf-8"))
+    if md_bytes > SKILL_MD_MAX_BYTES:
+        raise SkillValidationError(
+            f"SKILL.md is {md_bytes} bytes — exceeds the {SKILL_MD_MAX_BYTES} byte limit"
+        )
+
+    settings = get_settings()
+    bucket = settings.resources.get("artifacts_bucket")
+    if not bucket:
+        raise RuntimeError("artifacts_bucket missing — run scripts/bootstrap.py")
+
+    try:
+        old = json.loads(
+            record["descriptors"]["agentSkills"]["skillDefinition"]["inlineContent"]
+        )
+        if not isinstance(old, dict):
+            old = {}
+    except (KeyError, ValueError, TypeError):
+        old = {}  # malformed/absent descriptor — rebuild from scratch below
+
+    prefix = f"skills/{name}/"
+    meta = parse_frontmatter(skill_md)
+    source = old.get("source")
+    source = dict(source) if isinstance(source, dict) else {"kind": "inline"}
+    source["imported_at"] = _utcnow_iso()
+    definition = {
+        "name": name,
+        "description": (description or old.get("description") or name),
+        "version": str(meta.get("version") or old.get("version") or "1.0.0").strip(),
+        "path": f"s3://{bucket}/{prefix}",
+        "files": old.get("files") or ["SKILL.md"],
+        "source": source,
+    }
+    definition_bytes = len(json.dumps(definition).encode("utf-8"))
+    if definition_bytes > SKILL_MD_MAX_BYTES:
+        raise SkillValidationError(
+            f"skill descriptor is {definition_bytes} bytes — exceeds the "
+            f"{SKILL_MD_MAX_BYTES} byte limit (too many files or paths too long)"
+        )
+
+    s3 = boto3.client("s3", region_name=settings.region)
+    # Only SKILL.md changed — overwrite exactly that object; do NOT clear the
+    # prefix (that would strand the supporting files the deploy-time consumer
+    # downloads alongside it).
+    s3.put_object(Bucket=bucket, Key=f"{prefix}SKILL.md", Body=skill_md.encode("utf-8"))
+
+    new_version = _bump_minor(record.get("recordVersion") or "1.0.0")
+    reg.upsert_record(
+        client,
+        registry_id,
+        name=name,
+        description=(definition["description"] or name)[:200],
+        descriptor_type="AGENT_SKILLS",
+        descriptors=reg.build_skills_descriptors(skill_md=skill_md, definition=definition),
         record_version=new_version,
     )
     return reg.wait_record_settled(client, registry_id, record["recordId"])

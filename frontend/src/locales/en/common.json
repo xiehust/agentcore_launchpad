@@ -231,7 +231,8 @@
       "reimport": "RE-IMPORT FROM SOURCE",
       "reimporting": "Re-importing…",
       "reimportOk": "“{{name}}” re-imported from source.",
-      "reimportFailed": "Re-import failed: {{msg}}"
+      "reimportFailed": "Re-import failed: {{msg}}",
+      "edit": "EDIT"
     },
     "confirmDisable": {
       "title": "Disable record",
@@ -300,6 +301,40 @@
         "s4": "ATTACH — only APPROVED records are attachable to agents",
         "note": "Skills are uploaded to the artifacts bucket (SKILL.md ≤ 100KB, bundle ≤ 50MB); MCP records point at the remote server URL."
       }
+    },
+    "edit": {
+      "pageTitle": "Edit Record · {{name}}",
+      "title": "EDIT RECORD",
+      "pageMeta": "Update description & content · name is immutable",
+      "name": "NAME",
+      "nameLocked": "The name is bound to the artifacts-bucket S3 prefix and can't be changed.",
+      "description": "DESCRIPTION",
+      "url": "MCP SERVER URL · streamable-http",
+      "contentMode": "SKILL CONTENT",
+      "modeMd": "EDIT SKILL.MD",
+      "modeZip": "RE-UPLOAD ZIP",
+      "mdContent": "SKILL.MD CONTENT",
+      "zipHint": "The uploaded ZIP fully replaces the current bundle — existing supporting files are swapped for the new file set.",
+      "zipPick": "Choose a .zip file (replaces the whole bundle)",
+      "zipInspecting": "Inspecting…",
+      "zipVersion": "Version",
+      "zipFiles": "BUNDLE FILES · {{n}}",
+      "zipReset": "CHOOSE ANOTHER",
+      "current": {
+        "title": "CURRENT RECORD",
+        "sub": "read-only · before/after reference",
+        "status": "Status",
+        "version": "Version",
+        "source": "Source",
+        "files": "BUNDLE FILES · {{n}}",
+        "updated": "Updated"
+      },
+      "save": "SAVE",
+      "saving": "Saving…",
+      "saved": "“{{name}}” updated.",
+      "stagingExpired": "Upload preview expired — please re-upload the ZIP.",
+      "loadFailed": "Failed to load record: {{msg}}",
+      "notFound": "Record not found."
     },
     "deleted": "“{{name}}” deleted.",
     "confirmDelete": {

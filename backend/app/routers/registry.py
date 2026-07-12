@@ -326,6 +326,97 @@ def reimport_record(record_id: str) -> dict[str, Any]:
     return _record_out(console.reimport_skill(record_id))
 
 
+class UpdateRecordRequest(BaseModel):
+    """Partial edit of an existing record (the edit sub-page). At least one field
+    must be set. ``url`` is MCP-only; ``skill_md`` and ``staging_id`` are
+    AGENT_SKILLS-only and mutually exclusive — inline SKILL.md edit vs. replacing
+    the whole bundle from a staged (inspected) upload. The record's name is never
+    editable (it keys the S3 prefix and record identity)."""
+
+    description: str | None = Field(default=None, max_length=500)
+    url: str | None = None  # MCP: streamable-http endpoint
+    skill_md: str | None = Field(default=None, max_length=102400)  # AGENT_SKILLS (AWS cap)
+    staging_id: str | None = None  # AGENT_SKILLS: bundle replace from inspect staging
+    index: int = 0  # which staged bundle (single-skill upload → 0)
+
+
+@router.put("/records/{record_id}")
+def update_record(record_id: str, req: UpdateRecordRequest) -> dict[str, Any]:
+    """Edit a record's description and/or content. Description-only edits don't
+    bump the version; content edits (MCP url / skill SKILL.md / whole bundle) do.
+    Returns the refreshed record (same shape as GET). DEPRECATED/A2A records are
+    not editable (400). A ``staging_id`` bundle is consumed only on success so a
+    failed save can be retried without re-uploading (same as import)."""
+    if (
+        req.description is None and req.url is None
+        and req.skill_md is None and req.staging_id is None
+    ):
+        raise AppError(
+            "registry.nothing_to_update",
+            "provide at least one field to update",
+            status_code=400,
+        )
+    if req.skill_md is not None and req.staging_id is not None:
+        raise AppError(
+            "registry.field_conflict",
+            "skill_md and staging_id are mutually exclusive — edit SKILL.md inline "
+            "or replace the whole bundle, not both",
+            status_code=400,
+        )
+
+    rtype = console.console_get(record_id).get("descriptorType")
+    if req.url is not None and rtype != "MCP":
+        raise AppError(
+            "registry.field_type_mismatch",
+            "url can only be set on an MCP record",
+            status_code=400,
+        )
+    if (req.skill_md is not None or req.staging_id is not None) and rtype != "AGENT_SKILLS":
+        raise AppError(
+            "registry.field_type_mismatch",
+            "skill_md/staging_id can only be set on an AGENT_SKILLS record",
+            status_code=400,
+        )
+    if req.url is not None and not req.url.startswith(("https://", "http://")):
+        raise AppError(
+            "registry.invalid_url",
+            "MCP url must be a http(s) streamable-http server URL",
+            status_code=400,
+        )
+
+    bundle: SkillBundle | None = None
+    if req.staging_id is not None:
+        _sweep_staging()
+        entry = _staging.get(req.staging_id)
+        if entry is None:
+            raise AppError(
+                "registry.staging_expired",
+                "staging session expired or unknown — re-inspect the source",
+                status_code=410,
+            )
+        bundles: list[SkillBundle] = entry["bundles"]
+        if not 0 <= req.index < len(bundles):
+            raise AppError(
+                "registry.skill_not_staged",
+                f"no staged skill at index {req.index}",
+                status_code=400,
+            )
+        bundle = bundles[req.index]
+
+    # An AppError from update_record propagates and skips the drop below, so a
+    # staged bundle survives for retry; it is dropped only once the save lands.
+    result = console.update_record(
+        record_id,
+        description=req.description,
+        url=req.url,
+        skill_md=req.skill_md,
+        bundle=bundle,
+    )
+    if req.staging_id is not None:
+        _drop_staging(req.staging_id)
+    return _record_out(result)
+
+
 @router.delete("/records/{record_id}")
 def delete_record(record_id: str) -> dict[str, Any]:
     console.console_delete(record_id)

@@ -5,6 +5,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { Btn, Chip, ConfirmDialog, Panel, useToast, ViewHead } from "../components";
 import type { ChipTone } from "../components";
+import { EditView } from "./registry/EditView";
 import { RegisterView } from "./registry/RegisterView";
 
 type RecordType = "A2A" | "MCP" | "AGENT_SKILLS";
@@ -28,7 +29,8 @@ interface SkillSourceMeta {
   imported_at?: string;
 }
 
-/** Parse the AGENT_SKILLS skillDefinition JSON; returns file list + source when present. */
+/** Parse the AGENT_SKILLS skillDefinition JSON; returns file list + source when present.
+ *  Twin copy in registry/EditView.tsx — keep both in sync if the shape changes. */
 function parseSkillDefinition(
   record: RegistryRecord,
 ): { files: string[]; source: SkillSourceMeta | null } | null {
@@ -218,6 +220,19 @@ export function Registry() {
     [load, setSearchParams, t, toast],
   );
 
+  // Success tail for the edit sub-page: EditView already toasted, so just return
+  // to the list, reload, and re-select the (updated) record.
+  const handleEdited = useCallback(
+    async (record: RegistryRecord) => {
+      setSearchParams({}, { replace: true });
+      setSearching(false);
+      setTab(record.type);
+      await load();
+      setSelected(record);
+    },
+    [load, setSearchParams],
+  );
+
   const deleteRecord = async (record: RegistryRecord) => {
     setBusy(true);
     try {
@@ -265,8 +280,20 @@ export function Registry() {
   if (view === "register") {
     return (
       <RegisterView
+        initialType={tab === "AGENT_SKILLS" ? "AGENT_SKILLS" : "MCP"}
         onBack={() => setSearchParams({}, { replace: true })}
         onDone={(record, name) => void handleRegistered(record, name)}
+      />
+    );
+  }
+
+  // ── Edit sub-page (?view=edit&record=<id>) ────────────────────────────────
+  if (view === "edit") {
+    return (
+      <EditView
+        recordId={searchParams.get("record") ?? ""}
+        onBack={() => setSearchParams({}, { replace: true })}
+        onDone={(record) => void handleEdited(record)}
       />
     );
   }
@@ -483,6 +510,16 @@ export function Registry() {
                       onClick={() => openInWizard(selected)}
                     >
                       {t("registry.drawer.useInNewAgent")}
+                    </Btn>
+                  )}
+                  {selected.type !== "A2A" && selected.status !== "DEPRECATED" && (
+                    <Btn
+                      onClick={() =>
+                        setSearchParams({ view: "edit", record: selected.record_id })
+                      }
+                      data-testid="edit-btn"
+                    >
+                      {t("registry.drawer.edit")}
                     </Btn>
                   )}
                   {selected.type === "AGENT_SKILLS" &&

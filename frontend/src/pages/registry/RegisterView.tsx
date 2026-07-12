@@ -11,6 +11,8 @@ interface RegisterViewProps {
   /** success tail: parent returns to the list, toasts, reloads, and selects the record */
   onDone: (record: RegistryRecord | null, name: string) => void;
   onBack: () => void;
+  /** preselect the record type from the active list tab (A2A tab → default MCP) */
+  initialType?: "MCP" | "AGENT_SKILLS";
 }
 
 /**
@@ -19,10 +21,10 @@ interface RegisterViewProps {
  * Owns its own form state — the inline/MCP POST lives here; zip/git/url import
  * routes through SkillSourceForm's onImported. Both success paths call onDone.
  */
-export function RegisterView({ onDone, onBack }: RegisterViewProps) {
+export function RegisterView({ onDone, onBack, initialType = "MCP" }: RegisterViewProps) {
   const { t } = useTranslation();
   const toast = useToast();
-  const [regType, setRegType] = useState<"MCP" | "AGENT_SKILLS">("MCP");
+  const [regType, setRegType] = useState<"MCP" | "AGENT_SKILLS">(initialType);
   const [regSource, setRegSource] = useState<RegSource>("inline");
   const [regName, setRegName] = useState("");
   const [regDesc, setRegDesc] = useState("");

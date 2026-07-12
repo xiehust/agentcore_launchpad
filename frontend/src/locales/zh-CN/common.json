@@ -231,7 +231,8 @@
       "reimport": "从来源重新导入",
       "reimporting": "重新导入中……",
       "reimportOk": "已从来源重新导入“{{name}}”。",
-      "reimportFailed": "重新导入失败：{{msg}}"
+      "reimportFailed": "重新导入失败：{{msg}}",
+      "edit": "编辑"
     },
     "confirmDisable": {
       "title": "停用记录",
@@ -300,6 +301,40 @@
         "s4": "挂载——只有 APPROVED 记录可挂载到 Agent",
         "note": "技能会上传到制品桶（SKILL.md ≤ 100KB，bundle ≤ 50MB）；MCP 记录指向远程服务器 URL。"
       }
+    },
+    "edit": {
+      "pageTitle": "编辑记录 · {{name}}",
+      "title": "编辑记录",
+      "pageMeta": "更新描述与内容 · 名称不可修改",
+      "name": "名称",
+      "nameLocked": "名称与制品桶 S3 前缀绑定，不可修改。",
+      "description": "描述",
+      "url": "MCP 服务器 URL · streamable-http",
+      "contentMode": "技能内容",
+      "modeMd": "编辑 SKILL.MD",
+      "modeZip": "重新上传 ZIP",
+      "mdContent": "SKILL.MD 内容",
+      "zipHint": "上传的 ZIP 会整体替换现有 bundle——原有支撑文件将被新文件集取代。",
+      "zipPick": "选择 .zip 文件（整体替换 bundle）",
+      "zipInspecting": "解析中……",
+      "zipVersion": "版本",
+      "zipFiles": "文件束 · {{n}} 个文件",
+      "zipReset": "重新选择",
+      "current": {
+        "title": "当前记录",
+        "sub": "只读 · 编辑前后对照",
+        "status": "状态",
+        "version": "版本",
+        "source": "来源",
+        "files": "文件束 · {{n}} 个文件",
+        "updated": "更新时间"
+      },
+      "save": "保存",
+      "saving": "保存中……",
+      "saved": "“{{name}}”已更新。",
+      "stagingExpired": "上传预览已过期，请重新上传 ZIP。",
+      "loadFailed": "加载记录失败：{{msg}}",
+      "notFound": "未找到该记录。"
     },
     "deleted": "已删除“{{name}}”。",
     "confirmDelete": {
