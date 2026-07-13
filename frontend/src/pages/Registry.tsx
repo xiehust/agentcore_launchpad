@@ -5,6 +5,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { Btn, Chip, ConfirmDialog, Panel, useToast, ViewHead } from "../components";
 import type { ChipTone } from "../components";
+import { A2ADemoView } from "./registry/A2ADemoView";
 import { EditView } from "./registry/EditView";
 import { RegisterView } from "./registry/RegisterView";
 
@@ -312,6 +313,11 @@ export function Registry() {
     );
   }
 
+  // ── A2A routing demo sub-page (?view=a2a-demo) ────────────────────────────
+  if (view === "a2a-demo") {
+    return <A2ADemoView onBack={() => setSearchParams({}, { replace: true })} />;
+  }
+
   // ── Edit sub-page (?view=edit&record=<id>) ────────────────────────────────
   if (view === "edit") {
     return (
@@ -382,7 +388,13 @@ export function Registry() {
             </button>
           ))}
           {searching && <span className="tab active">{t("registry.searchResults")}</span>}
-          <div style={{ marginLeft: "auto", alignSelf: "center" }}>
+          <div style={{ marginLeft: "auto", alignSelf: "center", display: "flex", gap: 8 }}>
+            <Btn
+              onClick={() => setSearchParams({ view: "a2a-demo" })}
+              data-testid="a2a-demo-btn"
+            >
+              ⇄ {t("registry.a2aDemo.entry")}
+            </Btn>
             <Btn
               primary
               onClick={() => setSearchParams({ view: "register" })}

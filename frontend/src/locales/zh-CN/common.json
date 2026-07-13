@@ -385,6 +385,31 @@
     "confirmDelete": {
       "title": "删除记录",
       "body": "这会把“{{name}}”从注册中心永久移除。已部署的 Agent 不受影响，只是该记录从目录中消失。"
+    },
+    "a2aDemo": {
+      "kicker": "// 发现层 · 实时路由",
+      "title": "A2A 路由演示",
+      "meta": "注册中心发现 → 名片驱动路由 → A2A 调用",
+      "entry": "A2A 演示",
+      "back": "注册中心",
+      "askTitle": "询问前台",
+      "agent": "路由 AGENT",
+      "question": "问题",
+      "placeholder": "Aurora Deck 的退款政策是什么？",
+      "ask": "提问",
+      "asking": "路由中…",
+      "flowTitle": "发现 → 决策 → 调用 → 回答",
+      "stage": {
+        "discover": "发现 — 注册中心语义搜索",
+        "select": "决策 — 路由选择",
+        "invoke": "调用 — 专家 Agent",
+        "respond": "回答 — 最终答案"
+      },
+      "hits": "{{n}} 张名片",
+      "noHits": "没有匹配的已发布专家——前台会诚实降级回答",
+      "request": "请求",
+      "response": "响应",
+      "govNote": "治理闭环：在注册中心 REJECT 某个专家的记录，下一个问题的发现阶段就不再出现它；重新 APPROVE 即恢复。（REJECTED 可恢复——不要用 DISABLE，DEPRECATED 是终态。）"
     }
   },
   "knowledge": {

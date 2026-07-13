@@ -385,6 +385,31 @@
     "confirmDelete": {
       "title": "Delete record",
       "body": "This permanently removes “{{name}}” from the registry. Agents already deployed keep working; the record just leaves the catalog."
+    },
+    "a2aDemo": {
+      "kicker": "// DISCOVERY LAYER · LIVE ROUTING",
+      "title": "A2A Routing Demo",
+      "meta": "REGISTRY DISCOVERY → CARD-DRIVEN ROUTING → A2A INVOCATION",
+      "entry": "A2A DEMO",
+      "back": "REGISTRY",
+      "askTitle": "ASK THE FRONT DESK",
+      "agent": "ROUTING AGENT",
+      "question": "QUESTION",
+      "placeholder": "What is Aurora Deck's refund policy?",
+      "ask": "ASK",
+      "asking": "ROUTING…",
+      "flowTitle": "DISCOVER → SELECT → INVOKE → RESPOND",
+      "stage": {
+        "discover": "DISCOVER — registry semantic search",
+        "select": "SELECT — routing decision",
+        "invoke": "INVOKE — specialist call",
+        "respond": "RESPOND — final answer"
+      },
+      "hits": "{{n}} card(s)",
+      "noHits": "no APPROVED specialist matched — the agent degrades honestly",
+      "request": "REQUEST",
+      "response": "RESPONSE",
+      "govNote": "Governance loop: REJECT a specialist's record in the Registry and it vanishes from DISCOVER on the next question; re-APPROVE to restore it. (REJECTED is recoverable — never use DISABLE, DEPRECATED is terminal.)"
     }
   },
   "knowledge": {

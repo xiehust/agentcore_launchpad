@@ -22,6 +22,61 @@ from app.services.skill_ingest import (
 
 router = APIRouter(prefix="/api/registry", tags=["registry"])
 
+
+class A2ADemoRequest(BaseModel):
+    """Front-desk demo ask: invoke a routing agent and pass its trace through."""
+
+    agent_id: str
+    question: str = Field(min_length=1, max_length=4000)
+
+
+@router.post("/a2a-demo")
+def a2a_demo(req: A2ADemoRequest) -> dict[str, Any]:
+    """Invoke a front-desk-style agent and return {answer, trace}.
+
+    Deliberately bypasses invoke_agent_text: the demo needs the agent's extra
+    `a2a_trace` payload field (DISCOVER/INVOKE stage records), which the
+    text-only dispatch drops.
+    """
+    import json as _json
+
+    from app.core.db import SessionLocal
+    from app.models.ledger import Agent
+    from app.services.agentcore.client import data_client
+    from app.services.agentcore.harness import new_session_id
+
+    db = SessionLocal()
+    try:
+        agent = db.get(Agent, req.agent_id)
+        if agent is None or agent.status != "active":
+            raise AppError("registry.a2a_demo_agent", "agent not found or not active",
+                           status_code=404)
+        if agent.method not in ("zip_runtime", "studio"):
+            raise AppError("registry.a2a_demo_unsupported",
+                           "the demo drives runtime agents with a {prompt} contract",
+                           status_code=400)
+        arn = agent.arn
+    finally:
+        db.close()
+
+    started = time.monotonic()
+    session_id = new_session_id()
+    response = data_client().invoke_agent_runtime(
+        agentRuntimeArn=arn,
+        runtimeSessionId=session_id,
+        payload=_json.dumps({"prompt": req.question, "actor_id": "a2a-demo"}).encode(),
+    )
+    body = _json.loads(response["response"].read())
+    if isinstance(body, dict) and body.get("error"):
+        raise AppError("registry.a2a_demo_failed", str(body["error"])[:300],
+                       status_code=502)
+    return {
+        "answer": str(body.get("result", "")) if isinstance(body, dict) else str(body),
+        "trace": (body.get("a2a_trace") or []) if isinstance(body, dict) else [],
+        "session_id": session_id,
+        "latency_ms": int((time.monotonic() - started) * 1000),
+    }
+
 _attachables_cache: dict[str, Any] = {"data": None, "at": 0.0}
 
 # Skill inspect→import staging. inspect() acquires + validates bundles into a

@@ -1,0 +1,120 @@
+"""Front-desk A2A demo — endpoint trace passthrough + sample pure helpers."""
+
+import json
+from pathlib import Path
+
+from app.core.db import SessionLocal
+from app.models.ledger import Agent
+
+SAMPLE = Path(__file__).resolve().parents[1] / "samples" / "frontdesk_agent" / "main.py"
+
+
+def _mk_agent(**kw) -> str:
+    db = SessionLocal()
+    agent = Agent(**{
+        "name": "front-desk", "method": "zip_runtime", "status": "active",
+        "arn": "arn:aws:bedrock-agentcore:us-west-2:1:runtime/fd-1",
+        "spec": {"system_prompt": "s"}, **kw,
+    })
+    db.add(agent)
+    db.commit()
+    agent_id = agent.id
+    db.close()
+    return agent_id
+
+
+class _DataStub:
+    def __init__(self, body: dict):
+        self.body = json.dumps(body).encode()
+        self.invoked_with = None
+
+    def invoke_agent_runtime(self, **kw):
+        self.invoked_with = kw
+
+        class R:
+            def __init__(self, d):
+                self._d = d
+
+            def read(self):
+                return self._d
+
+        return {"response": R(self.body)}
+
+
+def test_a2a_demo_passes_trace_through(client, monkeypatch):
+    from app.services.agentcore import client as ac_client
+
+    trace = [{"stage": "discover", "query": "refunds", "hits": []}]
+    stub = _DataStub({"result": "[via aurora-faq-a2a] 30 days.", "a2a_trace": trace})
+    monkeypatch.setattr(ac_client, "data_client", lambda: stub)
+    # the router imports data_client inside the handler → patch the source module
+    agent_id = _mk_agent()
+    res = client.post("/api/registry/a2a-demo",
+                      json={"agent_id": agent_id, "question": "refund policy?"})
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["answer"].startswith("[via aurora-faq-a2a]")
+    assert body["trace"] == trace
+    payload = json.loads(stub.invoked_with["payload"])
+    assert payload["prompt"] == "refund policy?"
+
+
+def test_a2a_demo_rejects_missing_or_harness_agents(client):
+    res = client.post("/api/registry/a2a-demo",
+                      json={"agent_id": "nope", "question": "q"})
+    assert res.status_code == 404
+    harness_id = _mk_agent(name="front-harness", method="harness",
+                           arn="arn:aws:bedrock-agentcore:us-west-2:1:harness/h-1")
+    res = client.post("/api/registry/a2a-demo",
+                      json={"agent_id": harness_id, "question": "q"})
+    assert res.status_code == 400
+    assert res.json()["code"] == "registry.a2a_demo_unsupported"
+
+
+# ─── sample pure helpers (imported without strands/bedrock deps) ─────────────
+def _load_helpers():
+    """Extract the pure functions from the sample without importing strands."""
+    src = SAMPLE.read_text(encoding="utf-8")
+    module: dict = {}
+    # execute only up to the first @tool (pure section); stub the imports
+    pure_src = src.split("@tool", 1)[0]
+    pure_src = pure_src.replace("import boto3\n", "")
+    pure_src = pure_src.replace(
+        "from bedrock_agentcore.runtime import BedrockAgentCoreApp\n", "")
+    pure_src = pure_src.replace("from strands import Agent, tool\n", "")
+    exec(compile(pure_src, str(SAMPLE), "exec"), module)  # noqa: S102 — test fixture
+    return module
+
+
+def test_sample_compiles():
+    compile(SAMPLE.read_text(encoding="utf-8"), str(SAMPLE), "exec")
+
+
+def test_arn_from_url_variants():
+    h = _load_helpers()
+    enc = ("https://bedrock-agentcore.us-west-2.amazonaws.com/runtimes/"
+           "arn%3Aaws%3Abedrock-agentcore%3Aus-west-2%3A1%3Aruntime%2Fx-1/invocations/")
+    assert h["arn_from_url"](enc) == "arn:aws:bedrock-agentcore:us-west-2:1:runtime/x-1"
+    assert h["arn_from_url"]("arn:aws:bedrock-agentcore:us-west-2:1:harness/h-1") \
+        == "arn:aws:bedrock-agentcore:us-west-2:1:harness/h-1"
+    assert h["arn_from_url"]("https://nope.example/") == ""
+
+
+def test_parse_card_and_a2a_reply_text():
+    h = _load_helpers()
+    card = {"name": "aurora-faq-a2a", "description": "d", "url": "u",
+            "skills": [{"name": "faq", "description": "x", "tags": ["support"]}],
+            "metadata": {"launchpad.transport": "a2a-jsonrpc",
+                         "launchpad.method": "zip_runtime"}}
+    rec = {"name": "aurora-faq-a2a", "descriptors": {"a2a": {"agentCard": {
+        "inlineContent": json.dumps(card)}}}}
+    parsed = h["parse_card"](rec)
+    assert parsed["transport"] == "a2a-jsonrpc"
+    assert parsed["skills"][0]["tags"] == ["support"]
+    assert h["parse_card"]({"descriptors": {}}) is None
+    # Task shape wins over history; Message shape parses parts directly
+    task = {"artifacts": [{"parts": [{"kind": "text", "text": "ok"}]}],
+            "history": [{"parts": [{"kind": "text", "text": "junk"}]}]}
+    assert h["_a2a_reply_text"](task) == "ok"
+    assert h["_a2a_reply_text"]({"kind": "message",
+                                 "parts": [{"kind": "text", "text": "hi"}]}) == "hi"
