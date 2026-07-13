@@ -17,10 +17,23 @@ altering BatchEvaluation scoping. Introduced by task `07-13-harness-eval-support
   `strands.telemetry.tracer` (the evaluation-parseable scope) with full gen_ai
   attrs — the old "no span service name" exclusion was wrong.
 - The harness's **backing runtime id ≠ harnessId** (`hr_assistant-Flr7ibmASq`
-  runs on `harness_hr_assistant-GIRksPB4NZ`). GetHarness does NOT expose it.
-  The content-log group is therefore **discovered by prefix**
+  runs on `harness_hr_assistant-GIRksPB4NZ`). GetHarness does NOT expose it,
+  but **ListAgentRuntimes DOES list it** (name `harness_{harnessName}`, READY,
+  real runtime ARN). Do not conclude "harness has no runtime ARN".
+  The content-log group is **discovered by prefix**
   `/aws/bedrock-agentcore/runtimes/harness_{harnessName}-` (unique-per-harness;
   a re-created harness leaves stale groups → newest creationTime wins).
+- The backing runtime is **invoke-locked** (verified 2026-07-13): direct
+  `InvokeAgentRuntime` on it →
+  `ValidationException: The agent runtime … is managed by a harness and
+  cannot be invoked directly. Use the InvokeHarness API with the relevant
+  harness ID instead.` Gateway `agentcoreRuntime` targets therefore cannot
+  drive a harness — this (plus no config-bundle consumption, see below) is
+  the real reason experiments exclude harness, not a missing ARN.
+- Exported harness code (`agentcore export harness --arn …`, converts to a
+  Strands runtime project) **contains zero config-bundle consultation** —
+  the system prompt is a baked-in constant; `get_config_bundle()` never
+  appears. Config-bundle A/B variants would be no-ops against a harness.
 - The log group only exists after the harness's FIRST invocation — cold
   harnesses get 400 `eval.harness_no_telemetry` ("run a chat session first").
 - Proven end-to-end: window-scope run `fbbd4043f0fe` on hr-assistant →
