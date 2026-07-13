@@ -3,7 +3,7 @@
   "name": "a2a-frontdesk-demo",
   "title": "Front-desk A2A demo: discovery routing sub-page + script",
   "description": "Front-desk orchestrator agent (registry discover + A2A invoke tools), DISCOVER→SELECT→INVOKE→RESPOND demo sub-page, governance script",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": "launchpad",
