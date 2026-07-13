@@ -465,3 +465,162 @@ gen_ai attrs. Enabled harness in the eval pipeline:
 ### Status
 
 [OK] **Completed**
+
+---
+
+## 2026-07-13 — Fix: AWS cloud datasets selectable in New Run / Insights
+
+**Date**: 2026-07-13
+**Task**: (no Trellis task — small fix, user-approved skip)
+**Package**: launchpad backend + frontend
+**Branch**: `main`
+
+### Summary
+
+New Run's DATASET dropdown only listed `/api/eval/datasets` (local rows), so
+cloud-only datasets (HR_scenario_dataset_sample / HR_simulated_personas_sample,
+created directly in AWS) were unselectable. Root constraint probed live:
+StartBatchEvaluation has NO dataset data source — a dataset run must be driven
+locally. Fix: `RunCreate.cloud_dataset_id` (same XOR slot as dataset_id) →
+`_cloud_dataset_items` fetches examples via new `ac.list_dataset_examples`
+(paginated), strips `exampleId`, validates, and replays them through the
+existing pipeline; run row gets `dataset_name="cloud:{name}"` (scope encoding
+like window:Nh, rendered "☁ name"). Predefined-schema-only gate: simulated
+persona datasets 422 `run.cloud_dataset_unsupported` (need AWS LLM-actor
+simulation). New GET `/api/eval/datasets/cloud/{id}` returns `runnable` +
+`has_ground_truth` for lazy Trajectory* gating. Frontend: optgroup LOCAL/AWS
+CLOUD, simulated options disabled with reason, cloud hint note, per-selection
+GT cache. Also fixed stale harness-excluded copy (newRun.sub + how.note, en+zh)
+left over from 07-13-harness-eval-support.
+
+### Verified
+
+- Live: run 2faaa172b136 (hr-assistant harness × cloud HR_scenario_dataset_sample,
+  Correctness + Helpfulness + TrajectoryInOrderMatch) submitted through the UI
+  dropdown — invoked 3 scenarios, batch eval completed (see runs list).
+- GET /datasets/cloud/{id}: scenario sample → runnable+GT true; personas →
+  runnable false, list_dataset_examples not called.
+- 425 backend tests green (5 new), tsc/eslint/vite build clean; browser
+  screenshot design/screenshots/eval-cloud-dataset-newrun.png.
+- Spec: .trellis/spec/launchpad/evaluation-cloud-dataset-runs.md (new).
+
+### Status
+
+[OK] **Completed**
+
+---
+
+## 2026-07-13 — Simulated persona datasets runnable (actor LLM per run)
+
+**Date**: 2026-07-13
+**Task**: (no Trellis task — follow-up to the cloud-dataset fix)
+**Package**: launchpad backend + frontend
+**Branch**: `main`
+
+### Summary
+
+User pointed at the SDK dataset-runner sample: SimulatedScenario runs ARE
+locally drivable — an LLM actor (SimulationConfig.model_id) plays the user.
+Added `bedrock-agentcore[simulation]` extra (strands-agents-evals) and a thin
+adapter `app/evaluation/simulation.py` around `SimulatedScenarioExecutor`:
+our invokers (InvokeHarness / runtime data plane) drive the conversation so
+the RUNTIME session id (what telemetry carries) is recorded — the executor's
+framework session id is just a conversation key; FAILED results re-raise so
+runs fail honestly. `RunCreate.actor_model_id` required whenever items carry
+`actor_profile` (422 run.actor_model_required); execute_run dispatches
+per-scenario (actor loop vs turn replay); persona assertions ride
+sessionMetadata as before. `_validate_items`/`_infer_kind` accept the persona
+shape (kind="simulated"), sync-to-aws now picks the schema by kind. Frontend:
+simulated cloud datasets selectable ("personas" tag), ACTOR MODEL select
+(curated us-west-2 list, default haiku-4-5) appears for simulated selections.
+
+### Gotcha
+
+uvicorn --reload killed the first live run: editing backend/tests/*.py mid-run
+restarts the backend → in-flight run failed honestly by startup reconciliation.
+Don't touch backend/**/*.py while a live eval run is in flight.
+
+### Verified
+
+- tests/evaluation/test_simulation.py (adapter + plumbing) and updated
+  test_datasets_v2 cloud tests; 434 backend tests green; tsc/eslint clean;
+  i18n parity OK (strict-mode failures are pre-existing studio/nodes strings).
+- Browser: personas dataset selectable, ACTOR MODEL field renders
+  (design/screenshots/eval-simulated-dataset-actormodel.png).
+- Live simulated run: see run 7a34e9697730 (result recorded below once done).
+- Spec: evaluation-cloud-dataset-runs.md rewritten for simulation support.
+
+### Status
+
+[OK] **Completed**
+
+---
+
+## 2026-07-13 — Evaluation dashboard: EXPERIMENT preview panel removed
+
+**Date**: 2026-07-13
+**Task**: (no Trellis task — small UI cleanup, user request)
+**Package**: launchpad frontend
+**Branch**: `main`
+
+### Summary
+
+Removed the EXPERIMENT status-preview Panel at the bottom of /evaluation —
+it was a duplicate entry point: the header `⚗ EXPERIMENT` button still opens
+`?view=experiment`, and ExperimentView fetches its own data. Also dropped the
+now-dead `experiments` state + the `/api/experiments` poll from the 8s
+dashboard refresh loop, `experimentTone`/`ExperimentInfo` imports, and 4
+orphaned i18n keys (evalPage.experiment.{latest,rowMore,open,none}, en+zh).
+Feature itself is untouched.
+
+Also recorded here: the simulated-persona live run 7a34e9697730 COMPLETED
+(3 personas × haiku-4.5 actor vs hr-assistant; Correctness 0.8 /
+Helpfulness 0.87 / GoalSuccessRate 0.0 — assertions unmet because the harness
+can't really submit PTO; semantics correct).
+
+### Verified
+
+- Browser: experiment-row gone from dashboard; experiment-btn still routes to
+  ?view=experiment (title 实验). tsc/eslint exit 0; i18n_check PASS (1034
+  keys, parity OK); vite build ✓.
+- Screenshot design/screenshots/eval-dashboard-no-experiment-panel.png.
+
+### Status
+
+[OK] **Completed**
+
+---
+
+## 2026-07-13 — Observability: eval-run sessions now show their conversation
+
+**Date**: 2026-07-13
+**Task**: (no Trellis task — bug report from user testing)
+**Package**: launchpad backend + frontend
+**Branch**: `main`
+
+### Summary
+
+User: session detail for an eval-run session (simulated persona run
+79d11eab1f8e) showed an empty CONVERSATION panel. Root cause chain:
+`session_transcript` required a ChatSession ledger row (eval sessions have
+none → `not_platform_session`), yet the conversation EXISTS in platform
+memory — eval invokers pass the BARE `"default"` actor to the runtime and the
+harness's managed runtime auto-persists envelope events under it (38 events
+for the reported session). Fix: fallback `_eval_run_for_session` (membership
+scan over recent EvalRun.session_ids) → read events under actor "default" →
+same envelope decoding. Response gains `source`/`run_id`; frontend hides
+OPEN IN CHAT for eval sources and shows "评估运行 · run-xxxxxx" in the panel
+sub. Runtime-backed agents' eval sessions still show no turns (nothing writes
+their memory) — accurate empty state.
+
+### Verified
+
+- Live: the reported session now renders 13 turns (persona Maya ×
+  hr-assistant) — design/screenshots/obs-eval-session-transcript.png.
+- New test test_transcript_falls_back_to_eval_run_session; 435 backend tests
+  green; tsc/eslint 0; i18n PASS.
+
+### Status
+
+[OK] **Completed**
+

@@ -10,5 +10,6 @@
 | [Registry Skill Ingestion](./registry-skill-ingestion.md) | Multi-source skill pipeline: SkillBundle, inspect→import staging, git/url acquirers, reimport, record update (PUT) + register/edit sub-pages | Active |
 | [Container Capabilities + Filesystem](./container-capabilities-filesystem.md) | Claude Agent SDK (container) method: registry MCP/skill wiring, attach-without-record skill sources (/api/agent-skills), filesystemConfigurations (session/S3 Files/EFS) + VPC + IAM inline policy | Active |
 | [Evaluation Agent Eligibility](./evaluation-agent-eligibility.md) | Which methods are eval-supported + telemetry resolution: harness span identity (harness_{name}.DEFAULT, strands scope), backing-runtime log-group prefix discovery, InvokeHarness dispatch | Active |
+| [Evaluation Cloud Dataset Runs](./evaluation-cloud-dataset-runs.md) | AWS cloud datasets + simulated personas as run scopes: ListDatasetExamples-driven execution (no AWS-side dataset source), SDK LLM-actor simulation w/ per-run actor_model_id, cloud: scope encoding, lazy GT detail endpoint | Active |
 
 **Language**: All documentation should be written in **English**.
