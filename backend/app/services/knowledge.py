@@ -1,12 +1,9 @@
-"""Knowledge Base service — CRUD, S3 data sources, ingestion, and the
+"""Managed Knowledge Base service — CRUD, S3 data sources, ingestion, and the
 retrieval Playground.
 
-The list/detail/query/sync/documents READ surface covers every KB type in the
-account (MANAGED, VECTOR, KENDRA, SQL) so console-created KBs show up for
-unified management. All MUTATIONS stay ``type == "MANAGED"``-only — non-managed
-KBs are external resources Launchpad did not create, and the AgentCore gateway
-connector can only serve managed KBs anyway (so only those are attachable).
-List summaries omit the type — GetKnowledgeBase carries it. Style mirrors
+Only ``type == "MANAGED"`` KBs are in scope; the account also holds VECTOR KBs
+that the connector cannot serve, so every read filters on the configuration type
+(list summaries omit it — GetKnowledgeBase carries it). Style mirrors
 registry_console: thin service over the bedrock-agent / bedrock-agent-runtime
 wrappers, with the Agent ledger scanned for attachment relationships.
 """
@@ -99,46 +96,20 @@ def _list_data_sources(client: Any, kb_id: str) -> list[dict[str, Any]]:
 
 
 def _parse_ds_location(detail: dict[str, Any]) -> tuple[str | None, str | None]:
-    """Best-effort (bucket, prefix) from an S3-backed data source.
-
-    Managed connector: ``connectorParameters`` is a document member —
-    GetDataSource returns it as a JSON *string*, while our create path sends a
-    dict; accept both. Classic (VECTOR-KB) sources use ``s3Configuration`` whose
-    bucket field is a **bucketArn**."""
-    config = detail.get("dataSourceConfiguration") or {}
+    """Best-effort (bucket, prefix) from a managed S3 connector's params.
+    ``connectorParameters`` is a document member — GetDataSource returns it as a
+    JSON *string*, while our create path sends a dict; accept both."""
     try:
-        params = config["managedKnowledgeBaseConnectorConfiguration"]["connectorParameters"]
+        params = detail["dataSourceConfiguration"][
+            "managedKnowledgeBaseConnectorConfiguration"
+        ]["connectorParameters"]
         if isinstance(params, str):
             params = json.loads(params)
         bucket = (params.get("connectionConfiguration") or {}).get("bucketName")
         prefixes = (params.get("filterConfiguration") or {}).get("inclusionPrefixes") or []
         return bucket, (prefixes[0] if prefixes else None)
     except (KeyError, TypeError, IndexError, ValueError):
-        pass
-    s3_config = config.get("s3Configuration") or {}
-    if s3_config.get("bucketArn"):
-        bucket = s3_config["bucketArn"].rpartition(":::")[2] or None
-        prefixes = s3_config.get("inclusionPrefixes") or []
-        return bucket, (prefixes[0] if prefixes else None)
-    return None, None
-
-
-def _ds_source_label(detail: dict[str, Any]) -> str | None:
-    """Human label for non-S3 classic sources (web crawl / SaaS connectors)."""
-    config = detail.get("dataSourceConfiguration") or {}
-    web = config.get("webConfiguration") or {}
-    seeds = (
-        ((web.get("sourceConfiguration") or {}).get("urlConfiguration") or {}).get("seedUrls")
-        or []
-    )
-    if seeds:
-        return seeds[0].get("url")
-    for key in ("confluenceConfiguration", "sharePointConfiguration", "salesforceConfiguration"):
-        source = (config.get(key) or {}).get("sourceConfiguration") or {}
-        host = source.get("hostUrl") or (source.get("siteUrls") or [None])[0]
-        if host:
-            return host
-    return None
+        return None, None
 
 
 def _job_out(job: dict[str, Any]) -> dict[str, Any]:
@@ -375,9 +346,7 @@ def _safe_filename(filename: str) -> str:
 # ── public API ────────────────────────────────────────────────────────────────
 
 
-def list_kbs(kb_type: str | None = None) -> list[dict[str, Any]]:
-    """Every KB in the account, any type; ``kb_type`` filters (the Create-Agent
-    picker asks for MANAGED — the only type the gateway connector can serve)."""
+def list_kbs() -> list[dict[str, Any]]:
     client = agent_client()
     attached = _attached_map()
     items: list[dict[str, Any]] = []
@@ -386,17 +355,14 @@ def list_kbs(kb_type: str | None = None) -> list[dict[str, Any]]:
     ):
         kb_id = summary["knowledgeBaseId"]
         detail = client.get_knowledge_base(knowledgeBaseId=kb_id)["knowledgeBase"]
-        type_ = _kb_type(detail)
-        if kb_type and type_ != kb_type:
-            continue
+        if _kb_type(detail) != "MANAGED":
+            continue  # VECTOR/KENDRA/SQL KBs are out of scope
         items.append(
             {
                 "kb_id": kb_id,
                 "name": detail.get("name"),
                 "description": detail.get("description", ""),
                 "status": detail.get("status"),
-                "type": type_,
-                "attachable": type_ == "MANAGED",
                 "updated_at": _iso(detail.get("updatedAt")),
                 "data_source_count": len(_list_data_sources(client, kb_id)),
                 "attached_agents": attached.get(kb_id, []),
@@ -407,8 +373,7 @@ def list_kbs(kb_type: str | None = None) -> list[dict[str, Any]]:
 
 def get_kb_detail(kb_id: str) -> dict[str, Any]:
     client = agent_client()
-    detail = _get_kb(client, kb_id)
-    type_ = _kb_type(detail)
+    detail = _require_managed(_get_kb(client, kb_id))
     data_sources: list[dict[str, Any]] = []
     for ds in _list_data_sources(client, kb_id):
         ds_id = ds["dataSourceId"]
@@ -421,7 +386,6 @@ def get_kb_detail(kb_id: str) -> dict[str, Any]:
                 "status": full.get("status"),
                 "bucket": bucket,
                 "prefix": prefix,
-                "location_label": _ds_source_label(full) if bucket is None else None,
                 "failure_reasons": full.get("failureReasons") or [],
                 "ingestion_jobs": _recent_ingestion_jobs(client, kb_id, ds_id),
             }
@@ -431,10 +395,6 @@ def get_kb_detail(kb_id: str) -> dict[str, Any]:
         "name": detail.get("name"),
         "description": detail.get("description", ""),
         "status": detail.get("status"),
-        "type": type_,
-        # external (non-managed) KBs are browse/query/sync-only in Launchpad
-        "read_only": type_ != "MANAGED",
-        "attachable": type_ == "MANAGED",
         "arn": detail.get("knowledgeBaseArn"),
         "created_at": _iso(detail.get("createdAt")),
         "updated_at": _iso(detail.get("updatedAt")),
@@ -470,7 +430,7 @@ def list_documents(
     token-paginated) with the KB-side index status plus S3-side size and
     upload time joined in by object key."""
     client = agent_client()
-    _get_kb(client, kb_id)  # 404 unknown ids; documents are readable for any type
+    _require_managed(_get_kb(client, kb_id))
     kwargs: dict[str, Any] = {
         "knowledgeBaseId": kb_id,
         "dataSourceId": ds_id,
@@ -656,31 +616,21 @@ def _result_out(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def query(kb_id: str, text: str, number_of_results: int = 8) -> list[dict[str, Any]]:
-    kb_type = _kb_type(_get_kb(agent_client(), kb_id))
-    if kb_type == "SQL":
-        raise AppError(
-            "kb.query_unsupported",
-            "SQL knowledge bases answer via query generation, not Retrieve — "
-            "the playground cannot search them",
-            status_code=400,
-        )
-    config_key = (
-        "managedSearchConfiguration" if kb_type == "MANAGED" else "vectorSearchConfiguration"
-    )
     runtime = agent_runtime_client()
     try:
         resp = runtime.retrieve(
             knowledgeBaseId=kb_id,
             retrievalQuery={"text": text},
-            retrievalConfiguration={config_key: {"numberOfResults": number_of_results}},
+            retrievalConfiguration={
+                "managedSearchConfiguration": {"numberOfResults": number_of_results}
+            },
         )
     except (
         runtime.exceptions.ValidationException,
         runtime.exceptions.AccessDeniedException,
     ) as exc:
-        # external KBs can be broken for ANY caller (e.g. a classic KB whose
-        # OpenSearch Serverless data-access policy no longer admits its own
-        # service role → "[security_exception] 403") — surface it readably
+        # a KB can be broken for ANY caller (index still building, policy
+        # drift) — surface it readably instead of a raw 500
         raise AppError(
             "kb.query_failed",
             f"retrieval failed on the knowledge base side: {exc}",
