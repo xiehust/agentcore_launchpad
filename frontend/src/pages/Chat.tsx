@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
-import { Btn, Chip, ConfirmDialog, Panel, ViewHead } from "../components";
+import { Btn, Chip, ConfirmDialog, Markdown, Panel, ViewHead } from "../components";
 import type { AgentInfo } from "../lib/api";
 import { api } from "../lib/api";
 
@@ -388,7 +388,7 @@ export function Chat() {
                     {msg.streaming ? " · STREAMING" : ""}
                   </div>
                   <div className="bub">
-                    {msg.text}
+                    <Markdown text={msg.text} />
                     {msg.streaming && <span className="caret" />}
                   </div>
                 </div>
