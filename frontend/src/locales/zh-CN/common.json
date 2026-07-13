@@ -900,6 +900,8 @@
     "session": {
       "conversation": "对话",
       "conversationSub": "AgentCore 记忆 · ListEvents · actor {{actor}}",
+      "conversationEvalSub": "评估运行 · {{run}} · agentcore memory · actor {{actor}}",
+      "conversationEvalLogsSub": "评估运行 · {{run}} · 由 OTEL 内容日志重建",
       "openInChat": "在对话演练场打开",
       "user": "用户",
       "memnote": "长期记忆:已为 actor {{actor}} 提取 {{count}} 条记录",

@@ -310,6 +310,9 @@ export interface ObsTranscript {
   actor_id?: string;
   agent_id?: string;
   agent_name?: string | null;
+  source?: "chat" | "eval";
+  origin?: "memory" | "logs";
+  run_id?: string | null;
   turns?: ObsTranscriptTurn[];
   long_term_records?: number | null;
 }

@@ -900,6 +900,8 @@
     "session": {
       "conversation": "CONVERSATION",
       "conversationSub": "agentcore memory · ListEvents · actor {{actor}}",
+      "conversationEvalSub": "eval run · {{run}} · agentcore memory · actor {{actor}}",
+      "conversationEvalLogsSub": "eval run · {{run}} · rebuilt from otel content logs",
       "openInChat": "OPEN IN CHAT",
       "user": "USER",
       "memnote": "long-term memory: {{count}} records extracted for actor {{actor}}",

@@ -120,11 +120,22 @@ export function SessionDetailView({ sessionId, range, onOpenTrace }: SessionDeta
         title={t("obs.session.conversation")}
         sub={
           transcript.available
-            ? t("obs.session.conversationSub", { actor: transcript.actor_id ?? "—" })
+            ? transcript.source === "eval"
+              ? t(
+                  transcript.origin === "logs"
+                    ? "obs.session.conversationEvalLogsSub"
+                    : "obs.session.conversationEvalSub",
+                  {
+                    run: `run-${(transcript.run_id ?? "").slice(0, 6)}`,
+                    actor: transcript.actor_id ?? "—",
+                  },
+                )
+              : t("obs.session.conversationSub", { actor: transcript.actor_id ?? "—" })
             : shortId(sessionId, 20)
         }
         end={
-          transcript.available && transcript.agent_id != null ? (
+          // eval-run sessions live outside the chat ledger — nothing to resume
+          transcript.available && transcript.agent_id != null && transcript.source !== "eval" ? (
             <Btn
               onClick={() =>
                 navigate(

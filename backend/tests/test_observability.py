@@ -369,9 +369,9 @@ def _fake_logs():
 
 
 def _seed_agent(name="hr-assistant", resource_id="hr_assistant-Flr7ibmASq",
-                status="active"):
+                status="active", method="harness"):
     db = SessionLocal()
-    agent = Agent(name=name, method="harness", status=status, resource_id=resource_id,
+    agent = Agent(name=name, method=method, status=status, resource_id=resource_id,
                   arn=f"arn:aws:bedrock-agentcore:us-west-2:1:harness/{resource_id}")
     db.add(agent)
     db.commit()
@@ -478,6 +478,153 @@ def test_transcript_orders_turns(monkeypatch):
     assert result["available"] is True and result["agent_name"] == "hr-assistant"
     assert [t["text"] for t in result["turns"]] == ["first q", "first a", "second q"]
     assert result["long_term_records"] == 2
+
+
+def test_transcript_falls_back_to_eval_run_session(monkeypatch):
+    """Eval-run sessions have no chat ledger row; the transcript comes from the
+    BARE "default" actor the eval invoker passed to the runtime."""
+    from app.evaluation.models import EvalRun
+
+    agent_id = _seed_agent()
+    sid = "e" * 64
+    db = SessionLocal()
+    run = EvalRun(agent_id=agent_id, agent_name="hr-assistant", mode="evaluators",
+                  evaluators=[], status="completed", session_ids=[sid])
+    db.add(run)
+    db.commit()
+    run_id = run.id
+
+    seen: dict = {}
+
+    def fake_events(actor_id, session_id, max_results=20):
+        seen["actor"] = actor_id
+        envelope = json.dumps(
+            {"message": {"role": "user", "content": [{"text": "PTO balance?"}]}}
+        )
+        return [{"eventTimestamp": "2026-07-13T01:00:00", "payload": [
+            {"conversational": {"role": "USER", "content": {"text": envelope}}},
+            {"conversational": {"role": "ASSISTANT", "content": {"text": "15 days"}}},
+        ]}]
+
+    monkeypatch.setattr(obs.memory, "list_events", fake_events)
+    monkeypatch.setattr(obs.memory, "list_records", lambda *a, **k: [])
+    result = obs.session_transcript(db, sid)
+    db.close()
+    assert result["available"] is True
+    assert result["source"] == "eval" and result["run_id"] == run_id
+    assert result["actor_id"] == "default" and seen["actor"] == "default"
+    assert result["agent_name"] == "hr-assistant"
+    assert [t["text"] for t in result["turns"]] == ["PTO balance?", "15 days"]
+
+
+def _content_record(trace_id, ts_ns, body, session_id="e" * 64):
+    return json.dumps({
+        "scope": {"name": "strands.telemetry.tracer"},
+        "timeUnixNano": ts_ns,
+        "traceId": trace_id,
+        "attributes": {"event.name": "strands.telemetry.tracer", "session.id": session_id},
+        "body": body,
+    })
+
+
+class FakeLogsClient:
+    """filter_log_events stub with one-page pagination."""
+
+    def __init__(self, pages):
+        self.pages = pages
+        self.calls = []
+
+    def filter_log_events(self, **kwargs):
+        self.calls.append(kwargs)
+        page = self.pages[min(len(self.calls) - 1, len(self.pages) - 1)]
+        out = {"events": [{"message": m} for m in page]}
+        if len(self.calls) < len(self.pages):
+            out["nextToken"] = f"tok-{len(self.calls)}"
+        return out
+
+
+def test_eval_turns_from_content_logs_groups_by_trace():
+    sid = "e" * 64
+    # invocation 2 arrives first in the log page — ordering must follow time
+    page1 = [
+        _content_record("trace-2", 2_000, {
+            "input": {"messages": [
+                {"content": {"content": '[{"text": "Q2?"}]'}, "role": "user"}]},
+            "output": {"messages": [
+                {"content": {"message": "A2", "finish_reason": "end_turn"},
+                 "role": "assistant"}]},
+        }),
+    ]
+    page2 = [
+        # model-level record: toolUse output (no text) + user input
+        _content_record("trace-1", 1_000, {
+            "input": {"messages": [
+                {"content": {"content": '[{"text": "Q1?"}]'}, "role": "user"}]},
+            "output": {"messages": [
+                {"content": {"message": '[{"toolUse": {"name": "calc"}}]',
+                             "finish_reason": "tool_use"}, "role": "assistant"}]},
+        }),
+        # agent-level record: plain-string system + final end_turn answer
+        _content_record("trace-1", 1_500, {
+            "input": {"messages": [
+                {"content": "system prompt", "role": "system"},
+                {"content": {"content": '[{"text": "Q1?"}]'}, "role": "user"},
+                {"content": {"content": '[{"toolResult": {"status": "ok"}}]'},
+                 "role": "tool"}]},
+            "output": {"messages": [
+                {"content": {"message": "A1", "finish_reason": "end_turn"},
+                 "role": "assistant"}]},
+        }),
+        json.dumps({"attributes": {"session.id": "other"}, "body": {}}),  # filtered out
+        "not json at all",  # skipped
+    ]
+    logs = FakeLogsClient([page1, page2])
+    turns = obs.eval_turns_from_content_logs("/lg", sid, None, logs=logs)
+    assert [(t["role"], t["text"]) for t in turns] == [
+        ("USER", "Q1?"), ("ASSISTANT", "A1"),
+        ("USER", "Q2?"), ("ASSISTANT", "A2"),
+    ]
+    assert logs.calls[0]["filterPattern"] == f'"{sid}"'
+    assert "startTime" in logs.calls[0]  # load-bearing: scan is oldest-first
+
+
+def test_transcript_eval_falls_back_to_content_logs(monkeypatch):
+    """Runtime-backed agents write no memory events — the transcript is rebuilt
+    from the runtime's OTEL content logs. Insights re-runs reuse session ids,
+    so the CREATOR run (oldest match) anchors the log window and run_id."""
+    from datetime import datetime
+
+    from app.evaluation.models import EvalRun
+
+    agent_id = _seed_agent(method="zip_runtime")
+    sid = "f" * 64
+    db = SessionLocal()
+    creator = EvalRun(agent_id=agent_id, agent_name="hr-assistant", mode="evaluators",
+                      evaluators=[], status="completed", session_ids=[sid],
+                      created_at=datetime(2026, 7, 11, 1, 0, 0))
+    insights = EvalRun(agent_id=agent_id, agent_name="hr-assistant", mode="insights",
+                       evaluators=[], status="completed", session_ids=[sid],
+                       created_at=datetime(2026, 7, 11, 3, 0, 0))
+    db.add_all([creator, insights])
+    db.commit()
+    creator_id = creator.id
+
+    monkeypatch.setattr(obs.memory, "list_events", lambda *a, **k: [])
+    monkeypatch.setattr(obs.memory, "list_records", lambda *a, **k: [])
+    seen: dict = {}
+
+    def fake_logs_turns(log_group, session_id, started_at, logs=None):
+        seen.update(log_group=log_group, started_at=started_at)
+        return [{"role": "USER", "text": "hi", "at": "t"}]
+
+    monkeypatch.setattr(obs, "eval_turns_from_content_logs", fake_logs_turns)
+    result = obs.session_transcript(db, sid)
+    db.close()
+    assert result["available"] is True and result["origin"] == "logs"
+    assert result["run_id"] == creator_id  # not the insights re-run
+    assert seen["started_at"] == datetime(2026, 7, 11, 1, 0, 0)
+    assert "-DEFAULT" in seen["log_group"]
+    assert [t["text"] for t in result["turns"]] == ["hi"]
 
 
 def test_transcript_decodes_harness_envelopes(monkeypatch):

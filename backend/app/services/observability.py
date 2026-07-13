@@ -16,7 +16,7 @@ import re
 import threading
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import boto3
@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.errors import AppError
+from app.evaluation.models import EvalRun
 from app.models.ledger import Agent, ChatSession
 from app.services import memory
 
@@ -1063,23 +1064,171 @@ def _event_iso(value: Any) -> str:
     return str(value or "")
 
 
+def _eval_run_for_session(db: Session, session_id: str) -> EvalRun | None:
+    """The eval run that PRODUCED this session, if any. Insights re-runs reuse
+    an earlier run's session_ids, so the oldest match is the creator (its
+    created_at anchors the content-log time window). session_ids is a JSON
+    column, so membership is checked in Python over recent runs (small table)."""
+    rows = db.query(EvalRun).order_by(EvalRun.created_at.desc()).limit(500).all()
+    matches = [r for r in rows if session_id in (r.session_ids or [])]
+    return matches[-1] if matches else None  # desc scan → last match is the oldest
+
+
+# ── Eval transcript from OTEL content logs (runtime-backed agents) ───────────
+# Runtime methods write no memory events during eval runs, but their ADOT
+# sidecar streams per-span gen_ai content records into the runtime log group
+# (stream otel-rt-logs) — the same content StartBatchEvaluation reads.
+RUNTIME_LOG_METHODS = {"zip_runtime", "studio", "container"}
+
+
+def _part_list_text(raw: Any) -> str | None:
+    """Content strings in otel-rt-logs records are polymorphic: plain text or
+    a JSON-encoded list of parts ([{"text"}|{"toolUse"}|{"toolResult"}]).
+    Returns the joined text parts — None for tool-only content."""
+    if not isinstance(raw, str) or not raw:
+        return None
+    s = raw.strip()
+    if s.startswith("["):
+        try:
+            parts = json.loads(s)
+        except ValueError:
+            return raw
+        if isinstance(parts, list):
+            texts = [
+                p.get("text") for p in parts if isinstance(p, dict) and p.get("text")
+            ]
+            return "\n".join(texts) if texts else None
+    return raw
+
+
+def _iter_body_messages(body: dict[str, Any]):
+    """(kind, role, text, finish_reason) for each message of a content record.
+
+    A message's ``content`` is either the raw string or a wrapper dict whose
+    text sits under ``message`` (outputs) / ``content`` (inputs)."""
+    for kind in ("input", "output"):
+        for msg in (body.get(kind) or {}).get("messages") or []:
+            if not isinstance(msg, dict):
+                continue
+            content = msg.get("content")
+            finish = None
+            if isinstance(content, dict):
+                finish = content.get("finish_reason")
+                raw = content.get("message") if "message" in content else content.get("content")
+            else:
+                raw = content
+            yield kind, msg.get("role"), _part_list_text(raw), finish
+
+
+def _ns_iso(ns: int) -> str:
+    return datetime.fromtimestamp((ns or 0) / 1e9, UTC).isoformat(timespec="seconds")
+
+
+def eval_turns_from_content_logs(
+    log_group: str,
+    session_id: str,
+    started_at: datetime | None,
+    logs: Any = None,
+) -> list[dict[str, Any]]:
+    """USER/ASSISTANT turns for an eval session, rebuilt from content logs.
+
+    One invocation = one traceId. Its USER turn is the trace's latest input
+    user message (later records carry the full history — last one is the
+    current turn); its ASSISTANT turn is the ``end_turn`` output, falling back
+    to the last assistant text. filter_log_events scans oldest-first, so
+    startTime (the run's creation time) is load-bearing — without it the scan
+    exhausts its page budget on old log data and returns nothing.
+    """
+    logs = logs or _logs_client()
+    started = started_at or datetime.now(UTC)
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=UTC)
+    start_ms = int((started - timedelta(minutes=10)).timestamp() * 1000)
+    kwargs: dict[str, Any] = {
+        "logGroupName": log_group,
+        "filterPattern": f'"{session_id}"',
+        "startTime": start_ms,
+        "endTime": start_ms + 26 * 3600 * 1000,  # runs settle well within a day
+        "limit": 500,
+    }
+    records: list[dict[str, Any]] = []
+    for _ in range(5):  # page cap — a session yields tens of records
+        try:
+            resp = logs.filter_log_events(**kwargs)
+        except ClientError:
+            return []
+        for event in resp.get("events", []):
+            try:
+                rec = json.loads(event["message"])
+            except ValueError:
+                continue
+            if (rec.get("attributes") or {}).get("session.id") == session_id:
+                records.append(rec)
+        token = resp.get("nextToken")
+        if not token:
+            break
+        kwargs["nextToken"] = token
+
+    invocations: dict[str, dict[str, Any]] = {}
+    for rec in sorted(records, key=lambda r: r.get("timeUnixNano") or 0):
+        ts = rec.get("timeUnixNano") or 0
+        inv = invocations.setdefault(rec.get("traceId") or "?", {"ts": ts})
+        for kind, role, text, finish in _iter_body_messages(rec.get("body") or {}):
+            if text is None:
+                continue
+            if kind == "input" and role == "user":
+                inv["user"] = text
+            elif kind == "output" and role == "assistant":
+                if finish == "end_turn":
+                    inv["final"], inv["final_ts"] = text, ts
+                else:
+                    inv.setdefault("final_ts", ts)
+                    inv["last_assistant"] = text
+
+    turns: list[dict[str, Any]] = []
+    for inv in sorted(invocations.values(), key=lambda i: i["ts"]):
+        if inv.get("user"):
+            turns.append({"role": "USER", "text": inv["user"][:4000], "at": _ns_iso(inv["ts"])})
+        answer = inv.get("final") or inv.get("last_assistant")
+        if answer:
+            turns.append({
+                "role": "ASSISTANT",
+                "text": answer[:4000],
+                "at": _ns_iso(inv.get("final_ts") or inv["ts"]),
+            })
+    return turns
+
+
 def session_transcript(db: Session, session_id: str) -> dict[str, Any]:
     row = db.query(ChatSession).filter(ChatSession.session_id == session_id).first()
-    if row is None:
+    run = None if row else _eval_run_for_session(db, session_id)
+    if row is None and run is None:
         return {"available": False, "reason": "not_platform_session"}
-    agent = db.get(Agent, row.agent_id)
-    # Memory is written under an agent-scoped actor (see memory.scoped_actor);
-    # the ledger stores the bare human actor, so re-scope for the read.
-    mem_actor = memory.scoped_actor(row.agent_id, row.actor_id)
+    if row is not None:
+        agent = db.get(Agent, row.agent_id)
+        # Memory is written under an agent-scoped actor (memory.scoped_actor);
+        # the ledger stores the bare human actor, so re-scope for the read.
+        mem_actor = memory.scoped_actor(row.agent_id, row.actor_id)
+        agent_id, actor_display = row.agent_id, row.actor_id
+    else:
+        # Eval-run sessions: invokes pass the BARE "default" actor straight to
+        # the runtime — harness runtimes persist the conversation under it
+        # (runtime-backed agents write no memory events, so turns come back
+        # empty for them).
+        agent = db.get(Agent, run.agent_id)
+        mem_actor = "default"
+        agent_id, actor_display = run.agent_id, "default"
     try:
         events = memory.list_events(mem_actor, session_id, max_results=100)
     except Exception as exc:
-        return {
-            "available": False,
-            "reason": "memory_unavailable",
-            "detail": f"{type(exc).__name__}: {exc}"[:200],
-            "actor_id": row.actor_id,
-        }
+        if row is not None:
+            return {
+                "available": False,
+                "reason": "memory_unavailable",
+                "detail": f"{type(exc).__name__}: {exc}"[:200],
+                "actor_id": actor_display,
+            }
+        events = []  # eval sessions can still rebuild from content logs
     turns = []
     for event in sorted(events, key=lambda e: str(e.get("eventTimestamp", ""))):
         for part in event.get("payload", []):
@@ -1096,19 +1245,40 @@ def session_transcript(db: Session, session_id: str) -> dict[str, Any]:
                     "at": _event_iso(event.get("eventTimestamp")),
                 }
             )
+    # Runtime-backed agents write no memory events during eval runs — rebuild
+    # the conversation from the runtime's OTEL content logs instead.
+    origin = "memory"
+    if (
+        not turns
+        and run is not None
+        and agent is not None
+        and agent.method in RUNTIME_LOG_METHODS
+        and agent.resource_id
+    ):
+        log_group = f"/aws/bedrock-agentcore/runtimes/{agent.resource_id}-DEFAULT"
+        turns = eval_turns_from_content_logs(log_group, session_id, run.created_at)
+        if turns:
+            origin = "logs"
+    # Long-term records only make sense for chat sessions — eval traffic all
+    # shares the bare "default" actor, so its namespaces aggregate across
+    # every agent's runs and say nothing about this session.
     long_term = None
-    try:
-        long_term = sum(
-            len(memory.list_records(f"{ns}/{mem_actor}", max_results=20))
-            for ns in ("/preferences", "/facts")
-        )
-    except Exception:
-        pass
+    if row is not None:
+        try:
+            long_term = sum(
+                len(memory.list_records(f"{ns}/{mem_actor}", max_results=20))
+                for ns in ("/preferences", "/facts")
+            )
+        except Exception:
+            pass
     return {
         "available": True,
-        "actor_id": row.actor_id,
-        "agent_id": row.agent_id,
-        "agent_name": agent.name if agent else None,
+        "actor_id": actor_display,
+        "agent_id": agent_id,
+        "agent_name": agent.name if agent else (run.agent_name if run else None),
+        "source": "chat" if row else "eval",
+        "origin": origin,
+        "run_id": run.id if run else None,
         "turns": turns,
         "long_term_records": long_term,
     }
