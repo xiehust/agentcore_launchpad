@@ -236,6 +236,8 @@ def run_bootstrap(region: str | None = None) -> dict[str, Any]:
                 "office_facts_api_key_id": outputs.get("OfficeFactsApiKeyId", ""),
                 "gateway_role_arn": outputs.get("GatewayRoleArn", ""),
                 "m2m_client_id": outputs.get("M2MClientId", ""),
+                # managed KB layer; absent on stacks predating it
+                "kb_role_arn": outputs.get("KbRoleArn", ""),
             },
             "demo_users": {"passwords": passwords},
         }

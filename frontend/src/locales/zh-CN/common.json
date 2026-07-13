@@ -11,6 +11,7 @@
     "overview": "总览",
     "createAgent": "Agent 管理",
     "registry": "注册中心",
+    "knowledgeBases": "知识库",
     "chat": "对话演练场",
     "observability": "可观测",
     "evaluation": "评估",
@@ -147,7 +148,12 @@
       "fsSubnets": "子网 ID",
       "fsSgs": "安全组 ID",
       "fsNote": "托管会话存储让同一会话在停止/恢复间保留 /mnt 文件（14 天闲置过期）。重新发布会产生新的运行时版本 — 会话存储将被重置。",
-      "fsNoteByo": "BYO 挂载会将运行时切换为 VPC 网络（需放行到挂载目标的 TCP 2049 出站）。执行角色会自动获得挂载权限。重新发布仅重置托管会话存储。"
+      "fsNoteByo": "BYO 挂载会将运行时切换为 VPC 网络（需放行到挂载目标的 TCP 2049 出站）。执行角色会自动获得挂载权限。重新发布仅重置托管会话存储。",
+      "kbLabel": "知识库 — 托管 RAG",
+      "kbSoon": "+ 知识库 · 请选择 harness 方式",
+      "kbEmpty": "暂无可用知识库 · 请先创建",
+      "kbNote": "所选知识库会为 Agent 挂载有依据的检索工具（仅 harness）。你为每个知识库填写的描述会引导 Agent 何时检索它。",
+      "kbMountedTitle": "已挂载知识库"
     },
     "launchPanel": {
       "title": "发射计划",
@@ -357,6 +363,144 @@
     "confirmDelete": {
       "title": "删除记录",
       "body": "这会把“{{name}}”从注册中心永久移除。已部署的 Agent 不受影响，只是该记录从目录中消失。"
+    }
+  },
+  "knowledge": {
+    "kicker": "// 知识接地层",
+    "title": "知识库",
+    "meta": "AMAZON BEDROCK · 全托管 RAG · us-west-2",
+    "status": {
+      "creating": "创建中",
+      "active": "可用",
+      "failed": "失败",
+      "deleting": "删除中"
+    },
+    "list": {
+      "panelTitle": "托管知识库",
+      "panelSub": "全托管 RAG · 向量库、embedding 与重排由 Bedrock 托管"
+    },
+    "cols": {
+      "name": "名称",
+      "status": "状态",
+      "dataSources": "数据源",
+      "agents": "关联 Agent",
+      "updated": "更新时间"
+    },
+    "empty": {
+      "title": "还没有知识库。",
+      "body": "托管知识库是全托管 RAG——向量库、embedding、分块与重排都由 Bedrock 负责。上传文档(或指定一个 S3 位置),Agent 即可从中检索有依据的答案。创建一个开始吧。"
+    },
+    "source": {
+      "label": "数据源",
+      "upload": "上传文件",
+      "existing": "已有 S3 位置",
+      "comingSoon": "即将支持",
+      "connector": {
+        "webCrawler": "网页爬虫",
+        "sharepoint": "SHAREPOINT",
+        "confluence": "CONFLUENCE",
+        "googleDrive": "GOOGLE DRIVE",
+        "oneDrive": "ONEDRIVE"
+      },
+      "uploadLabel": "文件",
+      "uploadPick": "选择要上传的文件",
+      "uploadHint": "文件将上传到 artifacts 桶并自动配置为数据源。数据源可用后自动开始 ingestion。",
+      "removeFile": "移除",
+      "bucket": "S3 桶",
+      "prefix": "前缀(可选)",
+      "existingHint": "KB 服务角色会按知识库粒度获得该桶/前缀的读取权限。"
+    },
+    "create": {
+      "cta": "创建知识库",
+      "pageTitle": "创建知识库",
+      "pageMeta": "托管 RAG · S3 数据源",
+      "formTitle": "新建知识库",
+      "name": "名称",
+      "nameInvalid": "以字母或数字开头;仅允许字母、数字、空格、- 和 _。",
+      "description": "描述",
+      "descriptionPlaceholder": "例如:产品文档与常见问题——当用户询问某功能如何使用时查询此库。",
+      "descriptionHint": "Agent 会根据此描述判断何时查询该知识库——请写清它包含什么、何时应当查阅。",
+      "creating": "创建中…",
+      "submit": "创建",
+      "done": "“{{name}}”已创建——正在预置数据源。",
+      "uploadFailed": "知识库已创建,但文件上传失败:{{msg}}",
+      "how": {
+        "title": "工作流程",
+        "sub": "创建 → ingestion → 挂载",
+        "s1": "创建——预置 KB 及其 S3 数据源(2–5 分钟)",
+        "s2": "INGESTION——数据源可用后自动运行;在详情页监控进度",
+        "s3": "验证——用检索 Playground 确认返回的 chunk 与 score 质量",
+        "s4": "挂载——在创建 Agent 向导中把 ACTIVE 的 KB 挂载到 harness Agent",
+        "note": "托管 KB 为你处理向量库、embedding 与重排,无需配置基础设施。v1 仅支持 S3 数据源。"
+      }
+    },
+    "detail": {
+      "meta": "托管知识库",
+      "loadFailedTitle": "无法加载知识库",
+      "deleted": "“{{name}}”已删除。",
+      "overview": {
+        "title": "概览",
+        "kbId": "KB ID",
+        "arn": "ARN",
+        "updated": "更新时间",
+        "description": "描述",
+        "editDesc": "编辑",
+        "saveDesc": "保存",
+        "saving": "保存中…",
+        "noDescription": "暂无描述——Agent 依赖它判断何时查询该 KB。",
+        "delete": "删除"
+      },
+      "agents": {
+        "title": "关联 AGENT",
+        "sub": "挂载此 KB 的 Agent",
+        "empty": "还没有 Agent 使用此知识库。"
+      },
+      "sources": {
+        "title": "数据源",
+        "sub": "S3 数据源 · ingestion 与同步",
+        "add": "新增数据源",
+        "provisioning": "知识库正在预置。数据源将在几分钟后可用,随后自动开始首次 ingestion。",
+        "empty": "还没有数据源。",
+        "adding": "处理中…",
+        "uploadSubmit": "上传文件",
+        "addSubmit": "新增数据源",
+        "uploadEmpty": "请至少选择一个要上传的文件。",
+        "bucketEmpty": "请输入 S3 桶名称。",
+        "uploadedFiles": "已上传 {{n}} 个文件——点击“立即同步”重新 ingestion。",
+        "added": "数据源已新增。",
+        "syncNow": "立即同步",
+        "syncing": "启动中…",
+        "syncNotReady": "数据源需为 AVAILABLE 才能同步。",
+        "syncRunning": "已有 ingestion 任务在运行。",
+        "syncStarted": "ingestion 任务已启动。",
+        "syncFailed": "同步失败:{{msg}}",
+        "removeSource": "移除",
+        "removeTitle": "移除数据源",
+        "removeBody": "从此知识库移除“{{name}}”?该来源已 ingestion 的内容将不再可检索。",
+        "deleted": "数据源已移除。",
+        "jobsTitle": "INGESTION 任务",
+        "autoCreated": "数据源已自动创建。"
+      },
+      "playground": {
+        "title": "检索 PLAYGROUND",
+        "sub": "测试 Agent 将检索到的内容",
+        "query": "查询",
+        "queryPlaceholder": "输入一个能从文档中回答的问题…",
+        "numResults": "结果数",
+        "search": "检索",
+        "searching": "检索中…",
+        "score": "score",
+        "showMore": "展开",
+        "showLess": "收起",
+        "noResults": "没有结果——ingestion 是否已完成?请检查上方数据源状态与 ingestion 任务。"
+      },
+      "delete": {
+        "title": "删除知识库",
+        "body": "将永久删除“{{name}}”及其数据源与网关 target。此操作不可撤销。",
+        "conflictTitle": "知识库正在使用中",
+        "conflictBody": "此知识库已挂载到:{{agents}}。删除会中断这些 Agent 的检索。仍要删除吗?",
+        "force": "仍然删除"
+      }
     }
   },
   "chat": {

@@ -426,12 +426,62 @@ class LaunchpadBaseStack(Stack):
                 ],
             )
         )
+        # Managed KB connector targets: the gateway validates bound KBs at target
+        # creation (GetKnowledgeBase) and retrieves on behalf of agents.
+        gateway_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="ManagedKbRetrieval",
+                actions=["bedrock:GetKnowledgeBase", "bedrock:Retrieve"],
+                resources=[
+                    f"arn:aws:bedrock:{self.region}:{self.account}:knowledge-base/*"
+                ],
+            )
+        )
+        gateway_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="ManagedKbAgenticRetrieval",
+                # AgenticRetrieveStream is not resource-scoped.
+                actions=["bedrock:AgenticRetrieveStream"],
+                resources=["*"],
+            )
+        )
+
+        # ---- knowledge base service role (assumed by Bedrock Managed KB) ----
+        # CreateKnowledgeBase requires a roleArn; managed KBs use it to read S3
+        # data sources. Base grant covers the artifacts bucket kb/ prefix;
+        # per-KB inline policies (launchpad-kb-{id}) extend it to external buckets.
+        kb_role = iam.Role(
+            self,
+            "KnowledgeBaseRole",
+            role_name="launchpad-kb-role",
+            assumed_by=iam.ServicePrincipal(
+                "bedrock.amazonaws.com",
+                conditions={"StringEquals": {"aws:SourceAccount": self.account}},
+            ),
+            description="Assumed by Bedrock Managed Knowledge Bases to ingest S3 data sources",
+        )
+        kb_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="KbDataObjects",
+                actions=["s3:GetObject"],
+                resources=[artifacts.arn_for_objects("kb/*")],
+            )
+        )
+        kb_role.add_to_policy(
+            iam.PolicyStatement(
+                sid="KbDataList",
+                actions=["s3:ListBucket"],
+                resources=[artifacts.bucket_arn],
+                conditions={"StringLike": {"s3:prefix": "kb/*"}},
+            )
+        )
 
         # ---- outputs consumed by backend bootstrap ----
         CfnOutput(self, "HrLambdaArn", value=hr_lambda.function_arn)
         CfnOutput(self, "OfficeFactsApiUrl", value=facts_api.url)
         CfnOutput(self, "OfficeFactsApiKeyId", value=api_key.key_id)
         CfnOutput(self, "GatewayRoleArn", value=gateway_role.role_arn)
+        CfnOutput(self, "KbRoleArn", value=kb_role.role_arn)
         CfnOutput(self, "ArtifactsBucketName", value=artifacts.bucket_name)
         CfnOutput(self, "EcrRepoName", value=repo.repository_name)
         CfnOutput(self, "EcrRepoUri", value=repo.repository_uri)

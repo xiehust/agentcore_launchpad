@@ -31,6 +31,7 @@ interface StoredSpec {
   system_prompt?: string;
   tools?: { type: string; name: string; config?: { url?: string } }[];
   skills?: string[];
+  knowledge_bases?: KbRef[];
   memory?: { long_term?: boolean };
   env?: Record<string, string>;
   filesystem?: {
@@ -58,6 +59,21 @@ interface AttachableSkill {
   description: string;
   path: string;
 }
+// A managed KB offered by the catalog (only ACTIVE + MANAGED are selectable).
+interface AttachableKb {
+  kb_id: string;
+  name: string;
+  description?: string;
+  status?: string;
+  type?: string;
+}
+// The redundant KB reference stored in the agent spec (name/description carried
+// so the wizard can still render a chip if the KB later leaves the catalog).
+interface KbRef {
+  kb_id: string;
+  name: string;
+  description: string;
+}
 
 export function CreateAgent() {
   const { t } = useTranslation();
@@ -80,6 +96,12 @@ export function CreateAgent() {
     prefillGateway ? [prefillGateway] : [],
   );
   const [selectedMcp, setSelectedMcp] = useState<string[]>([]);
+  const [kbCatalog, setKbCatalog] = useState<AttachableKb[]>([]);
+  const [selectedKbs, setSelectedKbs] = useState<string[]>([]);
+  // KB refs carried in the loaded spec — name fallback for KBs no longer in the catalog.
+  const [specKbs, setSpecKbs] = useState<KbRef[]>([]);
+  // KBs shown read-only on the step-3 detail view (viewed agent or just-published).
+  const [detailKbs, setDetailKbs] = useState<KbRef[]>([]);
   const [longTerm, setLongTerm] = useState(true);
   const [mcpServers, setMcpServers] = useState("");
   // custom skill sources attached without a registry record (name shown on the chip)
@@ -117,6 +139,14 @@ export function CreateAgent() {
       .catch(() => {
         /* registry not bootstrapped — chips stay hidden */
       });
+    // Managed KB catalog — failures are tolerated: an empty catalog just leaves
+    // the Knowledge section empty and never blocks the wizard.
+    fetch("/api/knowledge-bases")
+      .then((res) => (res.ok ? res.json() : { items: [] }))
+      .then((d: { items: AttachableKb[] }) => setKbCatalog(d.items ?? []))
+      .catch(() => {
+        /* KB catalog unavailable — section stays empty */
+      });
   }, []);
 
   const [agents, setAgents] = useState<AgentInfo[]>([]);
@@ -129,6 +159,11 @@ export function CreateAgent() {
       });
   }, []);
   useEffect(() => reloadAgents(), [reloadAgents]);
+
+  // KBs are harness-only; drop any selection when the method changes away from it.
+  useEffect(() => {
+    if (method !== "harness") setSelectedKbs([]);
+  }, [method]);
 
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [launch, setLaunch] = useState<LaunchState | null>(null);
@@ -181,6 +216,9 @@ export function CreateAgent() {
     setTools([]);
     setSelectedGateway([]);
     setSelectedMcp([]);
+    setSelectedKbs([]);
+    setSpecKbs([]);
+    setDetailKbs([]);
     setSkills([]);
     setLongTerm(true);
     setMcpServers("");
@@ -198,6 +236,21 @@ export function CreateAgent() {
   };
 
   const byoMounts = s3Mounts.length > 0 || efsMounts.length > 0;
+
+  // Resolve a KB id to its name/description, preferring the live catalog and
+  // falling back to the loaded spec so out-of-catalog KBs keep their label.
+  const kbInfo = (id: string): KbRef => {
+    const cat = kbCatalog.find((k) => k.kb_id === id);
+    if (cat) return { kb_id: id, name: cat.name, description: cat.description ?? "" };
+    const stored = specKbs.find((k) => k.kb_id === id);
+    return { kb_id: id, name: stored?.name ?? id, description: stored?.description ?? "" };
+  };
+
+  // Only ACTIVE managed KBs are selectable; the catalog may already exclude
+  // non-managed KBs, so the type guard is defensive.
+  const activeKbs = kbCatalog.filter(
+    (k) => k.status === "ACTIVE" && (k.type == null || k.type === "MANAGED"),
+  );
 
   const buildSpec = () => ({
     name,
@@ -221,6 +274,9 @@ export function CreateAgent() {
             })
           : [],
     memory: { short_term: true, long_term: longTerm },
+    ...(method === "harness" && selectedKbs.length
+      ? { knowledge_bases: selectedKbs.map(kbInfo) }
+      : {}),
     ...((method === "harness" || method === "container") && skills.length ? { skills } : {}),
     ...(method === "container" && mcpServers.trim()
       ? { env: { LAUNCHPAD_MCP_SERVERS: mcpServers.trim() } }
@@ -246,6 +302,7 @@ export function CreateAgent() {
       const res = editing
         ? await api.redeployAgent(editing.id, spec)
         : await api.createAgent(spec);
+      setDetailKbs((spec as { knowledge_bases?: KbRef[] }).knowledge_bases ?? []);
       failureToasted.current = false;
       setLaunch({ agentId: res.agent.id, jobId: res.job_id });
       setAgentStatus("deploying");
@@ -270,6 +327,8 @@ export function CreateAgent() {
     setTools((spec.tools ?? []).filter((x) => x.type === "builtin").map((x) => x.name));
     setSelectedGateway((spec.tools ?? []).filter((x) => x.type === "gateway").map((x) => x.name));
     setSelectedMcp((spec.tools ?? []).filter((x) => x.type === "mcp").map((x) => x.name));
+    setSelectedKbs((spec.knowledge_bases ?? []).map((k) => k.kb_id));
+    setSpecKbs(spec.knowledge_bases ?? []);
     setSkills(spec.skills ?? []);
     setLongTerm(spec.memory?.long_term ?? true);
     setMcpServers(spec.env?.LAUNCHPAD_MCP_SERVERS ?? "");
@@ -300,6 +359,7 @@ export function CreateAgent() {
     if (!jobId) return;
     setEditing(null);
     setDetailsMode(true);
+    setDetailKbs(((agent.spec ?? {}) as StoredSpec).knowledge_bases ?? []);
     failureToasted.current = true; // don't re-toast an old failure when merely viewing
     setDeployment(agent.deployment ?? null);
     setJob(null);
@@ -320,6 +380,9 @@ export function CreateAgent() {
 
   const toggleTool = (tool: string) =>
     setTools((prev) => (prev.includes(tool) ? prev.filter((x) => x !== tool) : [...prev, tool]));
+
+  const toggleKb = (id: string) =>
+    setSelectedKbs((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
 
   /* ── custom skill sources: inspect (zip/git) → pick → attach ──────────── */
 
@@ -789,6 +852,59 @@ export function CreateAgent() {
                 )}
               </div>
             )}
+            <div className="field" data-testid="kb-picker">
+              <label>{t("create.configure.kbLabel")}</label>
+              <div className="selchips">
+                {method === "harness" ? (
+                  <>
+                    {activeKbs.map((kb) => (
+                      <button
+                        key={kb.kb_id}
+                        type="button"
+                        className={`selchip${selectedKbs.includes(kb.kb_id) ? " on" : ""}`}
+                        style={{ cursor: "pointer" }}
+                        title={kb.description || kb.name}
+                        onClick={() => toggleKb(kb.kb_id)}
+                      >
+                        {kb.name} · kb {selectedKbs.includes(kb.kb_id) ? "✓" : "+"}
+                      </button>
+                    ))}
+                    {selectedKbs
+                      .filter((id) => !activeKbs.some((k) => k.kb_id === id))
+                      .map((id) => {
+                        const info = kbInfo(id);
+                        return (
+                          <button
+                            key={id}
+                            type="button"
+                            className="selchip on"
+                            style={{ cursor: "pointer" }}
+                            title={info.description || info.name}
+                            onClick={() => toggleKb(id)}
+                          >
+                            {info.name} · kb ✓
+                          </button>
+                        );
+                      })}
+                    {activeKbs.length === 0 && selectedKbs.length === 0 && (
+                      <span className="selchip" style={{ opacity: 0.5 }}>
+                        {t("create.configure.kbEmpty")}
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  <span className="selchip" style={{ opacity: 0.5 }}>
+                    {t("create.configure.kbSoon")}
+                  </span>
+                )}
+              </div>
+              {method === "harness" && (
+                <div className="note" style={{ marginTop: 8 }}>
+                  <span className="i">[i]</span>
+                  <span>{t("create.configure.kbNote")}</span>
+                </div>
+              )}
+            </div>
             {method === "container" && (
               <div className="field" data-testid="fs-config">
                 <label>{t("create.configure.filesystem")}</label>
@@ -975,20 +1091,36 @@ export function CreateAgent() {
       )}
 
       {step === 3 && (
-        <LaunchSequence
-          deployment={deployment}
-          job={job}
-          agentStatus={agentStatus}
-          detailsMode={detailsMode}
-          onRestart={() => {
-            setStep(1);
-            setLaunch(null);
-            setDeployment(null);
-            setJob(null);
-            resetForm();
-            reloadAgents();
-          }}
-        />
+        <>
+          <LaunchSequence
+            deployment={deployment}
+            job={job}
+            agentStatus={agentStatus}
+            detailsMode={detailsMode}
+            onRestart={() => {
+              setStep(1);
+              setLaunch(null);
+              setDeployment(null);
+              setJob(null);
+              resetForm();
+              reloadAgents();
+            }}
+          />
+          {detailKbs.length > 0 && (
+            <>
+              <div style={{ height: 14 }} />
+              <Panel title={t("create.configure.kbMountedTitle")}>
+                <div className="selchips">
+                  {detailKbs.map((kb) => (
+                    <span key={kb.kb_id} className="selchip on" title={kb.description || kb.name}>
+                      {kb.name} · kb
+                    </span>
+                  ))}
+                </div>
+              </Panel>
+            </>
+          )}
+        </>
       )}
 
       <ConfirmDialog

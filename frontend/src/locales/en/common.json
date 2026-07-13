@@ -11,6 +11,7 @@
     "overview": "Overview",
     "createAgent": "Agent Management",
     "registry": "Registry",
+    "knowledgeBases": "Knowledge Bases",
     "chat": "Chat Playground",
     "observability": "Observability",
     "evaluation": "Evaluation",
@@ -147,7 +148,12 @@
       "fsSubnets": "SUBNET IDS",
       "fsSgs": "SECURITY GROUP IDS",
       "fsNote": "Managed session storage persists /mnt files across stop/resume of the same session (14-day idle expiry). Re-publish creates a new runtime version — session storage is reset.",
-      "fsNoteByo": "BYO mounts switch the runtime to VPC networking (TCP 2049 egress to the mount targets required). The execution role is granted mount permissions automatically. Re-publish resets managed session storage only."
+      "fsNoteByo": "BYO mounts switch the runtime to VPC networking (TCP 2049 egress to the mount targets required). The execution role is granted mount permissions automatically. Re-publish resets managed session storage only.",
+      "kbLabel": "KNOWLEDGE BASES — MANAGED RAG",
+      "kbSoon": "+ knowledge bases · select harness method",
+      "kbEmpty": "no active knowledge bases · create one first",
+      "kbNote": "Selected knowledge bases attach a grounded-retrieval tool (harness only). The description you gave each KB guides when the agent queries it.",
+      "kbMountedTitle": "KNOWLEDGE BASES — MOUNTED"
     },
     "launchPanel": {
       "title": "LAUNCH PLAN",
@@ -357,6 +363,144 @@
     "confirmDelete": {
       "title": "Delete record",
       "body": "This permanently removes “{{name}}” from the registry. Agents already deployed keep working; the record just leaves the catalog."
+    }
+  },
+  "knowledge": {
+    "kicker": "// GROUNDING LAYER",
+    "title": "Knowledge Bases",
+    "meta": "AMAZON BEDROCK · MANAGED RAG · us-west-2",
+    "status": {
+      "creating": "CREATING",
+      "active": "ACTIVE",
+      "failed": "FAILED",
+      "deleting": "DELETING"
+    },
+    "list": {
+      "panelTitle": "MANAGED KNOWLEDGE BASES",
+      "panelSub": "fully-managed RAG · vector store, embeddings & reranking handled by Bedrock"
+    },
+    "cols": {
+      "name": "NAME",
+      "status": "STATUS",
+      "dataSources": "DATA SOURCES",
+      "agents": "AGENTS",
+      "updated": "UPDATED"
+    },
+    "empty": {
+      "title": "No knowledge bases yet.",
+      "body": "A Managed Knowledge Base is fully-managed RAG — Bedrock handles the vector store, embeddings, chunking and reranking. Upload documents (or point at an S3 location) and agents can retrieve grounded answers from them. Create one to get started."
+    },
+    "source": {
+      "label": "DATA SOURCE",
+      "upload": "UPLOAD FILES",
+      "existing": "EXISTING S3 LOCATION",
+      "comingSoon": "coming soon",
+      "connector": {
+        "webCrawler": "WEB CRAWLER",
+        "sharepoint": "SHAREPOINT",
+        "confluence": "CONFLUENCE",
+        "googleDrive": "GOOGLE DRIVE",
+        "oneDrive": "ONEDRIVE"
+      },
+      "uploadLabel": "FILES",
+      "uploadPick": "Choose files to upload",
+      "uploadHint": "Files are uploaded to the artifacts bucket and configured as a data source automatically. Ingestion starts once the data source is available.",
+      "removeFile": "Remove",
+      "bucket": "S3 BUCKET",
+      "prefix": "PREFIX (optional)",
+      "existingHint": "The KB service role is granted read access to this bucket/prefix per knowledge base."
+    },
+    "create": {
+      "cta": "CREATE KNOWLEDGE BASE",
+      "pageTitle": "Create Knowledge Base",
+      "pageMeta": "Managed RAG · S3 data source",
+      "formTitle": "NEW KNOWLEDGE BASE",
+      "name": "NAME",
+      "nameInvalid": "Start with a letter or digit; letters, digits, spaces, - and _ only.",
+      "description": "DESCRIPTION",
+      "descriptionPlaceholder": "e.g. Product documentation and FAQs — query this when the user asks how a feature works.",
+      "descriptionHint": "Agents use this description to decide when to query this knowledge base — write clearly what it contains and when to consult it.",
+      "creating": "Creating…",
+      "submit": "CREATE",
+      "done": "“{{name}}” created — provisioning the data source.",
+      "uploadFailed": "Knowledge base created, but file upload failed: {{msg}}",
+      "how": {
+        "title": "HOW IT WORKS",
+        "sub": "create → ingest → attach",
+        "s1": "CREATE — the KB and its S3 data source are provisioned (2–5 min)",
+        "s2": "INGEST — once available, ingestion runs automatically; monitor progress on the detail page",
+        "s3": "VERIFY — use the retrieval Playground to confirm chunks come back with good scores",
+        "s4": "ATTACH — mount ACTIVE KBs onto harness agents in the Create Agent wizard",
+        "note": "Managed KBs handle the vector store, embeddings and reranking for you — no infrastructure to configure. v1 supports S3 data sources only."
+      }
+    },
+    "detail": {
+      "meta": "MANAGED KNOWLEDGE BASE",
+      "loadFailedTitle": "COULD NOT LOAD KNOWLEDGE BASE",
+      "deleted": "“{{name}}” deleted.",
+      "overview": {
+        "title": "OVERVIEW",
+        "kbId": "KB id",
+        "arn": "ARN",
+        "updated": "Updated",
+        "description": "DESCRIPTION",
+        "editDesc": "EDIT",
+        "saveDesc": "SAVE",
+        "saving": "Saving…",
+        "noDescription": "No description — agents rely on this to decide when to query the KB.",
+        "delete": "DELETE"
+      },
+      "agents": {
+        "title": "ATTACHED AGENTS",
+        "sub": "agents mounting this KB",
+        "empty": "No agents are using this knowledge base."
+      },
+      "sources": {
+        "title": "DATA SOURCES",
+        "sub": "S3 sources · ingestion & sync",
+        "add": "ADD DATA SOURCE",
+        "provisioning": "The knowledge base is provisioning. Its data source becomes available in a few minutes, and first ingestion then starts automatically.",
+        "empty": "No data sources yet.",
+        "adding": "Working…",
+        "uploadSubmit": "UPLOAD FILES",
+        "addSubmit": "ADD SOURCE",
+        "uploadEmpty": "Choose at least one file to upload.",
+        "bucketEmpty": "Enter an S3 bucket name.",
+        "uploadedFiles": "Uploaded {{n}} file(s) — click Sync now to re-ingest.",
+        "added": "Data source added.",
+        "syncNow": "SYNC NOW",
+        "syncing": "Starting…",
+        "syncNotReady": "The data source must be AVAILABLE before you can sync.",
+        "syncRunning": "An ingestion job is already running.",
+        "syncStarted": "Ingestion job started.",
+        "syncFailed": "Sync failed: {{msg}}",
+        "removeSource": "REMOVE",
+        "removeTitle": "Remove data source",
+        "removeBody": "Remove “{{name}}” from this knowledge base? Ingested content from this source will no longer be retrievable.",
+        "deleted": "Data source removed.",
+        "jobsTitle": "INGESTION JOBS",
+        "autoCreated": "Data source created automatically."
+      },
+      "playground": {
+        "title": "RETRIEVAL PLAYGROUND",
+        "sub": "test what agents will retrieve",
+        "query": "QUERY",
+        "queryPlaceholder": "Ask something answerable from the documents…",
+        "numResults": "RESULTS",
+        "search": "SEARCH",
+        "searching": "Searching…",
+        "score": "score",
+        "showMore": "Show more",
+        "showLess": "Show less",
+        "noResults": "No results — has ingestion completed? Check the data source status and ingestion jobs above."
+      },
+      "delete": {
+        "title": "Delete knowledge base",
+        "body": "This permanently deletes “{{name}}”, its data sources and its gateway target. This cannot be undone.",
+        "conflictTitle": "Knowledge base in use",
+        "conflictBody": "This knowledge base is attached to: {{agents}}. Deleting it will break retrieval for those agents. Delete anyway?",
+        "force": "DELETE ANYWAY"
+      }
     }
   },
   "chat": {
