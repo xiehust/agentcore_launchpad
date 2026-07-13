@@ -94,8 +94,21 @@ channel — mirrors "Gateway tools coming soon").
 
 ### 4. Invariants
 
-- Only `type == MANAGED` KBs are listable/addressable — the account holds
-  VECTOR KBs that the connector cannot serve; `_require_managed` 404s them.
+- **Read/mutate split (task `07-13-kb-unified-list`)**: list/detail/query/sync/
+  documents cover EVERY KB type in the account (unified management — items
+  carry `type` + `attachable`, detail adds `read_only`); all MUTATIONS
+  (delete/PATCH/data-source add-remove/upload) stay MANAGED-only via
+  `_require_managed` (external KBs are not ours to modify). The Create-Agent
+  picker requests `?type=MANAGED` — the gateway connector cannot serve other
+  types. Query branches config by type: MANAGED → `managedSearchConfiguration`,
+  VECTOR/KENDRA → `vectorSearchConfiguration`, SQL → 400 `kb.query_unsupported`;
+  KB-side retrieval failures (e.g. an external KB whose OpenSearch Serverless
+  data-access policy 403s — true for BOTH account VECTOR KBs) surface as 502
+  `kb.query_failed`, not a raw 500. Classic S3 sources use `s3Configuration.
+  bucketArn` (an ARN, not a name) — `_parse_ds_location` handles both shapes;
+  non-S3 classic sources render `_ds_source_label` (web seed URL / SaaS host).
+  Frontend gates on `read_only` (hide edit/delete/add-source/remove; keep
+  SYNC NOW; `autoFirstSync` never fires on external KBs).
 - `registry_console.ensure_default_records` reads only `resources.gateway_url`
   (launchpad-gw) — kb-gw targets must never become registry MCP records.
 - KB delete: refuse with 409 `kb.has_attached_agents` (detail.agents) unless
