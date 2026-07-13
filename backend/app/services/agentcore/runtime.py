@@ -172,6 +172,36 @@ def wait_runtime_ready(
         sleeper(interval_s)
 
 
+def flatten_sse_text(raw: str) -> str | None:
+    """Join the text deltas of an SSE event stream, or None if raw isn't SSE.
+
+    Streaming runtimes (e.g. harness exports converted to zip agents) answer
+    `data: {"event": {...}}` lines in the InvokeHarness event shape instead
+    of the template's `{"result": ...}` JSON.
+    """
+    if not raw.lstrip().startswith("data:"):
+        return None
+    parts: list[str] = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        try:
+            event = json.loads(line[len("data:"):].strip())
+        except ValueError:
+            continue
+        inner = event.get("event") if isinstance(event, dict) else None
+        if not isinstance(inner, dict):
+            continue
+        if "runtimeClientError" in inner or "internalServerException" in inner:
+            detail = inner.get("runtimeClientError") or inner.get("internalServerException")
+            raise RuntimeError(f"runtime returned error: {detail}")
+        delta = inner.get("contentBlockDelta", {}).get("delta", {})
+        if isinstance(delta, dict) and delta.get("text"):
+            parts.append(delta["text"])
+    return "".join(parts) or None
+
+
 def invoke_runtime_text(
     client: Any,
     runtime_arn: str,
@@ -190,7 +220,8 @@ def invoke_runtime_text(
     try:
         body = json.loads(raw)
     except (ValueError, TypeError):
-        body = {"result": raw.decode("utf-8", errors="replace") if raw else ""}
+        decoded = raw.decode("utf-8", errors="replace") if raw else ""
+        body = {"result": flatten_sse_text(decoded) or decoded}
     if isinstance(body, dict) and body.get("error"):
         raise RuntimeError(f"runtime returned error: {body['error']}")
     text = body.get("result", "") if isinstance(body, dict) else str(body)

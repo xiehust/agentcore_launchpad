@@ -179,6 +179,65 @@ def redeploy_agent(
     return {"agent": _agent_out(agent), "job_id": job.id, "deployment_id": deployment.id}
 
 
+@router.post("/agents/{agent_id}/convert", status_code=202)
+def convert_agent(agent_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Convert a managed-harness agent into a NEW runtime-backed agent.
+
+    Exports the harness code (agentcore CLI), grafts the launchpad config-
+    bundle contract onto the entrypoint (so experiments can A/B it — the
+    export alone would no-op, same as the harness), and deploys the result
+    through the standard zip pipeline. The source harness is untouched.
+    """
+    from app.services import harness_convert as hc
+    from app.templates.strands_agent import base_requirements
+
+    source = db.get(Agent, agent_id)
+    if source is None or source.status == "deleted":
+        raise NotFoundError("agent.not_found", "agent not found")
+    if source.method != "harness" or source.status != "active":
+        raise AppError(
+            "agent.convert_unsupported",
+            "conversion targets active managed-harness agents only",
+            status_code=400,
+        )
+    in_flight = [
+        a for a in db.query(Agent).filter(Agent.status == "deploying").all()
+        if (a.spec or {}).get("source_harness", {}).get("agent_id") == agent_id
+    ]
+    if in_flight:
+        raise AppError(
+            "agent.convert_in_flight",
+            f"a conversion of this harness is already deploying ({in_flight[0].name})",
+            status_code=409,
+        )
+
+    # {name}-rt, suffixed -2/-3… until free (never overwrite, R5)
+    taken = {
+        a.name for a in db.query(Agent).filter(Agent.status != "deleted").all()
+    }
+    new_name = f"{source.name}-rt"[:48]
+    counter = 2
+    while new_name in taken:
+        new_name = f"{source.name}-rt-{counter}"[:48]
+        counter += 1
+
+    try:
+        files = hc.export_harness(source.arn)
+        spec = hc.build_conversion_spec(source, files, base_requirements(), new_name)
+    except hc.ConversionError as exc:
+        raise AppError("agent.convert_failed", str(exc), status_code=502) from exc
+
+    agent = Agent(
+        name=spec.name, method=spec.method, status="deploying",
+        spec=spec.model_dump(),
+    )
+    db.add(agent)
+    db.flush()
+    deployment, job = create_deployment(db, agent)
+    start_deploy_async(job.id)
+    return {"agent": _agent_out(agent), "job_id": job.id, "deployment_id": deployment.id}
+
+
 @router.post("/agents/{agent_id}/invoke", response_model=InvokeResponse)
 def invoke_agent(
     agent_id: str, req: InvokeRequest, db: Session = Depends(get_db)

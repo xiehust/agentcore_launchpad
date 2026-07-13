@@ -208,7 +208,13 @@
       "empty": "还没有 Agent——请在上方创建。",
       "deleted": "已删除 Agent。",
       "confirmDeleteTitle": "删除该 Agent？",
-      "confirmDelete": "这会移除“{{name}}”及其 AWS 资源，且不可撤销。"
+      "confirmDelete": "这会移除“{{name}}”及其 AWS 资源，且不可撤销。",
+      "convert": "转换 ⇄ RT",
+      "convertConfirmTitle": "转换为 Runtime Agent",
+      "convertConfirm": "将导出 {{name}} 的 harness 代码、嫁接实验（config-bundle）契约，并部署为一个新的 runtime agent（约 5–15 分钟）。v1 不携带 KB 网关工具；记忆会保留。原 harness 不受影响。",
+      "convertStarted": "转换中 → {{name}}（部署中）",
+      "convertedTitle": "转换而来的 AGENT",
+      "convertedFrom": "由 harness {{name}} 转换而来"
     }
   },
   "registry": {
@@ -922,7 +928,9 @@
     "running": "运行中…",
     "retry": "重试",
     "datasetTag": "数据集",
-    "noChallenger": "没有其他可用 Agent——请先发布一个 v2 候选。"
+    "noChallenger": "没有其他可用 Agent——请先发布一个 v2 候选。",
+    "harnessDisabled": "需先转换为 runtime",
+    "harnessHint": "托管 harness agent 无法直接实验（backing runtime 锁定直调、不消费 config bundle）。请在 Agent 管理中将其转换为 runtime agent（转换 ⇄ RT），再在此选择转换后的 agent。"
   },
   "obs": {
     "kicker": "// 遥测层",

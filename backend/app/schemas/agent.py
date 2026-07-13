@@ -1,6 +1,7 @@
 """AgentSpec — the one artifact every creation method converges into."""
 
 import re
+from pathlib import PurePosixPath
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -121,6 +122,13 @@ class AgentSpec(BaseModel):
     requirements: list[str] = Field(default_factory=list)
     # pre-generated agent code (studio method) — bypasses the strands template
     code: str | None = Field(default=None, max_length=200000)
+    # multi-file agent source (harness conversion) — relpath → content; must
+    # contain main.py, which becomes the runtime entrypoint
+    code_bundle: dict[str, str] | None = None
+    # provenance of a harness→runtime conversion: {agent_id, agent_name, harness_arn}
+    source_harness: dict[str, str] | None = None
+    # per-capability wiring outcome of a conversion (memory/kb_gateway/…) — UI renders it
+    conversion_notes: dict[str, str] | None = None
     # Strands Studio canvas graph {nodes, edges, graphMode} — persisted for later edit/re-publish
     studio_flow: dict[str, Any] | None = None
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
@@ -149,6 +157,26 @@ class AgentSpec(BaseModel):
             raise ValueError(
                 "knowledge_bases are only supported by the harness method in v1"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _code_bundle_valid(self) -> "AgentSpec":
+        if self.code_bundle is None:
+            return self
+        if self.code:
+            raise ValueError("code and code_bundle are mutually exclusive")
+        if "main.py" not in self.code_bundle:
+            raise ValueError("code_bundle must contain main.py (the entrypoint)")
+        if len(self.code_bundle) > 64:
+            raise ValueError("code_bundle exceeds 64 files")
+        total = 0
+        for path, content in self.code_bundle.items():
+            pure = PurePosixPath(path)
+            if pure.is_absolute() or ".." in pure.parts or "\\" in path:
+                raise ValueError(f"code_bundle path '{path}' is not a safe relative path")
+            total += len(content.encode("utf-8"))
+        if total > 1_000_000:
+            raise ValueError("code_bundle exceeds 1MB of source")
         return self
 
 

@@ -102,6 +102,10 @@ export function CreateAgent() {
   const [specKbs, setSpecKbs] = useState<KbRef[]>([]);
   // KBs shown read-only on the step-3 detail view (viewed agent or just-published).
   const [detailKbs, setDetailKbs] = useState<KbRef[]>([]);
+  const [detailConversion, setDetailConversion] = useState<{
+    source: string;
+    notes: Record<string, string>;
+  } | null>(null);
   const [longTerm, setLongTerm] = useState(true);
   const [mcpServers, setMcpServers] = useState("");
   // custom skill sources attached without a registry record (name shown on the chip)
@@ -171,7 +175,10 @@ export function CreateAgent() {
   const [job, setJob] = useState<JobInfo | null>(null);
   const [agentStatus, setAgentStatus] = useState<string>("deploying");
   const [confirm, setConfirm] = useState<
-    { kind: "republish" } | { kind: "delete"; id: string; name: string } | null
+    | { kind: "republish" }
+    | { kind: "delete"; id: string; name: string }
+    | { kind: "convert"; id: string; name: string }
+    | null
   >(null);
 
   const failureToasted = useRef(false);
@@ -360,6 +367,14 @@ export function CreateAgent() {
     setEditing(null);
     setDetailsMode(true);
     setDetailKbs(((agent.spec ?? {}) as StoredSpec).knowledge_bases ?? []);
+    const spec = (agent.spec ?? {}) as Record<string, unknown>;
+    const src = spec.source_harness as { agent_name?: string } | undefined;
+    setDetailConversion(
+      src?.agent_name
+        ? { source: src.agent_name,
+            notes: (spec.conversion_notes as Record<string, string>) ?? {} }
+        : null,
+    );
     failureToasted.current = true; // don't re-toast an old failure when merely viewing
     setDeployment(agent.deployment ?? null);
     setJob(null);
@@ -372,6 +387,16 @@ export function CreateAgent() {
     try {
       await api.deleteAgent(id);
       toast(t("create.list.deleted"));
+      reloadAgents();
+    } catch (err) {
+      toast(err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : String(err));
+    }
+  };
+
+  const doConvert = async (id: string) => {
+    try {
+      const res = await api.convertAgent(id);
+      toast(t("create.list.convertStarted", { name: res.agent.name }));
       reloadAgents();
     } catch (err) {
       toast(err instanceof ApiError ? t(`apiErrors.${err.code}`, err.message) : String(err));
@@ -554,6 +579,7 @@ export function CreateAgent() {
             }
             onDetails={openDetails}
             onDelete={(id, name) => setConfirm({ kind: "delete", id, name })}
+            onConvert={(id, name) => setConfirm({ kind: "convert", id, name })}
           />
         </>
       )}
@@ -1106,6 +1132,22 @@ export function CreateAgent() {
               reloadAgents();
             }}
           />
+          {detailsMode && detailConversion && (
+            <>
+              <div style={{ height: 14 }} />
+              <Panel title={t("create.list.convertedTitle")} data-testid="conversion-panel">
+                <div className="mono dim" style={{ fontSize: 11, marginBottom: 6 }}>
+                  ⇄ {t("create.list.convertedFrom", { name: detailConversion.source })}
+                </div>
+                {Object.entries(detailConversion.notes).map(([cap, note]) => (
+                  <div className="kv" key={cap}>
+                    <span className="k mono">{cap}</span>
+                    <span className="v mono" style={{ fontSize: 10.5 }}>{note}</span>
+                  </div>
+                ))}
+              </Panel>
+            </>
+          )}
           {detailKbs.length > 0 && (
             <>
               <div style={{ height: 14 }} />
@@ -1131,6 +1173,19 @@ export function CreateAgent() {
         onConfirm={() => {
           setConfirm(null);
           void submit();
+        }}
+        onCancel={() => setConfirm(null)}
+      />
+      <ConfirmDialog
+        open={confirm?.kind === "convert"}
+        title={t("create.list.convertConfirmTitle")}
+        body={t("create.list.convertConfirm", {
+          name: confirm?.kind === "convert" ? confirm.name : "",
+        })}
+        confirmLabel={t("create.list.convert")}
+        onConfirm={() => {
+          if (confirm?.kind === "convert") void doConvert(confirm.id);
+          setConfirm(null);
         }}
         onCancel={() => setConfirm(null)}
       />
@@ -1162,11 +1217,13 @@ function AgentList({
   onEdit,
   onDetails,
   onDelete,
+  onConvert,
 }: {
   agents: AgentInfo[];
   onEdit: (a: AgentInfo) => void;
   onDetails: (a: AgentInfo) => void;
   onDelete: (id: string, name: string) => void;
+  onConvert: (id: string, name: string) => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -1212,6 +1269,16 @@ function AgentList({
                     <Link className="rowact" to={`/chat?agent=${a.id}`}>
                       {t("create.list.chat")}
                     </Link>
+                  )}
+                  {a.method === "harness" && a.status === "active" && (
+                    <button
+                      type="button"
+                      className="rowact"
+                      data-testid={`convert-${a.name}`}
+                      onClick={() => onConvert(a.id, a.name)}
+                    >
+                      {t("create.list.convert")}
+                    </button>
                   )}
                   {a.deployment && (
                     <button type="button" className="rowact" onClick={() => onDetails(a)}>

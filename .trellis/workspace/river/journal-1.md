@@ -785,3 +785,40 @@ Refactored the experiments module from a single auto-pipeline thread into 11 use
 ### Next Steps
 
 - None - task complete
+
+---
+
+## 2026-07-13 · 07-13-harness-to-runtime
+
+**Task**: .trellis/tasks/07-13-harness-to-runtime · **Branch**: main
+
+### Summary
+
+harness → runtime 一键转换落地(实验使能)。起因:用户纠正"harness 没有 runtime
+ARN"的错误判断→实测三层事实(backing runtime 在 ListAgentRuntimes 可见但
+InvokeAgentRuntime 被锁死只能 InvokeHarness;`agentcore export harness` 导出代码
+提示词烤死、不读 get_config_bundle)。方案:POST /api/agents/{id}/convert =
+请求内同步 export(CLI 需项目 cwd,data/harness-export 暂存工程)+**强制嫁接**
+config-bundle 契约(resolve_system_prompt 模式,锚点缺失即失败——否则实验 A/B
+空转,正是本任务要消除的陷阱)+ spec 物化 code_bundle(新字段:多文件承载,
+main.py 必含/路径安全/≤64 文件 1MB,XOR code)走现有 zip 管线(write_bundle_files
+经 on_pkg_ready)。保真度 v1:提示词+内联工具+memory env 接线;KB 网关 URL 刻意
+不接(M2M token 未验证时注入会 import 崩溃),conversion_notes 全程明示并在
+Agent 详情渲染。命名 {name}-rt[-N],来源 source_harness 可追溯。意外收获:
+转换 agent 是流式入口→invoke_runtime_text 新增 flatten_sse_text(SSE 拍平,
+惠及 chat/eval 全下游)。前端:Agent 管理 CONVERT ⇄ RT 行动作+确认框、详情
+CONVERTED AGENT 面板、实验页 harness 禁用项+引导注记,i18n en/zh-CN。
+
+### Verified
+
+- 后端 516 tests 全绿(+13 convert:真实导出 fixture 的嫁接/锚点失败/env 发现/
+  依赖去重/bundle 校验/端点守卫/命名去重/无残留行/SSE 拍平);ruff/lint/build 干净。
+- 活体 A7:aurora-support 转换 15s 请求(export→graft→spec)+ ~2min 部署→
+  aurora-support-rt ACTIVE;chat 人设生效且如实演示 KB 降级("无法检索知识库,
+  不猜测");实验页第一个可选项;详情面板四项接线明细。证据 4 张(evidence/)。
+- spec 新页 harness-conversion.md(7-section)+ eligibility 页早前已补
+  invoke-lock/ListAgentRuntimes 事实。
+
+### Status
+
+[OK] **Completed**

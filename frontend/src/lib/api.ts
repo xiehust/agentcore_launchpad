@@ -357,6 +357,11 @@ export const api = {
       body: JSON.stringify(spec),
     }),
   listAgents: () => request<{ agents: AgentInfo[] }>("/api/agents"),
+  convertAgent: (id: string) =>
+    request<{ agent: AgentInfo; job_id: string; deployment_id: string }>(
+      `/api/agents/${id}/convert`,
+      { method: "POST" },
+    ),
   redeployAgent: (id: string, spec: AgentSpecInput) =>
     request<{ agent: AgentInfo; job_id: string; deployment_id: string }>(
       `/api/agents/${id}/redeploy`,

@@ -269,11 +269,28 @@ def _download_named_skills(
 
 def _generate_code(spec: AgentSpec) -> tuple[str, str]:
     """(code, source label) — studio artifacts arrive pre-generated."""
+    if spec.code_bundle:
+        # harness conversion: the bundle's main.py is already the entrypoint
+        # (config-bundle contract grafted at convert time)
+        return spec.code_bundle["main.py"], "harness export bundle"
     if spec.method == "studio" and spec.code:
         from app.templates.studio_agent import adapt_studio_code
 
         return adapt_studio_code(spec.code), "studio artifact (adapted)"
     return render_main_py(spec), "strands template"
+
+
+def write_bundle_files(spec: AgentSpec, pkg_dir: Path) -> int:
+    """Drop a code_bundle's non-entrypoint files into the package dir."""
+    written = 0
+    for rel, content in (spec.code_bundle or {}).items():
+        if rel == "main.py":
+            continue  # build_zip already wrote the entrypoint
+        dest = pkg_dir / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(content, encoding="utf-8")
+        written += 1
+    return written
 
 
 STUDIO_EXTRA_REQUIREMENTS = [
@@ -311,6 +328,9 @@ def _stage_package(ctx: StageContext, agent: Agent) -> StageResult:
     bundled: dict[str, Any] = {}
 
     def _on_pkg_ready(pkg_dir: Path) -> None:
+        if spec.code_bundle:
+            count = write_bundle_files(spec, pkg_dir)
+            ctx.log(f"bundle files staged: {count} (+ main.py)")
         bundled.update(bundle_skills(spec, code, pkg_dir, ctx.log))
 
     zip_path = build_zip(code, requirements, build_dir, on_pkg_ready=_on_pkg_ready)

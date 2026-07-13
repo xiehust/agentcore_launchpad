@@ -208,7 +208,13 @@
       "empty": "No agents yet — create one above.",
       "deleted": "Agent deleted.",
       "confirmDeleteTitle": "Delete agent?",
-      "confirmDelete": "This removes “{{name}}” and its AWS resource. This cannot be undone."
+      "confirmDelete": "This removes “{{name}}” and its AWS resource. This cannot be undone.",
+      "convert": "CONVERT ⇄ RT",
+      "convertConfirmTitle": "Convert to runtime agent",
+      "convertConfirm": "Exports {{name}}'s harness code, grafts the experiment (config-bundle) contract, and deploys it as a NEW runtime agent (~5–15 min). KB gateway tools are not carried in v1; memory is. The harness itself is untouched.",
+      "convertStarted": "converting → {{name}} (deploying)",
+      "convertedTitle": "CONVERTED AGENT",
+      "convertedFrom": "converted from harness {{name}}"
     }
   },
   "registry": {
@@ -922,7 +928,9 @@
     "running": "RUNNING…",
     "retry": "RETRY",
     "datasetTag": "dataset",
-    "noChallenger": "No other active agent — publish a v2 candidate first."
+    "noChallenger": "No other active agent — publish a v2 candidate first.",
+    "harnessDisabled": "convert to runtime first",
+    "harnessHint": "Managed-harness agents can't run experiments (invoke-locked runtime, no config-bundle support). Convert one to a runtime agent in Agent Management (CONVERT ⇄ RT), then pick the converted agent here."
   },
   "obs": {
     "kicker": "// TELEMETRY LAYER",

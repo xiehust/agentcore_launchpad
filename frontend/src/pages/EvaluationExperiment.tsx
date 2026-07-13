@@ -170,6 +170,7 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
   const toast = useToast();
   const [experiments, setExperiments] = useState<ExperimentInfo[]>([]);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [harnessAgents, setHarnessAgents] = useState<AgentInfo[]>([]);
   const [datasets, setDatasets] = useState<DatasetInfo[]>([]);
   const [busy, setBusy] = useState(false);
   const [startAgentId, setStartAgentId] = useState("");
@@ -197,11 +198,13 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
       .listAgents()
       .then((res) => {
         // Experiments target runtime-backed agents (zip_runtime / studio /
-        // container) — harness agents are rejected by POST /api/experiments.
-        const eligible = res.agents.filter(
-          (a) => a.status === "active" && a.method !== "harness",
-        );
+        // container) — harness agents are rejected by POST /api/experiments
+        // (invoke-locked backing runtime, no config-bundle consumption).
+        // They still render as disabled options pointing at conversion.
+        const active = res.agents.filter((a) => a.status === "active");
+        const eligible = active.filter((a) => a.method !== "harness");
         setAgents(eligible);
+        setHarnessAgents(active.filter((a) => a.method === "harness"));
         setStartAgentId((prev) => prev || (eligible[0]?.id ?? ""));
       })
       .catch(() => {});
@@ -388,8 +391,19 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
               {ag.name} · {ag.method}
             </option>
           ))}
+          {harnessAgents.map((ag) => (
+            <option key={ag.id} value="" disabled style={{ background: "#141816" }}>
+              {ag.name} · harness — {t("expPage.harnessDisabled")}
+            </option>
+          ))}
         </select>
       </div>
+      {harnessAgents.length > 0 && (
+        <div className="note" style={{ marginBottom: 10 }} data-testid="harness-hint">
+          <span className="i">[i]</span>
+          <span>{t("expPage.harnessHint")}</span>
+        </div>
+      )}
       {hasRunning && (
         <div className="note" style={{ marginBottom: 10 }} data-testid="running-guard">
           <span className="i">[i]</span>
