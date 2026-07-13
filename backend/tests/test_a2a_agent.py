@@ -204,6 +204,40 @@ def test_build_a2a_card_a2a_variant_carries_url_skills_transport():
     assert "JSON-RPC" in card["metadata"]["launchpad.invoke"]
 
 
+def test_derive_card_skills_explicit_wins():
+    assert reg.derive_card_skills({"a2a_skills": [SKILL]}) == [SKILL]
+
+
+def test_derive_card_skills_from_spec_surfaces():
+    spec = {
+        "method": "harness",
+        "tools": [{"type": "builtin", "name": "code-interpreter"},
+                  {"type": "gateway", "name": "aws-knowledge"}],
+        "knowledge_bases": [{"kb_id": "BL6", "name": "aurora-deck-docs",
+                             "description": "Aurora Deck product documentation"}],
+        "skills": ["s3://bkt/skills/meeting-summarizer/"],
+    }
+    skills = reg.derive_card_skills(spec)
+    assert [s["id"] for s in skills] == [
+        "code-interpreter", "aws-knowledge", "aurora-deck-docs",
+        "meeting-summarizer",
+    ]
+    kb = skills[2]
+    assert kb["description"] == "Aurora Deck product documentation"  # routing signal
+    assert kb["tags"] == ["knowledge"]
+
+
+def test_derive_card_skills_zip_template_and_dedup():
+    # template agents advertise the baked-in tools even with empty spec.tools
+    assert [s["id"] for s in reg.derive_card_skills({"method": "zip_runtime"})] == [
+        "calculator", "current-time",
+    ]
+    # code-carrying agents don't get template tools; duplicate names get suffixes
+    studio = {"method": "studio", "code": "x", "tools": [
+        {"type": "mcp", "name": "search"}, {"type": "gateway", "name": "Search"}]}
+    assert [s["id"] for s in reg.derive_card_skills(studio)] == ["search", "search-2"]
+
+
 # ─── eval run dispatch ───────────────────────────────────────────────────────
 def test_execute_run_uses_a2a_invoke_for_a2a_protocol(monkeypatch):
     """The eval runner bypasses invoke_agent_text — its own dispatch must

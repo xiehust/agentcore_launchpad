@@ -95,3 +95,21 @@ session; nothing is assumed from training data.
    UpdateHarness omit=keep): updating without the field silently reverts the
    runtime to HTTP (card fetch → 400); re-sending `{serverProtocol: A2A}`
    restores it (card → 200). Republish paths MUST always echo the protocol.
+
+## registry-cards live findings (2026-07-13)
+
+- **UpdateRegistryRecord resets status to DRAFT** — the update transitions
+  through async UPDATING, and once settled the record is DRAFT regardless of
+  its prior status (APPROVED included). Any card-refresh flow must
+  `wait_record_settled` then re-submit / re-approve. `refresh_a2a_cards.py`
+  does this; register-on-redeploy of an APPROVED record likewise knocks it
+  back to DRAFT and it re-enters the approval queue (auto_submit covers the
+  submit half only — approval is a deliberate human step, EXCEPT the
+  refresher restores prior APPROVED records automatically).
+- Post-refresh registry state: aurora-support / hr-assistant /
+  aurora-support-rt / aurora-faq-a2a APPROVED (front-desk demo set); other
+  live agents PENDING_APPROVAL; DEPRECATED records untouched (terminal).
+- Derived skills now on live cards: aurora-support → aurora-deck-docs (with
+  the KB description as routing signal), hr-assistant → hr-database,
+  zip template agents → calculator/current-time; code-defined agents
+  (studio/container/converted) honestly derive [] — spec declares nothing.

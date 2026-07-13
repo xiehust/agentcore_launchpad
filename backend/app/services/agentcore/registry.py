@@ -8,6 +8,7 @@ Explicit-client style; payload builders are pure for unit testing.
 """
 
 import json
+import re
 import time
 from typing import Any
 from urllib.parse import quote
@@ -27,6 +28,67 @@ def data_plane_invocations_url(arn: str, region: str) -> str:
         f"https://bedrock-agentcore.{region}.amazonaws.com/runtimes/"
         f"{quote(arn, safe='')}/invocations/"
     )
+
+
+_SKILL_ID_STRIP_RE = re.compile(r"[^a-z0-9_-]+")
+
+# the zip template bakes these two tools into every generated agent — they are
+# guaranteed capabilities even though spec.tools is empty for template agents
+ZIP_TEMPLATE_SKILLS: list[dict[str, Any]] = [
+    {"id": "calculator", "name": "calculator",
+     "description": "Evaluate a basic arithmetic expression", "tags": ["math"]},
+    {"id": "current-time", "name": "current time",
+     "description": "Report the current UTC date and time", "tags": ["time"]},
+]
+
+
+def _skill_id(name: str) -> str:
+    slug = _SKILL_ID_STRIP_RE.sub("-", name.lower()).strip("-")
+    slug = re.sub(r"^[^a-z]+", "", slug)[:64]
+    return slug or "skill"
+
+
+def derive_card_skills(spec: dict[str, Any]) -> list[dict[str, Any]]:
+    """AgentCard ``skills`` for a deployed agent — the routing surface other
+    agents (and the front-desk demo) match on.
+
+    Explicit ``a2a_skills`` win; otherwise a best-effort derivation from what
+    the spec declares: tools, knowledge bases (name+description carry real
+    routing signal), attached agent skills, plus the zip template's baked-in
+    tools for template-generated agents.
+    """
+    explicit = spec.get("a2a_skills") or []
+    if explicit:
+        return [dict(s) for s in explicit]
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add(name: str, description: str, tag: str) -> None:
+        if not name:
+            return
+        base = _skill_id(name)
+        sid, n = base, 2
+        while sid in seen:
+            sid, n = f"{base[:60]}-{n}", n + 1
+        seen.add(sid)
+        out.append({"id": sid, "name": name, "description": description,
+                    "tags": [tag] if tag else []})
+
+    for tool in spec.get("tools") or []:
+        ttype = str(tool.get("type") or "tool")
+        add(str(tool.get("name") or ""), f"{ttype} tool", ttype)
+    for kb in spec.get("knowledge_bases") or []:
+        add(str(kb.get("name") or kb.get("kb_id") or ""),
+            str(kb.get("description") or "knowledge base retrieval"), "knowledge")
+    for path in spec.get("skills") or []:
+        add(str(path).rstrip("/").rsplit("/", 1)[-1], "agent skill", "skill")
+    if (spec.get("method") == "zip_runtime"
+            and not spec.get("code") and not spec.get("code_bundle")):
+        for skill in ZIP_TEMPLATE_SKILLS:
+            if skill["id"] not in seen:
+                seen.add(skill["id"])
+                out.append(dict(skill))
+    return out
 
 
 def build_a2a_card(

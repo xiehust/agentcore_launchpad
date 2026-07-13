@@ -77,6 +77,31 @@ const STATUS_CHIP: Record<string, { tone: ChipTone; icon: string; labelKey: stri
   DEPRECATED: { tone: "muted", icon: "✕", labelKey: "registry.states.disabled" },
 };
 
+// Parsed A2A AgentCard from the record descriptor — the drawer renders it as
+// a first-class panel (transport, endpoint, skills) instead of raw JSON only.
+interface AgentCardData {
+  url?: string;
+  description?: string;
+  version?: string;
+  skills?: { id?: string; name?: string; description?: string; tags?: string[] }[];
+  capabilities?: { streaming?: boolean };
+  metadata?: Record<string, string>;
+}
+
+function parseAgentCard(record: RegistryRecord): AgentCardData | null {
+  if (record.type !== "A2A") return null;
+  const a2a = record.descriptors?.a2a as
+    | { agentCard?: { inlineContent?: string } }
+    | undefined;
+  const raw = a2a?.agentCard?.inlineContent;
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as AgentCardData;
+  } catch {
+    return null;
+  }
+}
+
 function descriptorExcerpt(record: RegistryRecord): string {
   const d = record.descriptors ?? {};
   try {
@@ -462,6 +487,80 @@ export function Registry() {
                     <span className="v">{selected.updated_at?.slice(0, 19) ?? "—"}</span>
                   </div>
                 </div>
+                {(() => {
+                  const card = parseAgentCard(selected);
+                  if (!card) return null;
+                  const transport = card.metadata?.["launchpad.transport"];
+                  const skills = card.skills ?? [];
+                  return (
+                    <div className="sect" data-testid="agent-card-panel">
+                      <h4>{t("registry.drawer.agentCard")}</h4>
+                      <div className="kv">
+                        <span className="k">{t("registry.drawer.cardTransport")}</span>
+                        <span className="v">
+                          <Chip tone={transport === "a2a-jsonrpc" ? "good" : "muted"}>
+                            {transport ?? "—"}
+                          </Chip>
+                        </span>
+                      </div>
+                      {card.url && (
+                        <div className="kv">
+                          <span className="k">{t("registry.drawer.cardUrl")}</span>
+                          <span
+                            className="v"
+                            style={{ display: "flex", gap: 6, alignItems: "center" }}
+                          >
+                            <span style={{ flex: 1, wordBreak: "break-all", fontSize: 10 }}>
+                              {card.url}
+                            </span>
+                            <Btn
+                              data-testid="card-url-copy"
+                              title={t("registry.drawer.cardUrlCopy")}
+                              onClick={() => {
+                                void navigator.clipboard.writeText(card.url ?? "");
+                                toast(t("registry.drawer.cardUrlCopied"));
+                              }}
+                            >
+                              ⧉
+                            </Btn>
+                          </span>
+                        </div>
+                      )}
+                      <div className="kv">
+                        <span className="k">{t("registry.drawer.cardStreaming")}</span>
+                        <span className="v">{card.capabilities?.streaming ? "✓" : "—"}</span>
+                      </div>
+                      {skills.length > 0 && (
+                        <>
+                          <h4 style={{ marginTop: 10 }}>
+                            {t("registry.drawer.cardSkills", { n: skills.length })}
+                          </h4>
+                          {skills.map((s) => (
+                            <div key={s.id ?? s.name} style={{ marginBottom: 7 }}>
+                              <span className="selchip on" style={{ marginRight: 5 }}>
+                                {s.name ?? s.id}
+                              </span>
+                              {(s.tags ?? []).map((tg) => (
+                                <span
+                                  key={tg}
+                                  className="selchip"
+                                  style={{ marginRight: 4, opacity: 0.65 }}
+                                >
+                                  {tg}
+                                </span>
+                              ))}
+                              {s.description && (
+                                <div className="dim" style={{ fontSize: 10.5, marginTop: 2 }}>
+                                  {s.description}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
                 {skillMeta && (
                   <div className="sect" data-testid="skill-bundle">
                     {skillMeta.source && (

@@ -50,19 +50,22 @@ def register_agent_record(agent: Agent, auto_submit: bool = True) -> dict[str, A
     registry_id = _registry_id()
     spec = agent.spec or {}
     # A2A-protocol runtimes serve real JSON-RPC at the data-plane URL — their
-    # card is directly consumable; HTTP agents keep the platform-invoke card
+    # card is directly consumable. HTTP runtime agents get the same URL as an
+    # informative endpoint (platform-invoke transport); harness agents keep
+    # their harness ARN (the /runtimes/ data plane doesn't apply to them).
     is_a2a = spec.get("protocol") == "a2a"
+    arn = agent.arn or ""
     card = reg.build_a2a_card(
         name=agent.name,
         description=(spec.get("system_prompt") or "")[:180] or f"Launchpad agent {agent.name}",
-        arn=agent.arn or "",
+        arn=arn,
         version=agent.version or "1",
         method=agent.method,
         url=(
-            reg.data_plane_invocations_url(agent.arn, get_settings().region)
-            if is_a2a and agent.arn else None
+            reg.data_plane_invocations_url(arn, get_settings().region)
+            if ":runtime/" in arn else None
         ),
-        skills=spec.get("a2a_skills") or None,
+        skills=reg.derive_card_skills(spec) or None,
         transport="a2a-jsonrpc" if is_a2a else "agentcore-http",
     )
     record, created = reg.upsert_record(

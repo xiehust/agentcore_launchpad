@@ -271,7 +271,14 @@
       "reimportOk": "“{{name}}” re-imported from source.",
       "reimportFailed": "Re-import failed: {{msg}}",
       "edit": "EDIT",
-      "useNeedsApproved": "Only APPROVED records are attachable to agents — submit and approve first"
+      "useNeedsApproved": "Only APPROVED records are attachable to agents — submit and approve first",
+      "agentCard": "AGENT CARD",
+      "cardTransport": "TRANSPORT",
+      "cardUrl": "ENDPOINT",
+      "cardUrlCopy": "copy endpoint",
+      "cardUrlCopied": "endpoint copied",
+      "cardStreaming": "STREAMING",
+      "cardSkills": "SKILLS ({{n}})"
     },
     "confirmDisable": {
       "title": "Disable record",

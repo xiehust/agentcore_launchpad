@@ -271,7 +271,14 @@
       "reimportOk": "已从来源重新导入“{{name}}”。",
       "reimportFailed": "重新导入失败：{{msg}}",
       "edit": "编辑",
-      "useNeedsApproved": "仅已发布（APPROVED）的记录可挂载到 Agent——请先提交并批准"
+      "useNeedsApproved": "仅已发布（APPROVED）的记录可挂载到 Agent——请先提交并批准",
+      "agentCard": "AGENT 名片",
+      "cardTransport": "传输方式",
+      "cardUrl": "端点",
+      "cardUrlCopy": "复制端点",
+      "cardUrlCopied": "端点已复制",
+      "cardStreaming": "流式",
+      "cardSkills": "技能（{{n}}）"
     },
     "confirmDisable": {
       "title": "停用记录",

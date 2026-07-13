@@ -32,12 +32,12 @@ R4. Unit tests for the card builder (both transports, skills derivation
 
 ## Acceptance criteria
 
-- [ ] Redeploying any existing agent produces a card with resolvable-format url,
+- [x] Redeploying any existing agent produces a card with resolvable-format url,
       non-empty derived skills (when the spec has any tools/skills/KBs), and a
       transport tag.
-- [ ] Drawer shows the AGENT CARD panel for A2A records (live screenshot) and
+- [x] Drawer shows the AGENT CARD panel for A2A records (live screenshot) and
       unchanged behavior for MCP/AGENT_SKILLS records.
-- [ ] Backend tests green; en/zh-CN keys present.
+- [x] Backend tests green; en/zh-CN keys present.
 
 ## Depends on / coordinates with
 
@@ -49,3 +49,19 @@ R4. Unit tests for the card builder (both transports, skills derivation
 1. Card builder enrichment + unit tests.
 2. Drawer AGENT CARD panel + i18n.
 3. Redeploy one live agent; screenshot; spec update (registry spec page).
+
+## Acceptance evidence (2026-07-13, live)
+
+- `derive_card_skills`: aurora-support → aurora-deck-docs (KB description as
+  routing signal), hr-assistant → hr-database, zip template agents →
+  calculator/current-time, code-defined agents → [] (3 unit tests).
+- `scripts/refresh_a2a_cards.py` ran against the real registry (12 active
+  agents). LIVE FINDING: UpdateRegistryRecord resets status to DRAFT after
+  the async UPDATING settles — script now settles + re-submits + restores
+  APPROVED. Statuses repaired after the discovery run: demo set
+  (aurora-support, hr-assistant, aurora-support-rt, aurora-faq-a2a) APPROVED,
+  others PENDING_APPROVAL, DEPRECATED untouched.
+- Drawer AGENT CARD panel verified on 5175: harness record (agentcore-http
+  chip, ARN endpoint, KB skill w/ description), A2A record (a2a-jsonrpc chip,
+  real invocations URL + copy button, 2 skills w/ tags); MCP record shows no
+  panel. i18n en/zh-CN keys present; 546 backend tests green.

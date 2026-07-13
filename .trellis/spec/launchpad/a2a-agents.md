@@ -80,6 +80,15 @@ a2a_base_requirements() -> list[str]      # strands-agents[a2a,otel] + fastapi/u
   SKILLS editor (seeded from template tools; id auto-slugged from name);
   agent list shows `zip_runtime · a2a`.
 
+- **UpdateRegistryRecord resets record status to DRAFT** (after async
+  UPDATING settles) — every card refresh / re-register of an APPROVED record
+  re-enters the approval flow. `backend/scripts/refresh_a2a_cards.py` settles,
+  re-submits, and restores prior APPROVED records; redeploys of approved
+  agents leave the record DRAFT→PENDING_APPROVAL for a human to re-approve.
+- `derive_card_skills(spec)`: explicit a2a_skills win; else tools + KBs
+  (name+description) + attached skills + zip-template baked-ins; code-defined
+  agents (studio/container/code_bundle) derive [].
+
 ### 5. Verification
 
 - `backend/tests/test_a2a_agent.py` (validator matrix, template compile,
