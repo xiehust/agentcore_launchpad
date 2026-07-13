@@ -271,35 +271,80 @@ def stage_recommend(
         else:
             try:
                 progress("generating tool-description recommendation…")
-                td = ac.start_tool_description_recommendation(
-                    data,
-                    name=f"exp_{exp_id[:8]}_td_{run_tag}",
-                    tools=[{"toolName": k, "description": v}
-                           for k, v in analyzed.items()],
-                    log_group_arns=log_group_arns,
-                    service_names=service_names,
+                suggestions, status, err = _run_tool_recommendation(
+                    data, exp_id, run_tag, analyzed,
+                    log_group_arns, service_names,
                 )
-                td_result = ac.poll_recommendation(
-                    data, recommendation_id=td["recommendationId"], max_polls=30
-                )
-                suggestions: dict[str, str] = {}
-                for tool in (
-                    td_result.get("recommendationResult", {})
-                    .get("toolDescriptionRecommendationResult", {})
-                    .get("tools", [])
-                ):
-                    name = tool.get("toolName", "")
-                    desc = tool.get("recommendedToolDescription", "")
-                    if name and desc:
-                        suggestions[name] = desc
-                out["tool_status"] = td_result.get("status") or "COMPLETED"
-                out["tool_descriptions"] = suggestions
+                # the job rejects the WHOLE tool list when any listed tool is
+                # absent from the sampled traces (live-verified
+                # ValidationException) — retry once with only traced tools
+                missing = _tools_not_in_traces(err)
+                remaining = {k: v for k, v in analyzed.items()
+                             if k not in missing}
+                if status != "COMPLETED" and missing and remaining:
+                    progress("retrying without tools absent from traces: "
+                             f"{sorted(missing)}…")
+                    out["analyzed_tools"] = remaining
+                    suggestions, status, err = _run_tool_recommendation(
+                        data, exp_id, f"{run_tag}r", remaining,
+                        log_group_arns, service_names,
+                    )
+                if status == "COMPLETED":
+                    out["tool_status"] = "COMPLETED"
+                    out["tool_descriptions"] = suggestions
+                else:
+                    out["tool_status"] = "error"
+                    out["tool_error"] = (
+                        err or f"recommendation job ended {status}")[:300]
+                    out["tool_descriptions"] = {}
             except Exception as exc:
                 out["tool_status"] = "error"
                 out["tool_error"] = f"{type(exc).__name__}: {exc}"[:200]
                 out["tool_descriptions"] = {}
 
     return out
+
+
+def _run_tool_recommendation(
+    data: Any, exp_id: str, tag: str, tools: dict[str, str],
+    log_group_arns: list[str], service_names: list[str],
+) -> tuple[dict[str, str], str, str]:
+    """One tool-description job → (suggestions, job status, error text)."""
+    td = ac.start_tool_description_recommendation(
+        data,
+        name=f"exp_{exp_id[:8]}_td_{tag}",
+        tools=[{"toolName": k, "description": v} for k, v in tools.items()],
+        log_group_arns=log_group_arns,
+        service_names=service_names,
+    )
+    result = ac.poll_recommendation(
+        data, recommendation_id=td["recommendationId"], max_polls=30
+    )
+    payload = result.get("recommendationResult", {}).get(
+        "toolDescriptionRecommendationResult", {}
+    )
+    suggestions: dict[str, str] = {}
+    for tool in payload.get("tools", []):
+        name = tool.get("toolName", "")
+        desc = tool.get("recommendedToolDescription", "")
+        if name and desc:
+            suggestions[name] = desc
+    err = payload.get("errorMessage") or ""
+    if payload.get("errorCode"):
+        err = f"{payload['errorCode']}: {err}" if err else str(payload["errorCode"])
+    return suggestions, result.get("status") or "COMPLETED", err
+
+
+_NOT_TRACED_RE = re.compile(
+    r"not found in the sampled agent traces: \[([^\]]*)\]"
+)
+
+
+def _tools_not_in_traces(err: str) -> set[str]:
+    m = _NOT_TRACED_RE.search(err or "")
+    if not m:
+        return set()
+    return {p.strip().strip("'\"") for p in m.group(1).split(",") if p.strip()}
 
 
 def _fallback_treatment_prompt(current: str) -> str:

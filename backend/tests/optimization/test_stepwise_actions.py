@@ -239,6 +239,65 @@ def test_stage_recommend_runs_only_selected_types(monkeypatch):
     assert "recommended_prompt" not in out
 
 
+_NOT_TRACED_MSG = ("The following requested tools were not found in the "
+                   "sampled agent traces: ['shell', 'file_operations']. "
+                   "Ensure the agent traces contain invocations.")
+
+
+def test_stage_recommend_retries_without_untraced_tools(monkeypatch):
+    """The TD job rejects the whole list when any tool is absent from the
+    traces — one retry with only the traced tools must follow."""
+    monkeypatch.setattr(svc, "data_client", lambda: MagicMock())
+    started: list[list[str]] = []
+
+    def fake_start(client, *, name, tools, **kw):
+        started.append([t["toolName"] for t in tools])
+        return {"recommendationId": f"r{len(started)}"}
+
+    def fake_poll(client, *, recommendation_id, **kw):
+        if recommendation_id == "r1":
+            return {"status": "FAILED", "recommendationResult": {
+                "toolDescriptionRecommendationResult": {
+                    "errorCode": "ValidationException",
+                    "errorMessage": _NOT_TRACED_MSG}}}
+        return {"status": "COMPLETED", "recommendationResult": {
+            "toolDescriptionRecommendationResult": {"tools": [
+                {"toolName": "kb___Retrieve",
+                 "recommendedToolDescription": "improved"}]}}}
+
+    monkeypatch.setattr(svc.ac, "start_tool_description_recommendation",
+                        fake_start)
+    monkeypatch.setattr(svc.ac, "poll_recommendation", fake_poll)
+    agent = _rec_agent({"kb___Retrieve": "old", "shell": "s",
+                        "file_operations": "f"})
+    out = svc.stage_recommend("e1", agent, types=("tool_descriptions",))
+    assert started == [["kb___Retrieve", "shell", "file_operations"],
+                       ["kb___Retrieve"]]
+    assert out["tool_status"] == "COMPLETED"
+    assert out["tool_descriptions"] == {"kb___Retrieve": "improved"}
+    assert out["analyzed_tools"] == {"kb___Retrieve": "old"}  # what succeeded
+
+
+def test_stage_recommend_surfaces_job_error(monkeypatch):
+    """Every listed tool untraced → nothing to retry with; the job's own
+    error message must land in tool_error (the old code dropped it)."""
+    monkeypatch.setattr(svc, "data_client", lambda: MagicMock())
+    monkeypatch.setattr(
+        svc.ac, "start_tool_description_recommendation",
+        lambda *a, **k: {"recommendationId": "r1"})
+    monkeypatch.setattr(svc.ac, "poll_recommendation", lambda *a, **k: {
+        "status": "FAILED", "recommendationResult": {
+            "toolDescriptionRecommendationResult": {
+                "errorCode": "ValidationException",
+                "errorMessage": _NOT_TRACED_MSG}}})
+    agent = _rec_agent({"shell": "s", "file_operations": "f"})
+    out = svc.stage_recommend("e1", agent, types=("tool_descriptions",))
+    assert out["tool_status"] == "error"
+    assert out["tool_error"].startswith("ValidationException")
+    assert "not found in the sampled agent traces" in out["tool_error"]
+    assert out["tool_descriptions"] == {}
+
+
 def test_stage_recommend_without_tools_short_circuits(monkeypatch):
     monkeypatch.setattr(svc, "data_client", lambda: MagicMock())
 
