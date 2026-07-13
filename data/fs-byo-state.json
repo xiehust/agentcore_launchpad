@@ -1,0 +1,14 @@
+{
+ "bucket": "launchpad-s3files-demo-434444145045",
+ "role_arn": "arn:aws:iam::434444145045:role/launchpad-s3files-sync",
+ "runtime_sg": "sg-04e7d389f0256b746",
+ "mount_sg": "sg-0cbd3990cfe455ed9",
+ "vpc": "vpc-0e88cbfc77f28ec07",
+ "subnet": "subnet-09ebaf9f8ac6164fa",
+ "fs_id": "fs-04558a3f746437604",
+ "fs_arn": "arn:aws:s3files:us-west-2:434444145045:file-system/fs-04558a3f746437604",
+ "mt_id": "fsmt-01744b8df52fa44b6",
+ "ap_arn": "arn:aws:s3files:us-west-2:434444145045:file-system/fs-04558a3f746437604/access-point/fsap-0e7011f3853aefc85",
+ "ap2_arn": "arn:aws:s3files:us-west-2:434444145045:file-system/fs-04558a3f746437604/access-point/fsap-046ff8ff313319ac2",
+ "ap3_arn": "arn:aws:s3files:us-west-2:434444145045:file-system/fs-04558a3f746437604/access-point/fsap-0d843b8c828f59e03"
+}
