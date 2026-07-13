@@ -9,8 +9,7 @@ import { api } from "../lib/api";
 import { evaluatorLabel } from "../lib/evaluators";
 import { DatasetsView } from "./EvaluationDatasets";
 import { EvaluatorsView } from "./EvaluationEvaluators";
-import type { ExperimentInfo } from "./EvaluationExperiment";
-import { experimentTone, ExperimentView } from "./EvaluationExperiment";
+import { ExperimentView } from "./EvaluationExperiment";
 
 interface Dataset {
   id: string;
@@ -211,7 +210,6 @@ export function Evaluation() {
   const [chosenEvaluators, setChosenEvaluators] = useState<string[]>(DEFAULT_EVALUATORS);
   const [chosenInsights, setChosenInsights] = useState<string[]>(INSIGHT_TYPES);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [experiments, setExperiments] = useState<ExperimentInfo[]>([]);
   const [insightsBusy, setInsightsBusy] = useState(false);
   const [confirmInsights, setConfirmInsights] = useState(false);
 
@@ -239,10 +237,6 @@ export function Evaluation() {
         );
       }
       if (queueRes.ok) setQueueLocked(((await queueRes.json()) as { locked: boolean }).locked);
-      const expRes = await fetch("/api/experiments");
-      if (expRes.ok) {
-        setExperiments(((await expRes.json()) as { experiments: ExperimentInfo[] }).experiments);
-      }
     } catch {
       /* backend offline */
     }
@@ -752,7 +746,7 @@ export function Evaluation() {
     );
   }
 
-  // ── Dashboard: runs list + selected-run results + experiment ─────────────
+  // ── Dashboard: runs list + selected-run results ───────────────────────────
   return (
     <section>
       <ViewHead
@@ -954,48 +948,6 @@ export function Evaluation() {
           )}
         </Panel>
       </div>
-
-      <Panel
-        title={t("evalPage.experiment.title")}
-        sub={t("expPage.sub")}
-        style={{ "--i": 3 } as CSSProperties}
-      >
-        {experiments[0] ? (
-          <div
-            data-testid="experiment-row"
-            style={{ display: "flex", gap: 10, alignItems: "center", cursor: "pointer" }}
-            onClick={() => setSearchParams({ view: "experiment" })}
-          >
-            <span className="mono dim" style={{ fontSize: 9.5, letterSpacing: ".12em" }}>
-              {t("evalPage.experiment.latest")}
-            </span>
-            <span className="pri">{experiments[0].name}</span>
-            <Chip
-              tone={experimentTone(experiments[0].status)}
-              icon={experiments[0].status === "running" ? "◐" : "●"}
-            >
-              {experiments[0].status.toUpperCase()}
-            </Chip>
-            <span className="mono dim" style={{ fontSize: 11 }}>
-              {experiments[0].stage.toUpperCase()}
-            </span>
-            {experiments.length > 1 && (
-              <span className="mono dim" style={{ fontSize: 10.5 }}>
-                {t("evalPage.experiment.rowMore", { count: experiments.length - 1 })}
-              </span>
-            )}
-            <Btn style={{ marginLeft: "auto" }}>{t("evalPage.experiment.open")} ▸</Btn>
-          </div>
-        ) : (
-          <div
-            data-testid="experiment-row"
-            style={{ display: "flex", gap: 10, alignItems: "center", cursor: "pointer" }}
-            onClick={() => setSearchParams({ view: "experiment" })}
-          >
-            <span className="dim" style={{ fontSize: 12 }}>{t("evalPage.experiment.none")}</span>
-          </div>
-        )}
-      </Panel>
 
       <ConfirmDialog
         open={confirmInsights && !!selectedRun}

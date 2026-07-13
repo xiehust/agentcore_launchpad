@@ -664,8 +664,6 @@
     "experiment": {
       "title": "EXPERIMENT",
       "meta": "prompt A/B loop · real AWS resources",
-      "open": "OPEN",
-      "none": "NO EXPERIMENT — START ONE ▸",
       "how": {
         "title": "HOW A LOOP WORKS",
         "sub": "10 stages · recommend → cleanup",
@@ -725,8 +723,6 @@
           "body": "This verdict is not statistically significant — the leader's edge may be noise. Promoting shifts production traffic to it anyway. Continue?"
         }
       },
-      "latest": "LATEST",
-      "rowMore": "+{{count}} more",
       "list": {
         "title": "EXPERIMENTS",
         "sub": "optimization loops · newest first",
