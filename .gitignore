@@ -34,3 +34,4 @@ config/launchpad.yaml
 .env.*
 cdk.out/
 vendor-src/
+data/harness-export/
