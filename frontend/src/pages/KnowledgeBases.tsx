@@ -15,6 +15,8 @@ export interface KnowledgeBaseSummary {
   name: string;
   description: string;
   status: KBStatus | string;
+  type: string;
+  attachable: boolean;
   updated_at: string | null;
   data_source_count: number;
   attached_agents: string[];
@@ -35,6 +37,9 @@ export interface DataSource {
   status: string;
   bucket: string | null;
   prefix?: string | null;
+  /** Human label for non-S3 classic sources (web-crawl seed URL / SaaS host),
+   *  set by the backend when {@link bucket} is null. */
+  location_label?: string | null;
   failure_reasons?: string[];
   ingestion_jobs?: IngestionJob[];
 }
@@ -44,6 +49,10 @@ export interface KnowledgeBaseDetail {
   name: string;
   description: string;
   status: KBStatus | string;
+  type: string;
+  /** Non-MANAGED KBs are external resources — browse/query/sync-only in Launchpad. */
+  read_only: boolean;
+  attachable: boolean;
   arn?: string | null;
   created_at?: string | null;
   updated_at: string | null;
@@ -81,6 +90,21 @@ export function KbStatusChip({ status }: { status: string }) {
       {t(chip.labelKey)}
     </Chip>
   );
+}
+
+// KB type → chip label. MANAGED is the only Launchpad-owned/attachable type
+// (accent tone); everything else is an external resource shown read-only (muted).
+const KB_TYPE_LABEL: Record<string, string> = {
+  MANAGED: "knowledge.type.managed",
+  VECTOR: "knowledge.type.vector",
+  KENDRA: "knowledge.type.kendra",
+  SQL: "knowledge.type.sql",
+};
+
+export function KbTypeBadge({ type }: { type: string }) {
+  const { t } = useTranslation();
+  const labelKey = KB_TYPE_LABEL[type];
+  return <Chip tone={type === "MANAGED" ? "good" : "muted"}>{labelKey ? t(labelKey) : type || "—"}</Chip>;
 }
 
 export function KnowledgeBases() {
@@ -163,6 +187,7 @@ export function KnowledgeBases() {
               <tr>
                 <th>{t("knowledge.cols.name")}</th>
                 <th>{t("knowledge.cols.status")}</th>
+                <th>{t("knowledge.cols.type")}</th>
                 <th>{t("knowledge.cols.dataSources")}</th>
                 <th>{t("knowledge.cols.agents")}</th>
                 <th>{t("knowledge.cols.updated")}</th>
@@ -189,6 +214,26 @@ export function KnowledgeBases() {
                   <td>
                     <KbStatusChip status={kb.status} />
                   </td>
+                  <td>
+                    <div
+                      style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}
+                    >
+                      <KbTypeBadge type={kb.type} />
+                      {!kb.attachable && (
+                        <span
+                          className="dim"
+                          style={{
+                            fontFamily: "var(--mono)",
+                            fontSize: 9.5,
+                            letterSpacing: ".05em",
+                          }}
+                          title={t("knowledge.list.notAttachableHint")}
+                        >
+                          {t("knowledge.list.notAttachable")}
+                        </span>
+                      )}
+                    </div>
+                  </td>
                   <td className="mono">{kb.data_source_count}</td>
                   <td className="mono">{kb.attached_agents.length}</td>
                   <td className="mono dim">{kb.updated_at?.slice(0, 19) ?? "—"}</td>
@@ -196,14 +241,14 @@ export function KnowledgeBases() {
               ))}
               {loading && (
                 <tr>
-                  <td colSpan={5} className="loading-line">
+                  <td colSpan={6} className="loading-line">
                     {t("common.loading")}
                   </td>
                 </tr>
               )}
               {!loading && rows.length === 0 && (
                 <tr>
-                  <td colSpan={5} style={{ padding: "26px 16px" }}>
+                  <td colSpan={6} style={{ padding: "26px 16px" }}>
                     <div className="note" style={{ alignItems: "flex-start" }}>
                       <span className="i">[i]</span>
                       <span>

@@ -40,9 +40,11 @@ class QueryRequest(BaseModel):
 
 
 @router.get("")
-def list_knowledge_bases(status: str | None = None) -> dict[str, Any]:
-    items = knowledge.list_kbs()
-    if status:  # e.g. the Create-Agent picker requests ?status=ACTIVE
+def list_knowledge_bases(status: str | None = None, type: str | None = None) -> dict[str, Any]:
+    # the Create-Agent picker requests ?status=ACTIVE&type=MANAGED — only
+    # managed KBs are attachable through the gateway connector
+    items = knowledge.list_kbs(kb_type=type)
+    if status:
         items = [i for i in items if i.get("status") == status]
     return {"items": items}
 

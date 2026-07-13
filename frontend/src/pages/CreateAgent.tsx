@@ -139,9 +139,10 @@ export function CreateAgent() {
       .catch(() => {
         /* registry not bootstrapped — chips stay hidden */
       });
-    // Managed KB catalog — failures are tolerated: an empty catalog just leaves
-    // the Knowledge section empty and never blocks the wizard.
-    fetch("/api/knowledge-bases")
+    // Managed KB catalog — only MANAGED KBs are attachable (gateway connector
+    // constraint); failures are tolerated: an empty catalog just leaves the
+    // Knowledge section empty and never blocks the wizard.
+    fetch("/api/knowledge-bases?type=MANAGED")
       .then((res) => (res.ok ? res.json() : { items: [] }))
       .then((d: { items: AttachableKb[] }) => setKbCatalog(d.items ?? []))
       .catch(() => {

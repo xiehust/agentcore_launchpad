@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { Btn, Chip, ConfirmDialog, Panel, useToast, ViewHead } from "../../components";
 import {
   KbStatusChip,
+  KbTypeBadge,
   type DataSource,
   type IngestionJob,
   type KBSourceBody,
@@ -288,6 +289,7 @@ export function DetailView({ kbId, onBack }: DetailViewProps) {
   // AVAILABLE — trigger it when a source has no jobs yet.
   const autoFirstSync = useCallback(
     async (d: KnowledgeBaseDetail): Promise<boolean> => {
+      if (d.read_only) return false; // never auto-start syncs on external KBs — manual SYNC NOW only
       let fired = false;
       for (const ds of d.data_sources) {
         if (
@@ -532,6 +534,8 @@ export function DetailView({ kbId, onBack }: DetailViewProps) {
   }
 
   const provisioning = detail.status === "CREATING";
+  // SQL KBs answer via query generation, not Retrieve — the search Playground is unavailable.
+  const sqlUnsupported = detail.type === "SQL";
 
   return (
     <section>
@@ -549,9 +553,20 @@ export function DetailView({ kbId, onBack }: DetailViewProps) {
         <Panel
           brk
           title={t("knowledge.detail.overview.title")}
-          end={<KbStatusChip status={detail.status} />}
+          end={
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <KbTypeBadge type={detail.type} />
+              <KbStatusChip status={detail.status} />
+            </div>
+          }
           style={{ "--i": 0 } as CSSProperties}
         >
+          {detail.read_only && (
+            <div className="note" style={{ marginBottom: 12 }} data-testid="kb-external-note">
+              <span className="i">[i]</span>
+              <span>{t("knowledge.detail.externalReadOnly")}</span>
+            </div>
+          )}
           <div className="kv">
             <span className="k">{t("knowledge.detail.overview.kbId")}</span>
             <span className="v">{detail.kb_id}</span>
@@ -592,7 +607,7 @@ export function DetailView({ kbId, onBack }: DetailViewProps) {
               >
                 {t("knowledge.detail.overview.description")}
               </label>
-              {!editingDesc && (
+              {!editingDesc && !detail.read_only && (
                 <button
                   type="button"
                   onClick={() => {
@@ -638,16 +653,18 @@ export function DetailView({ kbId, onBack }: DetailViewProps) {
             )}
           </div>
 
-          <div style={{ marginTop: 14, display: "flex", justifyContent: "flex-end" }}>
-            <Btn
-              disabled={deleting}
-              style={{ color: "var(--crit)", borderColor: "var(--crit)" }}
-              onClick={() => setConfirmDelete(true)}
-              data-testid="kb-delete-btn"
-            >
-              {t("knowledge.detail.overview.delete")}
-            </Btn>
-          </div>
+          {!detail.read_only && (
+            <div style={{ marginTop: 14, display: "flex", justifyContent: "flex-end" }}>
+              <Btn
+                disabled={deleting}
+                style={{ color: "var(--crit)", borderColor: "var(--crit)" }}
+                onClick={() => setConfirmDelete(true)}
+                data-testid="kb-delete-btn"
+              >
+                {t("knowledge.detail.overview.delete")}
+              </Btn>
+            </div>
+          )}
         </Panel>
 
         {/* ── Attached agents ──────────────────────────────────────────── */}
@@ -678,9 +695,11 @@ export function DetailView({ kbId, onBack }: DetailViewProps) {
         title={t("knowledge.detail.sources.title")}
         sub={t("knowledge.detail.sources.sub")}
         end={
-          <Btn onClick={() => setShowAdd((v) => !v)} data-testid="kb-add-source-btn">
-            {showAdd ? t("common.cancel") : `+ ${t("knowledge.detail.sources.add")}`}
-          </Btn>
+          detail.read_only ? undefined : (
+            <Btn onClick={() => setShowAdd((v) => !v)} data-testid="kb-add-source-btn">
+              {showAdd ? t("common.cancel") : `+ ${t("knowledge.detail.sources.add")}`}
+            </Btn>
+          )
         }
         style={{ marginTop: 14, "--i": 2 } as CSSProperties}
       >
@@ -762,7 +781,9 @@ export function DetailView({ kbId, onBack }: DetailViewProps) {
                   <div>
                     <span className="pri">{ds.name}</span>
                     <div className="mono dim" style={{ fontSize: 10.5, marginTop: 3 }}>
-                      {ds.bucket ? `s3://${ds.bucket}/${ds.prefix ?? ""}` : "—"}
+                      {ds.bucket
+                        ? `s3://${ds.bucket}/${ds.prefix ?? ""}`
+                        : (ds.location_label ?? "—")}
                     </div>
                   </div>
                   <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -783,13 +804,15 @@ export function DetailView({ kbId, onBack }: DetailViewProps) {
                         ? t("knowledge.detail.sources.syncing")
                         : t("knowledge.detail.sources.syncNow")}
                     </Btn>
-                    <Btn
-                      style={{ color: "var(--crit)", borderColor: "var(--crit)" }}
-                      onClick={() => setConfirmDeleteDs(ds)}
-                      data-testid="kb-ds-delete-btn"
-                    >
-                      {t("knowledge.detail.sources.removeSource")}
-                    </Btn>
+                    {!detail.read_only && (
+                      <Btn
+                        style={{ color: "var(--crit)", borderColor: "var(--crit)" }}
+                        onClick={() => setConfirmDeleteDs(ds)}
+                        data-testid="kb-ds-delete-btn"
+                      >
+                        {t("knowledge.detail.sources.removeSource")}
+                      </Btn>
+                    )}
                   </div>
                 </div>
 
@@ -884,6 +907,7 @@ export function DetailView({ kbId, onBack }: DetailViewProps) {
               id="kb-query"
               className="input"
               value={queryText}
+              disabled={sqlUnsupported}
               onChange={(e) => setQueryText(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && void runQuery()}
               placeholder={t("knowledge.detail.playground.queryPlaceholder")}
@@ -899,19 +923,27 @@ export function DetailView({ kbId, onBack }: DetailViewProps) {
               max={100}
               className="input mono"
               value={numResults}
+              disabled={sqlUnsupported}
               onChange={(e) => setNumResults(Math.max(1, Math.min(100, Number(e.target.value) || 1)))}
               data-testid="kb-nresults-input"
             />
           </div>
           <Btn
             primary
-            disabled={querying || !queryText.trim()}
+            disabled={querying || !queryText.trim() || sqlUnsupported}
             onClick={() => void runQuery()}
             data-testid="kb-query-btn"
           >
             {querying ? t("knowledge.detail.playground.searching") : t("knowledge.detail.playground.search")}
           </Btn>
         </div>
+
+        {sqlUnsupported && (
+          <div className="note" style={{ marginTop: 12 }} data-testid="kb-sql-unsupported">
+            <span className="i">[i]</span>
+            <span>{t("knowledge.detail.playground.sqlUnsupported")}</span>
+          </div>
+        )}
 
         {queryError && (
           <div

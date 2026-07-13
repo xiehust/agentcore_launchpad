@@ -375,13 +375,22 @@
       "failed": "FAILED",
       "deleting": "DELETING"
     },
+    "type": {
+      "managed": "MANAGED",
+      "vector": "VECTOR",
+      "kendra": "KENDRA",
+      "sql": "SQL"
+    },
     "list": {
-      "panelTitle": "MANAGED KNOWLEDGE BASES",
-      "panelSub": "fully-managed RAG · vector store, embeddings & reranking handled by Bedrock"
+      "panelTitle": "KNOWLEDGE BASES",
+      "panelSub": "all account KBs · managed KBs are attachable, external KBs are read-only",
+      "notAttachable": "not attachable",
+      "notAttachableHint": "Only Managed knowledge bases can be mounted on agents — this external KB is browse-only in Launchpad."
     },
     "cols": {
       "name": "NAME",
       "status": "STATUS",
+      "type": "TYPE",
       "dataSources": "DATA SOURCES",
       "agents": "AGENTS",
       "updated": "UPDATED"
@@ -435,9 +444,10 @@
       }
     },
     "detail": {
-      "meta": "MANAGED KNOWLEDGE BASE",
+      "meta": "KNOWLEDGE BASE",
       "loadFailedTitle": "COULD NOT LOAD KNOWLEDGE BASE",
       "deleted": "“{{name}}” deleted.",
+      "externalReadOnly": "External knowledge base — read-only in Launchpad. Created outside Launchpad; only Managed KBs are attachable to agents.",
       "overview": {
         "title": "OVERVIEW",
         "kbId": "KB id",
@@ -501,7 +511,8 @@
         "score": "score",
         "showMore": "Show more",
         "showLess": "Show less",
-        "noResults": "No results — has ingestion completed? Check the data source status and ingestion jobs above."
+        "noResults": "No results — has ingestion completed? Check the data source status and ingestion jobs above.",
+        "sqlUnsupported": "SQL knowledge bases answer via query generation — retrieval search is unavailable."
       },
       "delete": {
         "title": "Delete knowledge base",
