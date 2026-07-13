@@ -153,7 +153,16 @@
       "kbSoon": "+ 知识库 · 请选择 harness 方式",
       "kbEmpty": "暂无可用知识库 · 请先创建",
       "kbNote": "所选知识库会为 Agent 挂载有依据的检索工具（仅 harness）。你为每个知识库填写的描述会引导 Agent 何时检索它。",
-      "kbMountedTitle": "已挂载知识库"
+      "kbMountedTitle": "已挂载知识库",
+      "protocol": "服务协议",
+      "protocolHttp": "HTTP · 标准 invocations",
+      "protocolA2a": "A2A · Agent 间 JSON-RPC",
+      "a2aNote": "A2A Agent 对外提供标准 Agent-to-Agent 协议（运行时端点上的 JSON-RPC，名片位于 /.well-known/agent-card.json）。注册中心名片会携带真实端点和下方技能——其他 Agent 据此路由。对话照常可用；不支持 config-bundle 实验。",
+      "a2aSkills": "AGENT CARD 技能",
+      "a2aSkillName": "技能名称",
+      "a2aSkillDesc": "技能说明——其他 Agent 据此匹配路由",
+      "a2aSkillTags": "标签，逗号分隔",
+      "a2aSkillAdd": "添加技能"
     },
     "launchPanel": {
       "title": "发射计划",
@@ -976,7 +985,8 @@
     "datasetTag": "数据集",
     "noChallenger": "没有其他可用 Agent——请先发布一个 v2 候选。",
     "harnessDisabled": "需先转换为 runtime",
-    "harnessHint": "托管 harness agent 无法直接实验（backing runtime 锁定直调、不消费 config bundle）。请在 Agent 管理中将其转换为 runtime agent（转换 ⇄ RT），再在此选择转换后的 agent。"
+    "harnessHint": "托管 harness agent 无法直接实验（backing runtime 锁定直调、不消费 config bundle）。请在 Agent 管理中将其转换为 runtime agent（转换 ⇄ RT），再在此选择转换后的 agent。",
+    "a2aDisabled": "A2A 协议——不消费 config-bundle"
   },
   "obs": {
     "kicker": "// 遥测层",

@@ -153,7 +153,16 @@
       "kbSoon": "+ knowledge bases · select harness method",
       "kbEmpty": "no active knowledge bases · create one first",
       "kbNote": "Selected knowledge bases attach a grounded-retrieval tool (harness only). The description you gave each KB guides when the agent queries it.",
-      "kbMountedTitle": "KNOWLEDGE BASES — MOUNTED"
+      "kbMountedTitle": "KNOWLEDGE BASES — MOUNTED",
+      "protocol": "SERVICE PROTOCOL",
+      "protocolHttp": "HTTP · standard invocations",
+      "protocolA2a": "A2A · agent-to-agent JSON-RPC",
+      "a2aNote": "A2A agents serve the standard Agent-to-Agent protocol (JSON-RPC on the runtime endpoint, agent card at /.well-known/agent-card.json). The Registry card advertises the real endpoint and the skills below — other agents route by them. Chat works as usual; config-bundle experiments don't apply.",
+      "a2aSkills": "AGENT CARD SKILLS",
+      "a2aSkillName": "skill name",
+      "a2aSkillDesc": "what this skill does — the routing surface other agents match on",
+      "a2aSkillTags": "tags, comma-separated",
+      "a2aSkillAdd": "add skill"
     },
     "launchPanel": {
       "title": "LAUNCH PLAN",
@@ -976,7 +985,8 @@
     "datasetTag": "dataset",
     "noChallenger": "No other active agent — publish a v2 candidate first.",
     "harnessDisabled": "convert to runtime first",
-    "harnessHint": "Managed-harness agents can't run experiments (invoke-locked runtime, no config-bundle support). Convert one to a runtime agent in Agent Management (CONVERT ⇄ RT), then pick the converted agent here."
+    "harnessHint": "Managed-harness agents can't run experiments (invoke-locked runtime, no config-bundle support). Convert one to a runtime agent in Agent Management (CONVERT ⇄ RT), then pick the converted agent here.",
+    "a2aDisabled": "A2A protocol — no config-bundle A/B"
   },
   "obs": {
     "kicker": "// TELEMETRY LAYER",

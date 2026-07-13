@@ -177,6 +177,7 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
   const [experiments, setExperiments] = useState<ExperimentInfo[]>([]);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [harnessAgents, setHarnessAgents] = useState<AgentInfo[]>([]);
+  const [a2aAgents, setA2aAgents] = useState<AgentInfo[]>([]);
   const [datasets, setDatasets] = useState<DatasetInfo[]>([]);
   const [busy, setBusy] = useState(false);
   const [startAgentId, setStartAgentId] = useState("");
@@ -210,12 +211,16 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
       .then((res) => {
         // Experiments target runtime-backed agents (zip_runtime / studio /
         // container) — harness agents are rejected by POST /api/experiments
-        // (invoke-locked backing runtime, no config-bundle consumption).
-        // They still render as disabled options pointing at conversion.
+        // (invoke-locked backing runtime, no config-bundle consumption), and
+        // A2A-protocol agents likewise (their server never reads config
+        // bundles). Both render as disabled options with the reason.
         const active = res.agents.filter((a) => a.status === "active");
-        const eligible = active.filter((a) => a.method !== "harness");
+        const isA2a = (a: AgentInfo) =>
+          (a.spec as { protocol?: string } | undefined)?.protocol === "a2a";
+        const eligible = active.filter((a) => a.method !== "harness" && !isA2a(a));
         setAgents(eligible);
         setHarnessAgents(active.filter((a) => a.method === "harness"));
+        setA2aAgents(active.filter(isA2a));
         setStartAgentId((prev) => prev || (eligible[0]?.id ?? ""));
       })
       .catch(() => {});
@@ -408,6 +413,11 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
           {harnessAgents.map((ag) => (
             <option key={ag.id} value="" disabled style={{ background: "#141816" }}>
               {ag.name} · harness — {t("expPage.harnessDisabled")}
+            </option>
+          ))}
+          {a2aAgents.map((ag) => (
+            <option key={ag.id} value="" disabled style={{ background: "#141816" }}>
+              {ag.name} · a2a — {t("expPage.a2aDisabled")}
             </option>
           ))}
         </select>

@@ -33,6 +33,8 @@ interface StoredSpec {
   skills?: string[];
   knowledge_bases?: KbRef[];
   memory?: { long_term?: boolean };
+  protocol?: "http" | "a2a";
+  a2a_skills?: { id?: string; name?: string; description?: string; tags?: string[] }[];
   env?: Record<string, string>;
   filesystem?: {
     session_storage?: { mount_path?: string } | null;
@@ -46,6 +48,22 @@ interface MountRow {
   arn: string;
   path: string;
 }
+
+// agent-card skill editor row; tags edit as a comma-separated string
+interface A2aSkillRow {
+  name: string;
+  description: string;
+  tags: string;
+}
+
+// the two demo tools every zip template ships — seed the skills editor
+const A2A_SKILL_SEEDS: A2aSkillRow[] = [
+  { name: "calculator", description: "Evaluate a basic arithmetic expression", tags: "math" },
+  { name: "current time", description: "Report the current UTC date and time", tags: "time" },
+];
+
+const skillSlug = (name: string) =>
+  name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64) || "skill";
 
 // APPROVED registry records the wizard offers for mounting.
 interface AttachableMcp {
@@ -126,6 +144,10 @@ export function CreateAgent() {
   const [efsMounts, setEfsMounts] = useState<MountRow[]>([]);
   const [vpcSubnets, setVpcSubnets] = useState("");
   const [vpcSgs, setVpcSgs] = useState("");
+  // zip runtime service protocol: standard HTTP invocations vs a real A2A
+  // JSON-RPC server (serverProtocol=A2A) with configurable agent-card skills
+  const [protocol, setProtocol] = useState<"http" | "a2a">("http");
+  const [a2aSkills, setA2aSkills] = useState<A2aSkillRow[]>([]);
   // when set, the wizard edits an existing agent and the launch button re-publishes it
   const [editing, setEditing] = useState<{ id: string; name: string; method: Method } | null>(null);
   const [detailsMode, setDetailsMode] = useState(false);
@@ -239,6 +261,8 @@ export function CreateAgent() {
     setEfsMounts([]);
     setVpcSubnets("");
     setVpcSgs("");
+    setProtocol("http");
+    setA2aSkills([]);
     setSubmitError(null);
   };
 
@@ -281,6 +305,23 @@ export function CreateAgent() {
             })
           : [],
     memory: { short_term: true, long_term: longTerm },
+    ...(method === "zip_runtime"
+      ? {
+          protocol,
+          ...(protocol === "a2a"
+            ? {
+                a2a_skills: a2aSkills
+                  .filter((s) => s.name.trim())
+                  .map((s) => ({
+                    id: skillSlug(s.name),
+                    name: s.name.trim(),
+                    description: s.description.trim(),
+                    tags: s.tags.split(",").map((x) => x.trim()).filter(Boolean),
+                  })),
+              }
+            : {}),
+        }
+      : {}),
     ...(method === "harness" && selectedKbs.length
       ? { knowledge_bases: selectedKbs.map(kbInfo) }
       : {}),
@@ -357,6 +398,14 @@ export function CreateAgent() {
     );
     setVpcSubnets((spec.network?.subnets ?? []).join(", "));
     setVpcSgs((spec.network?.security_groups ?? []).join(", "));
+    setProtocol(spec.protocol ?? "http");
+    setA2aSkills(
+      (spec.a2a_skills ?? []).map((s) => ({
+        name: s.name ?? "",
+        description: s.description ?? "",
+        tags: (s.tags ?? []).join(", "),
+      })),
+    );
     setSubmitError(null);
     setStep(2);
   };
@@ -736,6 +785,91 @@ export function CreateAgent() {
                 )}
               </div>
             </div>
+            {method === "zip_runtime" && (
+              <div className="field">
+                <label>{t("create.configure.protocol")}</label>
+                <div className="selchips">
+                  <button
+                    type="button"
+                    data-testid="protocol-http"
+                    className={`selchip${protocol === "http" ? " on" : ""}`}
+                    style={{ cursor: "pointer" }}
+                    onClick={() => setProtocol("http")}
+                  >
+                    {t("create.configure.protocolHttp")} {protocol === "http" ? "✓" : ""}
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="protocol-a2a"
+                    className={`selchip${protocol === "a2a" ? " on" : ""}`}
+                    style={{ cursor: "pointer" }}
+                    onClick={() => {
+                      setProtocol("a2a");
+                      setA2aSkills((prev) => (prev.length ? prev : A2A_SKILL_SEEDS));
+                    }}
+                  >
+                    {t("create.configure.protocolA2a")} {protocol === "a2a" ? "✓" : ""}
+                  </button>
+                </div>
+                {protocol === "a2a" && (
+                  <>
+                    <div className="note" style={{ margin: "8px 0" }}>
+                      <span className="i">[i]</span>
+                      <span>{t("create.configure.a2aNote")}</span>
+                    </div>
+                    <label style={{ marginTop: 4 }}>{t("create.configure.a2aSkills")}</label>
+                    {a2aSkills.map((row, i) => (
+                      <div
+                        key={i}
+                        style={{ display: "grid", gap: 6, marginBottom: 6,
+                                 gridTemplateColumns: "1fr 2fr 1fr auto" }}
+                      >
+                        <input
+                          className="input"
+                          data-testid={`a2a-skill-name-${i}`}
+                          placeholder={t("create.configure.a2aSkillName")}
+                          value={row.name}
+                          onChange={(e) =>
+                            setA2aSkills((p) =>
+                              p.map((r, j) => (j === i ? { ...r, name: e.target.value } : r)))
+                          }
+                        />
+                        <input
+                          className="input"
+                          placeholder={t("create.configure.a2aSkillDesc")}
+                          value={row.description}
+                          onChange={(e) =>
+                            setA2aSkills((p) =>
+                              p.map((r, j) =>
+                                j === i ? { ...r, description: e.target.value } : r))
+                          }
+                        />
+                        <input
+                          className="input"
+                          placeholder={t("create.configure.a2aSkillTags")}
+                          value={row.tags}
+                          onChange={(e) =>
+                            setA2aSkills((p) =>
+                              p.map((r, j) => (j === i ? { ...r, tags: e.target.value } : r)))
+                          }
+                        />
+                        <Btn onClick={() => setA2aSkills((p) => p.filter((_, j) => j !== i))}>
+                          ✕
+                        </Btn>
+                      </div>
+                    ))}
+                    <Btn
+                      data-testid="a2a-skill-add"
+                      onClick={() =>
+                        setA2aSkills((p) => [...p, { name: "", description: "", tags: "" }])
+                      }
+                    >
+                      + {t("create.configure.a2aSkillAdd")}
+                    </Btn>
+                  </>
+                )}
+              </div>
+            )}
             {method === "container" && (
               <div className="field">
                 <label htmlFor="agent-mcp">{t("create.configure.mcpServers")}</label>
@@ -1243,7 +1377,10 @@ function AgentList({
           {agents.map((a) => (
             <tr key={a.id}>
               <td className="pri">{a.name}</td>
-              <td className="mono dim">{a.method}</td>
+              <td className="mono dim">
+                {a.method}
+                {(a.spec as StoredSpec | undefined)?.protocol === "a2a" && " · a2a"}
+              </td>
               <td>
                 <Chip
                   tone={STATUS_TONE[a.status] ?? "muted"}
