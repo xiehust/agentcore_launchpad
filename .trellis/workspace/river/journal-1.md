@@ -365,3 +365,62 @@ was needed for file ops.
 [OK] **Completed** — fs-verify-agent KEPT deployed as demo material (delete via
 DELETE /api/agents/95557700bafc456990fbab04e44c25d8 when no longer wanted;
 verification sessions stopped).
+
+---
+
+## 2026-07-13 — BYO S3 Files live verification + policy/propagation fixes
+
+**Date**: 2026-07-13
+**Task**: 07-13-fs-policy-getaccesspoint-fix
+**Package**: launchpad backend + real AWS (minimal S3 Files env)
+**Branch**: `main`
+
+### Summary
+
+Built a minimal S3 Files access-point environment (versioned SSE bucket +
+sync role trusting elasticfilesystem.amazonaws.com + mount target in the
+pre-existing agentcore-vpc's NAT-routed private subnet usw2-az2 + SG pair) and
+verified the BYO path end-to-end through platform redeploys of fs-verify-agent.
+Verification surfaced and fixed TWO product bugs:
+
+1. **Execution-role policy shape** — the AgentCore devguide's example policy is
+   wrong AND incomplete. IAM-simulator + UpdateAgentRuntime probes proved:
+   `s3files:GetAccessPoint` authorizes on the AP ARN and does NOT carry the
+   `s3files:AccessPointArn` condition key (combined conditioned statement →
+   implicitDeny), and validation ALSO requires undocumented
+   `s3files:ListMountTargets` on the FS ARN. `_fs_policy_document` now emits
+   three statements.
+2. **IAM propagation race** — deploy stage called Create/UpdateAgentRuntime
+   1-2s after provision (re)wrote the inline policy; on real policy changes AWS
+   rejected with "missing required permissions". Added
+   `_retry_iam_propagation` (targeted retry, 6×10s); observed live: 1 retry
+   sufficed on an AP-ARN change.
+
+Also hit the **AP root-ownership gotcha** (ops, not product): posixUser only
+sets operation identity; rootDirectory.creationPermissions applies ONLY if the
+directory doesn't exist at first mount — seeding the bucket prefix beforehand
+creates it root-owned → write EACCES. Fixed by pointing the AP at a fresh
+prefix (/agent-data).
+
+### Verified live (runtime versions v3→v6)
+
+- GetAgentRuntime: networkMode VPC + both configs (sessionStorage + s3FilesAccessPoint)
+- In-container: /mnt/datasets = NFSv4.2 127.0.0.1:/ (8.0E), /mnt/workspace 1.0G — coexist
+- bucket→FS: seed object readable in-container; FS→bucket: agent-written file
+  appeared in S3 after ~50s (async bidirectional sync, both directions proven)
+- Rollback: removing BYO mounts → PUBLIC network, sessionStorage-only,
+  inline policy auto-removed (v6)
+- 419 backend tests green (3 new retry tests + policy-shape assertions)
+
+### Teardown
+
+All demo infra deleted (3 APs, mount target, file system, bucket+versions,
+sync role, mount SG). EXCEPT: runtime SG `sg-04e7d389f0256b746` in
+vpc-0e88cbfc77f28ec07 — held by AgentCore's lingering ENIs (auto-released ≤8h);
+delete afterwards with `aws ec2 delete-security-group --group-id sg-04e7d389f0256b746`.
+fs-verify-agent kept (session-only, PUBLIC, v6). Setup/teardown state was
+tracked in data/fs-byo-state.json (gitignored).
+
+### Status
+
+[OK] **Completed**

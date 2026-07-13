@@ -42,15 +42,25 @@ def test_policy_document_s3_files():
         network=VPC,
     )
     doc = c._fs_policy_document(spec)
-    (stmt,) = doc["Statement"]
-    assert stmt["Action"] == [
-        "s3files:ClientMount", "s3files:ClientWrite", "s3files:GetAccessPoint",
-    ]
+    mount_stmt, get_stmt, list_stmt = doc["Statement"]
+    assert mount_stmt["Action"] == ["s3files:ClientMount", "s3files:ClientWrite"]
     # both APs share one file system → deduped resource, both ARNs in the condition
-    assert stmt["Resource"] == [
+    assert mount_stmt["Resource"] == [
         "arn:aws:s3files:us-west-2:111122223333:file-system/fs-abc"
     ]
-    assert stmt["Condition"]["ArnEquals"]["s3files:AccessPointArn"] == [S3_AP, S3_AP2]
+    assert mount_stmt["Condition"]["ArnEquals"]["s3files:AccessPointArn"] == [S3_AP, S3_AP2]
+    # GetAccessPoint authorizes on the AP arn and has NO AccessPointArn condition
+    # key — a combined conditioned statement implicitly denies it (live 2026-07-13)
+    assert get_stmt["Action"] == ["s3files:GetAccessPoint"]
+    assert get_stmt["Resource"] == [S3_AP, S3_AP2]
+    assert "Condition" not in get_stmt
+    # AgentCore's runtime validation also demands ListMountTargets (undocumented,
+    # discovered via UpdateAgentRuntime probes 2026-07-13)
+    assert list_stmt["Action"] == ["s3files:ListMountTargets"]
+    assert list_stmt["Resource"] == [
+        "arn:aws:s3files:us-west-2:111122223333:file-system/fs-abc"
+    ]
+    assert "Condition" not in list_stmt
 
 
 def test_policy_document_efs():
@@ -111,6 +121,50 @@ def test_sync_tolerates_missing_policy_on_delete():
     c._sync_fs_policy(
         Grumpy(), "arn:aws:iam::1:role/launchpad-base", AgentRow(), _spec(), lambda m: None
     )
+
+
+def test_retry_iam_propagation_retries_then_succeeds():
+    calls = {"n": 0}
+    slept: list[int] = []
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise RuntimeError(
+                "ValidationException: Execution role is missing required permissions. "
+                "Ensure the role has s3files:GetAccessPoint"
+            )
+        return {"agentRuntimeVersion": "4"}
+
+    out = c._retry_iam_propagation(flaky, lambda m: None, delay_s=10, sleeper=slept.append)
+    assert out == {"agentRuntimeVersion": "4"}
+    assert calls["n"] == 3 and slept == [10, 10]
+
+
+def test_retry_iam_propagation_other_errors_raise_immediately():
+    def boom():
+        raise RuntimeError("ValidationException: mountPath is invalid")
+
+    slept: list[int] = []
+    try:
+        c._retry_iam_propagation(boom, lambda m: None, sleeper=slept.append)
+        raise AssertionError("expected RuntimeError")
+    except RuntimeError:
+        pass
+    assert slept == []  # no retry for non-propagation errors
+
+
+def test_retry_iam_propagation_gives_up_after_attempts():
+    def always():
+        raise RuntimeError("Execution role is missing required permissions. X")
+
+    slept: list[int] = []
+    try:
+        c._retry_iam_propagation(always, lambda m: None, attempts=3, sleeper=slept.append)
+        raise AssertionError("expected RuntimeError")
+    except RuntimeError:
+        pass
+    assert len(slept) == 2  # attempts-1 sleeps, final failure raises
 
 
 def test_delete_agent_resources_drops_policy(monkeypatch):

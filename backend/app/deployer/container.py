@@ -119,15 +119,34 @@ def _vpc(spec: AgentSpec) -> dict | None:
 def _fs_policy_document(spec: AgentSpec) -> dict | None:
     """Execution-role inline policy granting mount access to the BYO access
     points. S3 Files APs embed the file-system ARN (strip '/access-point/…');
-    EFS APs don't — Resource '*' scoped by the AccessPointArn condition."""
+    EFS APs don't — Resource '*' scoped by the AccessPointArn condition.
+
+    The devguide's example policy (one combined conditioned statement with
+    ClientMount/ClientWrite/GetAccessPoint) is WRONG and incomplete — live-hit
+    2026-07-13, proven via IAM simulator + UpdateAgentRuntime probes:
+    - GetAccessPoint authorizes on the access-point ARN and doesn't carry the
+      s3files:AccessPointArn condition key → own unconditioned statement;
+    - AgentCore's create/update validation ALSO requires ListMountTargets on
+      the file system (undocumented)."""
     statements: list[dict] = []
     if spec.filesystem.s3_files:
         arns = [m.access_point_arn for m in spec.filesystem.s3_files]
+        fs_arns = sorted({a.split("/access-point/")[0] for a in arns})
         statements.append({
             "Effect": "Allow",
-            "Action": ["s3files:ClientMount", "s3files:ClientWrite", "s3files:GetAccessPoint"],
-            "Resource": sorted({a.split("/access-point/")[0] for a in arns}),
+            "Action": ["s3files:ClientMount", "s3files:ClientWrite"],
+            "Resource": fs_arns,
             "Condition": {"ArnEquals": {"s3files:AccessPointArn": arns}},
+        })
+        statements.append({
+            "Effect": "Allow",
+            "Action": ["s3files:GetAccessPoint"],
+            "Resource": arns,
+        })
+        statements.append({
+            "Effect": "Allow",
+            "Action": ["s3files:ListMountTargets"],
+            "Resource": fs_arns,
         })
     if spec.filesystem.efs:
         arns = [m.access_point_arn for m in spec.filesystem.efs]
@@ -179,6 +198,26 @@ def _stage_provision(ctx: StageContext, agent: Agent, iam_client: Any = None) ->
     return StageResult(detail=f"iam role reused · launchpad-base{detail}")
 
 
+def _retry_iam_propagation(fn, log, attempts: int = 6, delay_s: int = 10,
+                           sleeper: Any = time.sleep):
+    """Create/UpdateAgentRuntime validates execution-role permissions server-side;
+    a BYO-mount policy the provision stage just (re)wrote can still be invisible
+    inside AWS's IAM propagation window and gets rejected with 'missing required
+    permissions' (live-hit 2026-07-13 on an access-point ARN change). Retry only
+    that specific rejection — anything else raises immediately."""
+    for attempt in range(attempts):
+        try:
+            return fn()
+        except Exception as exc:
+            if "missing required permissions" not in str(exc) or attempt == attempts - 1:
+                raise
+            log(
+                "execution-role permissions not yet visible (IAM propagation) — "
+                f"retry {attempt + 1}/{attempts - 1} in {delay_s}s"
+            )
+            sleeper(delay_s)
+
+
 def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
     settings = get_settings()
     client = control_client()
@@ -201,7 +240,10 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
 
         if mode == "update" and row.resource_id:  # re-publish → UpdateAgentRuntime (new version)
             runtime_id = row.resource_id
-            updated = rt.update_container_runtime(client, runtime_id=runtime_id, **_kwargs())
+            updated = _retry_iam_propagation(
+                lambda: rt.update_container_runtime(client, runtime_id=runtime_id, **_kwargs()),
+                ctx.log,
+            )
             row.version = str(updated.get("agentRuntimeVersion", row.version or "1"))
             db.commit()
             ctx.log(
@@ -212,8 +254,11 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             runtime_id = row.resource_id
             ctx.log(f"resuming — runtime {runtime_id} already created, polling status")
         else:
-            created = rt.create_container_runtime(
-                client, runtime_name=sanitize_runtime_name(row.name), **_kwargs()
+            created = _retry_iam_propagation(
+                lambda: rt.create_container_runtime(
+                    client, runtime_name=sanitize_runtime_name(row.name), **_kwargs()
+                ),
+                ctx.log,
             )
             runtime_id = created["agentRuntimeId"]
             row.resource_id = runtime_id
