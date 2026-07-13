@@ -73,3 +73,25 @@ session; nothing is assumed from training data.
    semantics unverified.
 3. gen_ai telemetry from an A2AServer-wrapped strands agent (ADOT entrypoint
    retained — expected to work, verify spans arrive).
+
+## Step-0 probe results (2026-07-13, live, resources cleaned up)
+
+1. **zip + A2A: WORKS.** `codeConfiguration` zip artifact + `protocolConfiguration
+   {serverProtocol: A2A}` → READY. Caveat: the managed PYTHON_3_13 runtime does
+   NOT install requirements.txt — wheels must be vendored into the zip exactly
+   as production `build_zip` does (probe reused it; `strands-agents[a2a,otel]`
+   resolves fully to manylinux2014_aarch64/pure wheels; package ≈ 45.6 MB).
+   First attempt with bare requirements.txt failed CREATE with "OpenTelemetry
+   instrumentation executable not found".
+2. **AGENTCORE_RUNTIME_URL is auto-injected by the runtime** — the served agent
+   card carried the correct data-plane invocations URL with no env configured.
+   No create→update env two-step needed.
+3. **Card + invoke proven.** SigV4 GET `…/invocations/.well-known/agent-card.json`
+   → 200 (A2AServer card). `InvokeAgentRuntime` with JSON-RPC `message/send` →
+   `result` is a **Task**: reply text lives in `result.artifacts[].parts[].text`;
+   `result.history` contains streaming fragments (role=agent messages split
+   mid-word) — parse artifacts, never join history.
+4. **UpdateAgentRuntime protocolConfiguration is omit=RESET** (opposite of
+   UpdateHarness omit=keep): updating without the field silently reverts the
+   runtime to HTTP (card fetch → 400); re-sending `{serverProtocol: A2A}`
+   restores it (card → 200). Republish paths MUST always echo the protocol.
