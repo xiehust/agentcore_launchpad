@@ -375,22 +375,13 @@
       "failed": "失败",
       "deleting": "删除中"
     },
-    "type": {
-      "managed": "MANAGED",
-      "vector": "VECTOR",
-      "kendra": "KENDRA",
-      "sql": "SQL"
-    },
     "list": {
-      "panelTitle": "知识库",
-      "panelSub": "账号内全部 KB · Managed 型可挂载,外部 KB 只读",
-      "notAttachable": "不可挂载",
-      "notAttachableHint": "只有 Managed 知识库可挂载到 Agent——该外部知识库在 Launchpad 中仅可浏览。"
+      "panelTitle": "托管知识库",
+      "panelSub": "全托管 RAG · 向量库、embedding 与重排由 Bedrock 托管"
     },
     "cols": {
       "name": "名称",
       "status": "状态",
-      "type": "类型",
       "dataSources": "数据源",
       "agents": "关联 Agent",
       "updated": "更新时间"
@@ -444,10 +435,9 @@
       }
     },
     "detail": {
-      "meta": "知识库",
+      "meta": "托管知识库",
       "loadFailedTitle": "无法加载知识库",
       "deleted": "“{{name}}”已删除。",
-      "externalReadOnly": "外部知识库——在 Launchpad 中为只读。它创建于 Launchpad 之外;只有 Managed 知识库可挂载到 Agent。",
       "overview": {
         "title": "概览",
         "kbId": "KB ID",
@@ -511,8 +501,7 @@
         "score": "score",
         "showMore": "展开",
         "showLess": "收起",
-        "noResults": "没有结果——ingestion 是否已完成?请检查上方数据源状态与 ingestion 任务。",
-        "sqlUnsupported": "SQL 知识库通过查询生成作答——不支持检索搜索。"
+        "noResults": "没有结果——ingestion 是否已完成?请检查上方数据源状态与 ingestion 任务。"
       },
       "delete": {
         "title": "删除知识库",

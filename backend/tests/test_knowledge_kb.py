@@ -447,135 +447,24 @@ def test_list_documents_degrades_without_s3_access(monkeypatch):
     assert [d["name"] for d in out["documents"]] == ["guide.pdf", "weird.bin"]
 
 
-# ── unified list: non-managed KBs are readable, never mutable ────────────────
+# ── Playground query — KB-side retrieval failures surface as 502 ────────────
 
 
-def _kb_detail(kb_id, kb_type, name="ext"):
-    return {"knowledgeBase": {
-        "knowledgeBaseId": kb_id, "name": name, "status": "ACTIVE",
-        "knowledgeBaseConfiguration": {"type": kb_type},
-        "roleArn": "arn:aws:iam::1:role/x",
-    }}
+class _BrokenRuntime:
+    class exceptions:
+        class ValidationException(Exception):
+            pass
+
+        class AccessDeniedException(Exception):
+            pass
+
+    def retrieve(self, **kw):
+        raise self.exceptions.AccessDeniedException("[security_exception] 403")
 
 
-class _FakeExc(Exception):
-    pass
-
-
-class _FakeAgentClient:
-    """Minimal bedrock-agent stub covering list/get/detail paths."""
-
-    class exceptions:  # noqa: N801 — mirrors botocore client attr
-        ResourceNotFoundException = _FakeExc
-        ValidationException = _FakeExc
-        ConflictException = _FakeExc
-
-    def __init__(self, kbs):
-        self._kbs = kbs  # kb_id -> type
-
-    def list_knowledge_bases(self, **kw):
-        return {"knowledgeBaseSummaries": [{"knowledgeBaseId": k} for k in self._kbs]}
-
-    def get_knowledge_base(self, knowledgeBaseId):
-        if knowledgeBaseId not in self._kbs:
-            raise _FakeExc()
-        return _kb_detail(knowledgeBaseId, self._kbs[knowledgeBaseId], name=knowledgeBaseId)
-
-    def list_data_sources(self, **kw):
-        return {"dataSourceSummaries": []}
-
-
-def test_list_kbs_includes_all_types_with_attachable_flag(monkeypatch):
-    from app.services import knowledge
-
-    fake = _FakeAgentClient({"KBMANAGED1": "MANAGED", "KBVECTOR01": "VECTOR"})
-    monkeypatch.setattr(knowledge, "agent_client", lambda: fake)
-    monkeypatch.setattr(knowledge, "_attached_map", lambda: {})
-
-    items = {i["kb_id"]: i for i in knowledge.list_kbs()}
-    assert set(items) == {"KBMANAGED1", "KBVECTOR01"}
-    assert items["KBMANAGED1"]["attachable"] is True
-    assert items["KBVECTOR01"]["attachable"] is False
-    assert items["KBVECTOR01"]["type"] == "VECTOR"
-    # picker filter
-    only = knowledge.list_kbs(kb_type="MANAGED")
-    assert [i["kb_id"] for i in only] == ["KBMANAGED1"]
-
-
-def test_detail_marks_non_managed_read_only(monkeypatch):
-    from app.services import knowledge
-
-    fake = _FakeAgentClient({"KBVECTOR01": "VECTOR"})
-    monkeypatch.setattr(knowledge, "agent_client", lambda: fake)
-    monkeypatch.setattr(knowledge, "attached_agents", lambda kb_id: [])
-
-    detail = knowledge.get_kb_detail("KBVECTOR01")
-    assert detail["read_only"] is True and detail["attachable"] is False
-
-
-def test_mutations_still_reject_non_managed(monkeypatch):
-    from app.core.errors import NotFoundError
-    from app.services import knowledge
-
-    fake = _FakeAgentClient({"KBVECTOR01": "VECTOR"})
-    monkeypatch.setattr(knowledge, "agent_client", lambda: fake)
-
-    for call in (
-        lambda: knowledge.delete_kb("KBVECTOR01"),
-        lambda: knowledge.update_description("KBVECTOR01", "x"),
-        lambda: knowledge.add_data_source("KBVECTOR01", {"mode": "upload"}),
-        lambda: knowledge.delete_data_source("KBVECTOR01", "DS1"),
-    ):
-        with pytest.raises(NotFoundError):
-            call()
-
-
-def test_query_branches_config_by_type(monkeypatch):
-    from app.core.errors import AppError
-    from app.services import knowledge
-
-    captured = {}
-
-    class _Runtime:
-        def retrieve(self, **kw):
-            captured.update(kw)
-            return {"retrievalResults": []}
-
-    monkeypatch.setattr(knowledge, "agent_runtime_client", lambda: _Runtime())
-
-    monkeypatch.setattr(
-        knowledge, "agent_client", lambda: _FakeAgentClient({"KBVECTOR01": "VECTOR"})
-    )
-    knowledge.query("KBVECTOR01", "q", 5)
-    assert "vectorSearchConfiguration" in captured["retrievalConfiguration"]
-
-    monkeypatch.setattr(
-        knowledge, "agent_client", lambda: _FakeAgentClient({"KBMANAGED1": "MANAGED"})
-    )
-    knowledge.query("KBMANAGED1", "q", 5)
-    assert "managedSearchConfiguration" in captured["retrievalConfiguration"]
-
-    monkeypatch.setattr(
-        knowledge, "agent_client", lambda: _FakeAgentClient({"KBSQL00001": "SQL"})
-    )
-    with pytest.raises(AppError):
-        knowledge.query("KBSQL00001", "q", 5)
-
-
-def test_parse_ds_location_classic_s3():
-    from app.services.knowledge import _parse_ds_location
-
-    classic = {"dataSourceConfiguration": {"type": "S3", "s3Configuration": {
-        "bucketArn": "arn:aws:s3:::my-classic-bucket",
-        "inclusionPrefixes": ["docs/"],
-    }}}
-    assert _parse_ds_location(classic) == ("my-classic-bucket", "docs/")
-
-
-def test_ds_source_label_web():
-    from app.services.knowledge import _ds_source_label
-
-    web = {"dataSourceConfiguration": {"type": "WEB", "webConfiguration": {
-        "sourceConfiguration": {"urlConfiguration": {"seedUrls": [{"url": "https://ex.com/kb"}]}},
-    }}}
-    assert _ds_source_label(web) == "https://ex.com/kb"
+def test_query_kb_side_failure_maps_to_502(monkeypatch):
+    monkeypatch.setattr(knowledge, "agent_runtime_client", lambda: _BrokenRuntime())
+    with pytest.raises(AppError) as exc_info:
+        knowledge.query("KB1", "hello")
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.code == "kb.query_failed"
