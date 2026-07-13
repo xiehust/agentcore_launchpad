@@ -99,6 +99,23 @@ a2a_base_requirements() -> list[str]      # strands-agents[a2a,otel] + fastapi/u
   skills → chat `17*23 → "391"` → registry record PENDING_APPROVAL with
   a2a-jsonrpc transport → experiment picker disabled.
 
+### 5b. Front-desk routing demo (child 3)
+
+- `samples/frontdesk_agent/main.py` (zip code_bundle deploy via
+  `scripts/deploy_frontdesk_agent.py`): discover_agents = data-plane
+  `search_registry_records` (returns FULL records incl. descriptors + status
+  — filter APPROVED/A2A client-side); call_agent dispatches by card
+  `launchpad.transport` (a2a-jsonrpc → JSON-RPC passthrough, harness →
+  InvokeHarness, else {prompt}); entrypoint returns `a2a_trace` next to
+  `result` — extra payload fields ride through InvokeAgentRuntime.
+- `POST /api/registry/a2a-demo` {agent_id, question} → {answer, trace} —
+  bypasses invoke_agent_text deliberately (needs the trace field).
+- Registry `?view=a2a-demo` sub-page narrates DISCOVER→SELECT→INVOKE→RESPOND.
+- Execution role needs `launchpad-a2a-frontdesk` inline policy
+  (SearchRegistryRecords/Get/List on the registry + InvokeHarness).
+- Demo script: docs/a2a-demo.md (bilingual; governance loop uses
+  REJECT/APPROVE — live-proven the routing flips within one question).
+
 ### 6. Known gaps / follow-ups
 
 - A2A streaming (`message/stream`) not surfaced in chat (sync only).

@@ -38,15 +38,32 @@ R4. Demo script doc (bilingual) with the 5-minute walkthrough.
 
 ## Acceptance criteria
 
-- [ ] Product question routes to the aurora specialist; HR question routes to
+- [x] Product question routes to the aurora specialist; HR question routes to
       hr-assistant — shown live with real payloads in the sub-page.
-- [ ] At least one leg uses standard A2A JSON-RPC against an A2A-protocol
+- [x] At least one leg uses standard A2A JSON-RPC against an A2A-protocol
       runtime (not the platform-invoke fallback).
-- [ ] Reject/approve governance loop works within one query each way.
-- [ ] Bilingual UI + demo doc; backend tests for the discover/invoke endpoints
+- [x] Reject/approve governance loop works within one query each way.
+- [x] Bilingual UI + demo doc; backend tests for the discover/invoke endpoints
       or tools.
 
 ## Planning status
 
 PRD-only for now; write design.md + implement.md when both dependencies are
 merged (sub-page shape may change based on what the cards actually contain).
+
+## Acceptance evidence (2026-07-13, live)
+
+- `front-desk` agent deployed (64b838412ba848f08029746195ce5f36, runtime
+  front_desk_198f76-vYUfDrEEFC) via deploy_frontdesk_agent.py; IAM inline
+  policy launchpad-a2a-frontdesk added (SearchRegistryRecords, InvokeHarness).
+- Product question → DISCOVER hits [aurora-support, aurora-faq-a2a,
+  aurora-support-rt] → routed to aurora-support (InvokeHarness leg), real KB
+  answer (30-day refund, MSA §7.2) with routing reason in trace.
+- HR question → single hit hr-assistant → routed, honest no-record answer.
+- Governance + A2A leg: REJECT aurora-support → discovery excludes it →
+  routing flips to aurora-faq-a2a over **a2a-jsonrpc** with the JSON-RPC
+  message/send envelope visible in the trace → APPROVE restored.
+- UI sub-page (?view=a2a-demo) renders all four stage cards from the live
+  trace (testids demo-discover/select/invoke/answer verified via browser).
+- docs/a2a-demo.md bilingual walkthrough; 551 backend tests green.
+- KEPT: front-desk agent (demo resource).
