@@ -624,3 +624,52 @@ their memory) — accurate empty state.
 
 [OK] **Completed**
 
+---
+
+## 2026-07-13 — Eval transcripts for runtime agents via OTEL content logs
+
+**Date**: 2026-07-13
+**Task**: (no Trellis task — follow-up feature, user-approved)
+**Package**: launchpad backend + frontend
+**Branch**: `main`
+
+### Summary
+
+Runtime-backed agents (zip/studio/container) write no memory events during
+eval runs, so their session transcripts were empty. New
+`eval_turns_from_content_logs`: rebuilds USER/ASSISTANT turns from the
+runtime log group's `otel-rt-logs` stream (ADOT per-span gen_ai content
+records — the same content StartBatchEvaluation reads). Grouping: one
+traceId = one invocation; USER = latest input user message (later records
+carry full history), ASSISTANT = end_turn output w/ last-assistant fallback;
+content strings are polymorphic (plain | JSON-encoded text/toolUse/toolResult
+parts — tool-only → skipped). TWO gotchas found live: (1) filter_log_events
+scans oldest-first — startTime from the run's created_at is load-bearing
+(without it: 0 events, page budget dies in old logs); (2) insights re-runs
+REUSE session_ids → _eval_run_for_session must pick the OLDEST matching run
+(the creator) or the time window starts after the traffic. Also: long-term
+memnote suppressed for eval sources (bare default actor aggregates across
+all agents), transcript gains origin: memory|logs, frontend sub 由 OTEL
+内容日志重建 / rebuilt from otel content logs.
+
+### Verified
+
+- All five shapes live: zip ✓ studio ✓ container ✓ (2 turns each from logs),
+  harness ✓ (13 turns, memory unchanged), deleted agent ✓ (log groups
+  outlive runtimes). Screenshot obs-eval-session-logs-transcript.png.
+- 437 backend tests (3 new: extraction grouping/pagination, logs fallback +
+  creator-run pick); tsc/eslint 0; i18n PASS.
+- Ops note: make dev's 8000/5173 were down (killed externally) — restarted
+  via nohup uvicorn --reload + vite --strictPort.
+
+### Status
+
+[OK] **Completed**
+
+## 2026-07-13 · 07-13-managed-kb (worktree-managed-kb)
+
+Managed KB 管理 + agent 挂载全链路落地。要点:
+- 拓扑:共享 `launchpad-kb-gw` + per-KB Retrieve target + per-agent AgenticRetrieveStream target(retrievers 绑 agent 所选 KB);v1 harness-only、S3-only。
+- 活体验证抓到 4 个真 bug:KB 创建异步 1.5–3min(创建接口改快路径+source_pending 前端接力)、GetDataSource 的 connectorParameters 是 JSON 字符串、target DELETING 态不能 update(等消失再建)、**UpdateHarness omit=keep 语义**(wrap_params_for_update 现在显式发空 tools/skills——此前删光工具的 re-publish 从未真正生效,存量 bug)。
+- E2E 证据:aurora-support 对话中可见 `aurora-deck-docs-bl6zkavwfb___Retrieve` TOOL CALLED×2,回答含 30-days 退款/AD-4411 workaround(样例文档独有事实)。
+- 留存 demo:KB aurora-deck-docs(BL6ZKAVWFB)+ agent aurora-support + launchpad-kb-gw。e2e 脚本:backend/scripts/e2e_knowledge_base.py / e2e_kb_gateway.py。
