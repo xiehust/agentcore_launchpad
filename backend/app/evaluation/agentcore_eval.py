@@ -786,6 +786,22 @@ def list_datasets(client: Any) -> list[dict[str, Any]]:
             return out
 
 
+def list_dataset_examples(client: Any, *, dataset_id: str) -> list[dict[str, Any]]:
+    """All examples of a cloud dataset, in the schema they were created with
+    (each carries a service-assigned ``exampleId`` on top)."""
+    out: list[dict[str, Any]] = []
+    token: str | None = None
+    while True:
+        kwargs: dict[str, Any] = {"datasetId": dataset_id}
+        if token:
+            kwargs["nextToken"] = token
+        resp = client.list_dataset_examples(**kwargs)
+        out.extend(resp.get("examples", []))
+        token = resp.get("nextToken")
+        if not token:
+            return out
+
+
 def delete_dataset(client: Any, *, dataset_id: str) -> dict[str, Any]:
     return client.delete_dataset(datasetId=dataset_id)
 

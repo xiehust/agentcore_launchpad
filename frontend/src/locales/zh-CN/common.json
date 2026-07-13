@@ -474,7 +474,7 @@
     },
     "newRun": {
       "title": "新建运行",
-      "sub": "Runtime 类 Agent(harness 除外)",
+      "sub": "所有已激活 Agent · zip / studio / container / harness",
       "agent": "AGENT",
       "noAgents": "暂无可评估的运行中 Agent",
       "dataset": "数据集",
@@ -492,7 +492,7 @@
         "s2": "WAITING——追踪落入 CloudWatch（aws/spans）",
         "s3": "EVALUATING——StartBatchEvaluation 精确圈定这些会话",
         "s4": "COMPLETED——各评估器均分或洞察树",
-        "note": "仅支持 runtime 型 Agent（zip / studio / container）——harness Agent 不暴露 span 服务名，批量评估无法圈定。"
+        "note": "所有已激活 Agent 均可评估——managed harness 运行在内部 Strands runtime 上，其 span 同样可被评估解析。"
       },
       "scope": "评估范围",
       "scopeDataset": "数据集 · 回放条目",
@@ -509,7 +509,13 @@
       "insightsWindowHint": "洞察会对窗口内找到的会话做聚类。聚类至少需要 3 个会话——请选择流量足够的窗口。",
       "manageEvaluators": "管理评估器",
       "trajectoryNeedsGt": "需要 scenario 定义了 expected_trajectory 真值的数据集",
-      "customTitle": "自定义 LLM 评审评估器"
+      "customTitle": "自定义 LLM 评审评估器",
+      "localGroup": "本地数据集",
+      "cloudGroup": "AWS 云端数据集",
+      "cloudSimulated": "模拟人格",
+      "cloudHint": "AWS 云端数据集——运行时从 AWS 取回 scenario 对 Agent 执行，真值一并注入。",
+      "actorModel": "扮演用户的 ACTOR 模型",
+      "actorModelHint": "模拟人格场景：由 LLM actor 扮演用户与 Agent 对话，直到达成目标或达到 max_turns。此处选择驱动 actor 的 Bedrock 模型。"
     },
     "scores": {
       "title": "评估器得分",

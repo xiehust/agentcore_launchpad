@@ -24,6 +24,19 @@ SCENARIO = {
     "assertions": ["The agent confirms the refund"],
 }
 
+PERSONA = {
+    "scenario_id": "frustrated-employee-leave",
+    "scenario_description": "A frustrated employee needs leave booked quickly",
+    "input": "I really need time off next week. Can you help?",
+    "actor_profile": {
+        "traits": {"tone": "frustrated but polite"},
+        "context": "An employee whose childcare fell through",
+        "goal": "Get a PTO request submitted and confirmed",
+    },
+    "max_turns": 8,
+    "assertions": ["Agent submits a PTO request"],
+}
+
 
 # ─── normalization / ground truth (pure) ─────────────────────────────────────
 def test_normalize_legacy_items():
@@ -164,6 +177,19 @@ def test_sync_to_aws_success(client, monkeypatch):
     assert cloud["failure_reason"] is None
 
 
+def test_sync_simulated_dataset_uses_simulated_schema(client, monkeypatch):
+    stub = stub_cloud(monkeypatch)
+    ds = client.post("/api/eval/datasets", json={
+        "name": "personas", "items": [PERSONA],
+    }).json()
+    assert ds["kind"] == "simulated"
+    res = client.post(f"/api/eval/datasets/{ds['id']}/sync-to-aws")
+    assert res.status_code == 200, res.text
+    kwargs = stub.create_dataset.call_args.kwargs
+    assert kwargs["schemaType"] == "AGENTCORE_EVALUATION_SIMULATED_V1"
+    assert kwargs["source"]["inlineExamples"]["examples"] == [PERSONA]
+
+
 def test_sync_to_aws_create_failed_persists_blob(client, monkeypatch):
     stub_cloud(monkeypatch, get_status="CREATE_FAILED", failure_reason="bad examples")
     ds = client.post("/api/eval/datasets", json={
@@ -207,6 +233,133 @@ def test_cloud_delete_marks_local_copy(client, monkeypatch):
     row = next(d for d in client.get("/api/eval/datasets").json()["datasets"]
                if d["id"] == ds["id"])
     assert row["cloud"]["status"] == "deleted"
+
+
+def stub_cloud_run(monkeypatch, *, schema_type="AGENTCORE_EVALUATION_PREDEFINED_V1",
+                   status="ACTIVE", examples=None):
+    """Control-plane stub for cloud-dataset-scoped runs and the detail endpoint."""
+    stub = MagicMock()
+    stub.get_dataset.return_value = {
+        "datasetId": "cloudds-7", "datasetName": "remote_scenarios",
+        "status": status, "schemaType": schema_type, "exampleCount": 1,
+    }
+    if examples is None:
+        base = PERSONA if schema_type == "AGENTCORE_EVALUATION_SIMULATED_V1" else SCENARIO
+        examples = [{"exampleId": "ex-1", **base}]
+    stub.list_dataset_examples.return_value = {"examples": examples}
+    monkeypatch.setattr("app.evaluation.routers.control_client", lambda: stub)
+    return stub
+
+
+def test_cloud_dataset_detail_reports_ground_truth(client, monkeypatch):
+    stub_cloud_run(monkeypatch)
+    res = client.get("/api/eval/datasets/cloud/cloudds-7")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["name"] == "remote_scenarios"
+    assert body["runnable"] is True
+    assert body["has_ground_truth"] is True
+
+
+def test_cloud_dataset_detail_simulated_runnable_with_gt(client, monkeypatch):
+    stub_cloud_run(monkeypatch, schema_type="AGENTCORE_EVALUATION_SIMULATED_V1")
+    res = client.get("/api/eval/datasets/cloud/cloudds-7")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["runnable"] is True
+    assert body["has_ground_truth"] is True  # persona assertions count
+    assert body["schemaType"] == "AGENTCORE_EVALUATION_SIMULATED_V1"
+
+
+def test_run_on_cloud_dataset(client, monkeypatch):
+    db = SessionLocal()
+    agent = make_agent(db, name="cloud-run-agent")
+    db.close()
+    stub_environment(monkeypatch)
+    stub = stub_cloud_run(monkeypatch)
+
+    res = client.post("/api/eval/runs", json={
+        "agent_id": agent.id, "cloud_dataset_id": "cloudds-7",
+        "evaluators": ["Builtin.TrajectoryInOrderMatch", "Builtin.Correctness"],
+        "wait_seconds": 0,
+    })
+    assert res.status_code == 201, res.text
+    body = res.json()
+    assert body["dataset_id"] == "cloudds-7"
+    assert body["dataset_name"] == "cloud:remote_scenarios"
+    stub.list_dataset_examples.assert_called_once_with(datasetId="cloudds-7")
+
+
+def test_run_on_simulated_dataset_requires_actor_model(client, monkeypatch):
+    db = SessionLocal()
+    agent = make_agent(db, name="cloud-sim-agent")
+    db.close()
+    stub_environment(monkeypatch)
+    stub_cloud_run(monkeypatch, schema_type="AGENTCORE_EVALUATION_SIMULATED_V1")
+
+    res = client.post("/api/eval/runs", json={
+        "agent_id": agent.id, "cloud_dataset_id": "cloudds-7", "wait_seconds": 0,
+    })
+    assert res.status_code == 422
+    assert res.json()["code"] == "run.actor_model_required"
+
+
+def test_run_on_simulated_cloud_dataset_with_actor_model(client, monkeypatch):
+    db = SessionLocal()
+    agent = make_agent(db, name="cloud-sim-ok-agent")
+    db.close()
+    data, _ = stub_environment(monkeypatch)
+    stub_cloud_run(monkeypatch, schema_type="AGENTCORE_EVALUATION_SIMULATED_V1")
+
+    sim_calls: list[dict] = []
+
+    def fake_sim(data_client, *, agent_arn, method, scenario, actor_model_id):
+        sim_calls.append({"scenario": scenario, "model": actor_model_id,
+                          "method": method})
+        return f"sim-sess-{len(sim_calls):03d}" + "x" * 30
+
+    monkeypatch.setattr(svc.simulation, "run_simulated_scenario", fake_sim)
+
+    res = client.post("/api/eval/runs", json={
+        "agent_id": agent.id, "cloud_dataset_id": "cloudds-7",
+        "actor_model_id": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "wait_seconds": 0,
+    })
+    assert res.status_code == 201, res.text
+    run_id = res.json()["id"]
+
+    import time
+    for _ in range(50):
+        run = client.get(f"/api/eval/runs/{run_id}").json()
+        if run["status"] in ("completed", "failed"):
+            break
+        time.sleep(0.1)
+    assert run["status"] == "completed", run.get("error")
+    assert sim_calls[0]["model"] == "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+    assert sim_calls[0]["scenario"]["scenario_id"] == "frustrated-employee-leave"
+    assert run["session_ids"] == ["sim-sess-001" + "x" * 30]
+    # persona assertions ride along as ground truth
+    meta = data.start_batch_evaluation.call_args.kwargs["evaluationMetadata"]
+    assert meta["sessionMetadata"][0]["groundTruth"]["inline"]["assertions"] == [
+        {"text": "Agent submits a PTO request"}
+    ]
+
+
+def test_run_rejects_local_plus_cloud_dataset(client, monkeypatch):
+    db = SessionLocal()
+    agent = make_agent(db, name="cloud-xor-agent")
+    ds = EvalDataset(name="local", items=[{"prompt": "x"}])
+    db.add(ds)
+    db.commit()
+    ds_id = ds.id
+    db.close()
+    stub_cloud_run(monkeypatch)
+
+    res = client.post("/api/eval/runs", json={
+        "agent_id": agent.id, "dataset_id": ds_id, "cloud_dataset_id": "cloudds-7",
+    })
+    assert res.status_code == 422
+    assert res.json()["code"] == "run.scope_required"
 
 
 # ─── ground-truth runs ───────────────────────────────────────────────────────

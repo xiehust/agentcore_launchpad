@@ -15,10 +15,35 @@ import { experimentTone, ExperimentView } from "./EvaluationExperiment";
 interface Dataset {
   id: string;
   name: string;
+  kind?: string;
   locale: string;
   item_count: number;
   has_ground_truth?: boolean;
 }
+
+// /api/eval/datasets/cloud row — datasets living only in AWS. Predefined
+// (scenario) datasets replay their turns; simulated persona datasets run the
+// SDK's LLM-actor loop, which needs an actor model picked on the run.
+interface CloudDataset {
+  datasetId: string;
+  name: string;
+  status: string;
+  schemaType: string;
+  exampleCount: number | null;
+}
+
+const CLOUD_VALUE_PREFIX = "cloud:";
+const SIMULATED_SCHEMA = "AGENTCORE_EVALUATION_SIMULATED_V1";
+
+const cloudRunnable = (d: CloudDataset) => d.status === "ACTIVE";
+
+// Bedrock models offered as the simulated-persona actor (us-west-2 verified).
+const ACTOR_MODELS = [
+  "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+  "global.anthropic.claude-sonnet-5",
+  "global.anthropic.claude-sonnet-4-6",
+  "global.amazon.nova-2-lite-v1:0",
+];
 
 interface EvaluatorInfo {
   id: string;
@@ -96,10 +121,14 @@ const LEVEL_BADGE: Record<string, { label: string; color: string }> = {
   TOOL_CALL: { label: "TOOL", color: "var(--good)" },
 };
 
-// "window:24h" (backend scope encoding) → "window · 24h" for the runs table.
+// Backend scope encodings for the runs table: "window:24h" → "window · 24h",
+// "cloud:name" (AWS cloud dataset) → "☁ name".
 function scopeLabel(run: RunInfo): string {
   if (run.dataset_name?.startsWith("window:")) {
     return `window · ${run.dataset_name.slice("window:".length)}`;
+  }
+  if (run.dataset_name?.startsWith("cloud:")) {
+    return `☁ ${run.dataset_name.slice("cloud:".length)}`;
   }
   if (run.mode === "insights") return `insights · ${run.session_ids.length}`;
   return run.dataset_name ?? "—";
@@ -166,12 +195,16 @@ export function Evaluation() {
   const creating = view === "new";
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
+  const [cloudDatasets, setCloudDatasets] = useState<CloudDataset[]>([]);
+  // cloud dataset ground-truth flags, fetched lazily per selection
+  const [cloudGt, setCloudGt] = useState<Record<string, boolean>>({});
   const [evaluators, setEvaluators] = useState<EvaluatorInfo[]>([]);
   const [runs, setRuns] = useState<RunInfo[]>([]);
   const [selectedRun, setSelectedRun] = useState<RunInfo | null>(null);
   const [queueLocked, setQueueLocked] = useState(false);
   const [agentId, setAgentId] = useState("");
   const [datasetId, setDatasetId] = useState("");
+  const [actorModelId, setActorModelId] = useState(ACTOR_MODELS[0]);
   const [mode, setMode] = useState<"evaluators" | "insights">("evaluators");
   const [scope, setScope] = useState<"dataset" | "window">("dataset");
   const [lookbackHours, setLookbackHours] = useState(24);
@@ -233,6 +266,17 @@ export function Evaluation() {
         if (d.datasets.length) setDatasetId(d.datasets[0].id);
       })
       .catch(() => {});
+    fetch("/api/eval/datasets/cloud")
+      .then((res) => (res.ok ? res.json() : { datasets: [] }))
+      .then((d: { datasets: CloudDataset[] }) => {
+        setCloudDatasets(d.datasets);
+        const firstRunnable = d.datasets.find(cloudRunnable);
+        if (firstRunnable) {
+          // default only when there is no local dataset to default to
+          setDatasetId((prev) => prev || CLOUD_VALUE_PREFIX + firstRunnable.datasetId);
+        }
+      })
+      .catch(() => {});
     fetch("/api/eval/evaluators")
       .then((res) => res.json())
       .then((d: { evaluators: EvaluatorInfo[] }) => setEvaluators(d.evaluators))
@@ -243,9 +287,33 @@ export function Evaluation() {
   }, [refresh]);
 
   // Trajectory matchers score against expected_trajectory ground truth — only
-  // dataset runs whose selected dataset carries it can use them.
+  // dataset runs whose selected dataset carries it can use them. Cloud
+  // datasets don't list ground truth up front, so it's fetched per selection.
+  const selectedCloudId = datasetId.startsWith(CLOUD_VALUE_PREFIX)
+    ? datasetId.slice(CLOUD_VALUE_PREFIX.length)
+    : null;
+  useEffect(() => {
+    if (!selectedCloudId || selectedCloudId in cloudGt) return;
+    fetch(`/api/eval/datasets/cloud/${selectedCloudId}`)
+      .then((res) => res.json())
+      .then((d: { has_ground_truth?: boolean }) =>
+        setCloudGt((p) => ({ ...p, [selectedCloudId]: !!d.has_ground_truth })),
+      )
+      .catch(() => {});
+  }, [selectedCloudId, cloudGt]);
   const selectedDataset = datasets.find((d) => d.id === datasetId);
-  const trajectoryAllowed = scope === "dataset" && !!selectedDataset?.has_ground_truth;
+  const trajectoryAllowed =
+    scope === "dataset" &&
+    (selectedCloudId
+      ? !!cloudGt[selectedCloudId]
+      : !!selectedDataset?.has_ground_truth);
+  // Simulated persona datasets need an actor model (an LLM plays the user).
+  const selectedCloud = cloudDatasets.find((d) => d.datasetId === selectedCloudId);
+  const simulatedSelected =
+    scope === "dataset" &&
+    (selectedCloud
+      ? selectedCloud.schemaType === SIMULATED_SCHEMA
+      : selectedDataset?.kind === "simulated");
   useEffect(() => {
     if (!trajectoryAllowed) {
       setChosenEvaluators((prev) => prev.filter((id) => !id.startsWith("Builtin.Trajectory")));
@@ -261,7 +329,10 @@ export function Evaluation() {
       wait_seconds: scope === "window" ? 0 : 120,
       ...(scope === "window"
         ? { lookback_hours: lookbackHours }
-        : { dataset_id: datasetId }),
+        : selectedCloudId
+          ? { cloud_dataset_id: selectedCloudId }
+          : { dataset_id: datasetId }),
+      ...(simulatedSelected ? { actor_model_id: actorModelId } : {}),
     };
     const payload =
       mode === "insights"
@@ -442,13 +513,60 @@ export function Evaluation() {
                   value={datasetId}
                   onChange={(e) => setDatasetId(e.target.value)}
                 >
-                  {datasets.map((d) => (
-                    <option key={d.id} value={d.id} style={{ background: "#141816" }}>
-                      {d.name} · {d.item_count} ({d.locale})
-                      {d.has_ground_truth ? " ◆" : ""}
-                    </option>
-                  ))}
+                  <optgroup label={t("evalPage.newRun.localGroup")}>
+                    {datasets.map((d) => (
+                      <option key={d.id} value={d.id} style={{ background: "#141816" }}>
+                        {d.name} · {d.item_count} ({d.locale})
+                        {d.has_ground_truth ? " ◆" : ""}
+                      </option>
+                    ))}
+                  </optgroup>
+                  {cloudDatasets.length > 0 && (
+                    <optgroup label={t("evalPage.newRun.cloudGroup")}>
+                      {cloudDatasets.map((d) => (
+                        <option
+                          key={d.datasetId}
+                          value={CLOUD_VALUE_PREFIX + d.datasetId}
+                          disabled={!cloudRunnable(d)}
+                          style={{ background: "#141816" }}
+                        >
+                          ☁ {d.name} · {d.exampleCount ?? "?"}
+                          {d.schemaType === SIMULATED_SCHEMA
+                            ? ` · ${t("evalPage.newRun.cloudSimulated")}`
+                            : ""}
+                          {d.status !== "ACTIVE" ? ` — ${d.status}` : ""}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
                 </select>
+                {selectedCloudId && (
+                  <div className="note" style={{ marginTop: 8 }}>
+                    <span className="i">[i]</span>
+                    <span>{t("evalPage.newRun.cloudHint")}</span>
+                  </div>
+                )}
+                {simulatedSelected && (
+                  <div style={{ marginTop: 12 }}>
+                    <label>{t("evalPage.newRun.actorModel")}</label>
+                    <select
+                      className="input"
+                      value={actorModelId}
+                      data-testid="actor-model"
+                      onChange={(e) => setActorModelId(e.target.value)}
+                    >
+                      {ACTOR_MODELS.map((m) => (
+                        <option key={m} value={m} style={{ background: "#141816" }}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="note" style={{ marginTop: 8 }}>
+                      <span className="i">[i]</span>
+                      <span>{t("evalPage.newRun.actorModelHint")}</span>
+                    </div>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="field">

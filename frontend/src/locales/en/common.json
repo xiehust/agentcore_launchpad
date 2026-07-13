@@ -474,7 +474,7 @@
     },
     "newRun": {
       "title": "NEW RUN",
-      "sub": "runtime-backed agents (harness excluded)",
+      "sub": "all active agents · zip / studio / container / harness",
       "agent": "AGENT",
       "noAgents": "no eligible active agents",
       "dataset": "DATASET",
@@ -492,7 +492,7 @@
         "s2": "WAITING — traces land in CloudWatch (aws/spans)",
         "s3": "EVALUATING — StartBatchEvaluation scoped to those sessions",
         "s4": "COMPLETED — per-evaluator scores or insight trees",
-        "note": "Runtime-backed agents only (zip / studio / container) — harness agents expose no span service name, so batch evaluation excludes them."
+        "note": "All active agents are eligible — managed harnesses run on an internal Strands runtime whose spans are evaluation-parseable too."
       },
       "scope": "SCOPE",
       "scopeDataset": "DATASET · replay items",
@@ -509,7 +509,13 @@
       "insightsWindowHint": "Insights clusters the sessions found inside the window. Clustering needs at least 3 sessions — pick a window with enough traffic.",
       "manageEvaluators": "MANAGE EVALUATORS",
       "trajectoryNeedsGt": "needs a dataset whose scenarios define expected_trajectory ground truth",
-      "customTitle": "custom LLM-judge evaluator"
+      "customTitle": "custom LLM-judge evaluator",
+      "localGroup": "LOCAL DATASETS",
+      "cloudGroup": "AWS CLOUD DATASETS",
+      "cloudSimulated": "personas",
+      "cloudHint": "AWS cloud dataset — its scenarios are fetched from AWS and run against the agent, ground truth included.",
+      "actorModel": "ACTOR MODEL — PLAYS THE USER",
+      "actorModelHint": "Simulated personas: an LLM actor plays the user against the agent until its goal is met or max_turns is hit. This Bedrock model drives the actor."
     },
     "scores": {
       "title": "EVALUATOR SCORES",

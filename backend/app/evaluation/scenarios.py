@@ -18,11 +18,12 @@ def normalize_scenarios(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
     Legacy prompt items become single-turn predefined scenarios (a non-empty
     ``expected`` becomes the turn's ``expected_response``); items already in
-    scenario shape (they carry ``turns``) pass through as stored.
+    scenario shape — predefined (``turns``) or simulated persona
+    (``actor_profile``) — pass through as stored.
     """
     out: list[dict[str, Any]] = []
     for i, item in enumerate(items):
-        if "turns" in item:
+        if "turns" in item or "actor_profile" in item:
             out.append(item)
             continue
         turn: dict[str, Any] = {"input": item["prompt"]}

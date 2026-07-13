@@ -51,24 +51,30 @@ def _turn_input_text(turn: Any) -> str:
 
 
 def _validate_items(items: list[dict[str, Any]]) -> None:
-    """Per-item shape checks: scenario items (they carry ``turns``) need a
-    unique scenario_id and non-empty turns; prompt items need a prompt."""
+    """Per-item shape checks: predefined scenario items (they carry ``turns``)
+    need a unique scenario_id and non-empty turns; simulated persona items
+    (they carry ``actor_profile``) need a unique scenario_id, an initial input
+    and the actor's context/goal; prompt items need a prompt."""
     seen_ids: set[str] = set()
+
+    def check_scenario_id(idx: int, item: dict[str, Any]) -> None:
+        scenario_id = str(item.get("scenario_id") or "").strip()
+        if not scenario_id:
+            raise AppError(
+                "dataset.invalid_item", f"item {idx}: scenario_id required",
+                status_code=422,
+            )
+        if scenario_id in seen_ids:
+            raise AppError(
+                "dataset.invalid_item",
+                f"item {idx}: duplicate scenario_id '{scenario_id}'",
+                status_code=422,
+            )
+        seen_ids.add(scenario_id)
+
     for idx, item in enumerate(items, 1):
         if "turns" in item:
-            scenario_id = str(item.get("scenario_id") or "").strip()
-            if not scenario_id:
-                raise AppError(
-                    "dataset.invalid_item", f"item {idx}: scenario_id required",
-                    status_code=422,
-                )
-            if scenario_id in seen_ids:
-                raise AppError(
-                    "dataset.invalid_item",
-                    f"item {idx}: duplicate scenario_id '{scenario_id}'",
-                    status_code=422,
-                )
-            seen_ids.add(scenario_id)
+            check_scenario_id(idx, item)
             turns = item.get("turns")
             if not isinstance(turns, list) or not turns:
                 raise AppError(
@@ -82,6 +88,24 @@ def _validate_items(items: list[dict[str, Any]]) -> None:
                         f"item {idx} turn {turn_no}: input required",
                         status_code=422,
                     )
+        elif "actor_profile" in item:
+            check_scenario_id(idx, item)
+            profile = item.get("actor_profile")
+            if not str(item.get("input", "")).strip():
+                raise AppError(
+                    "dataset.invalid_item", f"item {idx}: input required",
+                    status_code=422,
+                )
+            if (
+                not isinstance(profile, dict)
+                or not str(profile.get("context", "")).strip()
+                or not str(profile.get("goal", "")).strip()
+            ):
+                raise AppError(
+                    "dataset.invalid_item",
+                    f"item {idx}: actor_profile needs context and goal",
+                    status_code=422,
+                )
         elif not str(item.get("prompt", "")).strip():
             raise AppError(
                 "dataset.invalid_item", f"item {idx}: prompt required", status_code=422
@@ -89,6 +113,8 @@ def _validate_items(items: list[dict[str, Any]]) -> None:
 
 
 def _infer_kind(items: list[dict[str, Any]]) -> str:
+    if any("actor_profile" in item for item in items):
+        return "simulated"
     return "predefined" if any("turns" in item for item in items) else "legacy"
 
 
@@ -238,7 +264,11 @@ def sync_dataset_to_aws(dataset_id: str, db: Session = Depends(get_db)) -> dict[
         created = ac.create_dataset(
             client,
             name=name,
-            schema_type=ac.DATASET_SCHEMA_TYPES["predefined"],
+            # simulated persona datasets sync with their own schema; scenario
+            # and legacy prompt datasets both normalize to predefined
+            schema_type=ac.DATASET_SCHEMA_TYPES.get(
+                dataset.kind, ac.DATASET_SCHEMA_TYPES["predefined"]
+            ),
             examples=examples,
             description=dataset.description or "",
         )
@@ -272,6 +302,41 @@ def sync_dataset_to_aws(dataset_id: str, db: Session = Depends(get_db)) -> dict[
     return _dataset_out(dataset)
 
 
+# Locally runnable cloud schemas: predefined scenarios replay their turns;
+# simulated persona datasets run through the SDK's LLM-actor simulation
+# (requires an actor_model_id on the run).
+RUNNABLE_CLOUD_SCHEMAS = {
+    ac.DATASET_SCHEMA_TYPES["predefined"],
+    ac.DATASET_SCHEMA_TYPES["simulated"],
+}
+
+
+def _cloud_dataset_items(cloud_id: str) -> tuple[str, list[dict[str, Any]]]:
+    """(display name, run items) for an ACTIVE AWS cloud dataset."""
+    client = control_client()
+    detail = ac.get_dataset(client, dataset_id=cloud_id)
+    if detail.get("status") != "ACTIVE":
+        raise AppError(
+            "dataset.cloud_not_active",
+            f"cloud dataset is {detail.get('status')} — only ACTIVE datasets can run",
+            status_code=400,
+        )
+    if detail.get("schemaType") not in RUNNABLE_CLOUD_SCHEMAS:
+        raise AppError(
+            "run.cloud_dataset_unsupported",
+            f"cloud dataset schema '{detail.get('schemaType')}' is not runnable here",
+            status_code=422,
+        )
+    items = [
+        {k: v for k, v in example.items() if k != "exampleId"}
+        for example in ac.list_dataset_examples(client, dataset_id=cloud_id)
+    ]
+    if not items:
+        raise AppError("dataset.empty", "cloud dataset has no examples", status_code=422)
+    _validate_items(items)
+    return detail.get("datasetName") or cloud_id, items
+
+
 @router.get("/datasets/cloud")
 def list_cloud_datasets() -> dict[str, Any]:
     out = []
@@ -287,6 +352,34 @@ def list_cloud_datasets() -> dict[str, Any]:
             }
         )
     return {"datasets": out}
+
+
+@router.get("/datasets/cloud/{cloud_id}")
+def get_cloud_dataset(cloud_id: str) -> dict[str, Any]:
+    """Cloud dataset detail for the run form — whether it can drive a run and
+    whether its scenarios carry ground truth (gates Trajectory* evaluators)."""
+    client = control_client()
+    detail = ac.get_dataset(client, dataset_id=cloud_id)
+    runnable = (
+        detail.get("status") == "ACTIVE"
+        and detail.get("schemaType") in RUNNABLE_CLOUD_SCHEMAS
+    )
+    has_ground_truth = False
+    if runnable:
+        items = [
+            {k: v for k, v in example.items() if k != "exampleId"}
+            for example in ac.list_dataset_examples(client, dataset_id=cloud_id)
+        ]
+        has_ground_truth = bool(items) and _has_ground_truth(items)
+    return {
+        "datasetId": detail.get("datasetId"),
+        "name": detail.get("datasetName"),
+        "status": detail.get("status"),
+        "schemaType": detail.get("schemaType"),
+        "exampleCount": detail.get("exampleCount"),
+        "runnable": runnable,
+        "has_ground_truth": has_ground_truth,
+    }
 
 
 @router.delete("/datasets/cloud/{cloud_id}")
@@ -445,6 +538,10 @@ def delete_evaluator(evaluator_id: str) -> dict[str, Any]:
 class RunCreate(BaseModel):
     agent_id: str
     dataset_id: str | None = None
+    cloud_dataset_id: str | None = None  # AWS cloud dataset
+    # Bedrock model that plays the user for simulated persona scenarios —
+    # required whenever the selected dataset carries actor_profile items.
+    actor_model_id: str | None = Field(default=None, min_length=1, max_length=120)
     evaluators: list[str] = Field(default_factory=lambda: list(ac.BUILTIN_EVALUATORS))
     mode: str = Field(default="evaluators", pattern="^(evaluators|insights)$")
     wait_seconds: int = Field(default=90, ge=0, le=600)
@@ -493,11 +590,13 @@ def create_run(req: RunCreate, db: Session = Depends(get_db)) -> dict[str, Any]:
     if agent is None or agent.status != "active":
         raise AppError("agent.not_active", "agent must be active", status_code=400)
 
-    scopes = [bool(req.dataset_id), bool(req.session_ids), bool(req.lookback_hours)]
-    if sum(scopes) != 1:
+    dataset_scope = bool(req.dataset_id) or bool(req.cloud_dataset_id)
+    scopes = [dataset_scope, bool(req.session_ids), bool(req.lookback_hours)]
+    if sum(scopes) != 1 or (req.dataset_id and req.cloud_dataset_id):
         raise AppError(
             "run.scope_required",
-            "exactly one scope required: dataset_id, session_ids or lookback_hours",
+            "exactly one scope required: dataset_id, cloud_dataset_id, "
+            "session_ids or lookback_hours",
             status_code=422,
         )
     if req.insights:
@@ -518,6 +617,18 @@ def create_run(req: RunCreate, db: Session = Depends(get_db)) -> dict[str, Any]:
             raise NotFoundError("dataset.not_found", "dataset not found")
         items = dataset.items
         dataset_name = dataset.name
+    elif req.cloud_dataset_id:
+        cloud_name, items = _cloud_dataset_items(req.cloud_dataset_id)
+        # "cloud:" prefix marks the scope in the runs list (like "window:Nh")
+        dataset_name = f"cloud:{cloud_name}"
+
+    if any("actor_profile" in item for item in items) and not req.actor_model_id:
+        raise AppError(
+            "run.actor_model_required",
+            "this dataset contains simulated persona scenarios — pick an "
+            "actor_model_id (the Bedrock model that plays the user)",
+            status_code=422,
+        )
 
     # Trajectory*Match evaluators score against expectedTrajectory ground
     # truth — only a dataset run whose scenarios carry it can supply that.
@@ -525,7 +636,7 @@ def create_run(req: RunCreate, db: Session = Depends(get_db)) -> dict[str, Any]:
         has_trajectory_gt = any(
             s.get("expected_trajectory") for s in normalize_scenarios(items)
         )
-        if not (req.dataset_id and has_trajectory_gt):
+        if not (dataset_scope and has_trajectory_gt):
             raise AppError(
                 "run.trajectory_needs_ground_truth",
                 "trajectory evaluators need a dataset whose scenarios define "
@@ -549,7 +660,7 @@ def create_run(req: RunCreate, db: Session = Depends(get_db)) -> dict[str, Any]:
     run = service.submit_run(
         agent=agent,
         dataset_items=items,
-        dataset_id=req.dataset_id,
+        dataset_id=req.dataset_id or req.cloud_dataset_id,
         dataset_name=dataset_name,
         evaluators=applied,
         mode=req.mode,
@@ -558,6 +669,7 @@ def create_run(req: RunCreate, db: Session = Depends(get_db)) -> dict[str, Any]:
         time_range=time_range,
         insights=req.insights,
         lookback_hours=req.lookback_hours,
+        actor_model_id=req.actor_model_id,
     )
     return _run_out(run)
 

@@ -25,6 +25,7 @@ from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.errors import AppError
 from app.evaluation import agentcore_eval as ac
+from app.evaluation import simulation
 from app.evaluation.models import EvalRun
 from app.evaluation.queue import account_lock
 from app.evaluation.scenarios import (
@@ -110,6 +111,7 @@ def execute_run(
     time_range: dict[str, Any] | None = None,
     insights: list[str] | None = None,
     session_metadata: list[dict[str, Any]] | None = None,
+    actor_model_id: str | None = None,
 ) -> None:
     """Drive one evaluation run to completion (runs inside the account lock).
 
@@ -120,19 +122,30 @@ def execute_run(
         data = data_client()
         session_ids = list(existing_session_ids or [])
         if not session_ids and not time_range:
-            # One session per scenario; a scenario's turns replay sequentially
-            # in that same session. Ground truth (assertions / expected
-            # trajectory / expected responses) rides along as sessionMetadata.
+            # One session per scenario. Predefined scenarios replay their turns
+            # sequentially in that session; simulated persona scenarios run the
+            # SDK's LLM-actor loop (actor_model_id plays the user). Ground
+            # truth (assertions / expected trajectory / expected responses)
+            # rides along as sessionMetadata.
             scenarios = normalize_scenarios(items)
             _update(run_id, status="invoking")
             for scenario in scenarios:
                 sid: str | None = None
-                for prompt in scenario_prompts(scenario):
-                    if method == "harness":  # InvokeHarness, not the runtime data plane
-                        result = hc.invoke_harness_text(data, agent_arn, prompt, session_id=sid)
-                    else:
-                        result = rt.invoke_runtime_text(data, agent_arn, prompt, session_id=sid)
-                    sid = result["session_id"]
+                if simulation.is_simulated(scenario):
+                    sid = simulation.run_simulated_scenario(
+                        data,
+                        agent_arn=agent_arn,
+                        method=method,
+                        scenario=scenario,
+                        actor_model_id=actor_model_id or "",
+                    )
+                else:
+                    for prompt in scenario_prompts(scenario):
+                        if method == "harness":  # InvokeHarness, not the runtime data plane
+                            result = hc.invoke_harness_text(data, agent_arn, prompt, session_id=sid)
+                        else:
+                            result = rt.invoke_runtime_text(data, agent_arn, prompt, session_id=sid)
+                        sid = result["session_id"]
                 session_ids.append(sid)
                 _update(run_id, session_ids=list(session_ids))
             if session_metadata is None:
@@ -251,6 +264,7 @@ def submit_run(
     insights: list[str] | None = None,
     session_metadata: list[dict[str, Any]] | None = None,
     lookback_hours: int | None = None,
+    actor_model_id: str | None = None,
 ) -> EvalRun:
     service_name, log_group = resolve_telemetry(agent)
     # Window runs have no dataset; encode the scope in dataset_name so the
@@ -293,6 +307,7 @@ def submit_run(
             time_range=time_range,
             insights=insights,
             session_metadata=session_metadata,
+            actor_model_id=actor_model_id,
         ),
     )
     _update(run_id, queue_position=position)
