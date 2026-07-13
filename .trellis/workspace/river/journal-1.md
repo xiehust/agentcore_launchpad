@@ -327,3 +327,41 @@ members — venv only.
 
 - Optional: "promote to registry" action for custom-attached skills; TTL sweep
   for orphaned agent-skills/ prefixes (documented non-goals)
+
+---
+
+## 2026-07-13 — Live verification: container filesystem config (session storage)
+
+**Date**: 2026-07-13
+**Task**: (no Trellis task — pure verification run for 07-12-agent-sdk-capabilities-fs)
+**Package**: launchpad backend + real AWS
+**Branch**: `main`
+
+### Summary
+
+Deployed a REAL container agent through the platform API to prove the new
+filesystemConfigurations path end-to-end. Agent `fs-verify-agent`
+(id 95557700bafc456990fbab04e44c25d8, runtime fs_verify_agent_b8fc65-AxoujZAH13,
+CodeBuild 1.5m, READY) with default filesystem spec (session storage ON
+@ /mnt/workspace). All four checks passed:
+
+1. Control plane: GetAgentRuntime returned
+   `filesystemConfigurations=[{sessionStorage:{mountPath:"/mnt/workspace"}}]`,
+   networkMode PUBLIC (no BYO) — deploy stage passed the new params for real.
+2. Mount live: in-session Bash wrote /mnt/workspace/persist.txt; `df -h` shows
+   the mount is a real NFS filesystem `127.0.0.1:/export` sized **1.0G**
+   (managed session storage envelope).
+3. Persistence: StopRuntimeSession (200) → re-invoke SAME session id → new
+   microVM restored the file (`fs-proof-20260713` read back, ls shows it).
+4. Isolation: NEW session id → /mnt/workspace empty, FILE-ABSENT.
+
+Also proven implicitly: Bash works in the container under
+permission_mode=bypassPermissions even though ALLOWED_TOOLS=['Task'] —
+allowed_tools whitelisting doesn't restrict under bypass, so no template change
+was needed for file ops.
+
+### Status
+
+[OK] **Completed** — fs-verify-agent KEPT deployed as demo material (delete via
+DELETE /api/agents/95557700bafc456990fbab04e44c25d8 when no longer wanted;
+verification sessions stopped).
