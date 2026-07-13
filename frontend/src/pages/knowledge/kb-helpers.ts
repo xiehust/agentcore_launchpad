@@ -4,13 +4,28 @@ import type { ChipTone } from "../../components";
  *  turns ACTIVE (the create endpoint returns before the data source exists). */
 export const pendingSourceKey = (kbId: string) => `kb-pending-source:${kbId}`;
 
-/** Tone for data-source / ingestion-job statuses (raw AWS enum values). */
+/** Tone for data-source / ingestion-job / document statuses (raw AWS enums). */
 export function resourceTone(status: string): ChipTone {
   const s = status.toUpperCase();
-  if (["AVAILABLE", "COMPLETE", "COMPLETED", "READY", "ACTIVE"].includes(s)) return "good";
-  if (["FAILED"].includes(s)) return "crit";
-  if (["CREATING", "IN_PROGRESS", "STARTING", "SYNCING", "STOPPING"].includes(s)) return "warn";
+  if (["AVAILABLE", "COMPLETE", "COMPLETED", "READY", "ACTIVE", "INDEXED"].includes(s)) {
+    return "good";
+  }
+  if (["FAILED", "DELETE_FAILED", "NOT_FOUND"].includes(s)) return "crit";
+  if (
+    ["CREATING", "IN_PROGRESS", "STARTING", "SYNCING", "STOPPING", "PENDING",
+     "INDEXING", "PARTIALLY_INDEXED", "DELETING", "DELETE_IN_PROGRESS"].includes(s)
+  ) {
+    return "warn";
+  }
   return "muted";
+}
+
+/** 361727 → "353.2 KB" — document sizes in the data-source panel. */
+export function formatBytes(size: number | null | undefined): string {
+  if (size == null) return "—";
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 /** Pull a human message out of an error body ({code,message,detail} envelope or

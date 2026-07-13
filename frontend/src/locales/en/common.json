@@ -479,7 +479,16 @@
         "removeBody": "Remove “{{name}}” from this knowledge base? Ingested content from this source will no longer be retrievable.",
         "deleted": "Data source removed.",
         "jobsTitle": "INGESTION JOBS",
-        "autoCreated": "Data source created automatically."
+        "autoCreated": "Data source created automatically.",
+        "documents": "DOCUMENTS",
+        "docsRefresh": "REFRESH",
+        "docName": "NAME",
+        "docSize": "SIZE",
+        "docUploaded": "UPLOADED",
+        "docStatus": "STATUS",
+        "docIndexed": "INDEXED AT",
+        "docsEmpty": "no documents indexed yet — sync the data source first",
+        "docsLoadMore": "LOAD MORE"
       },
       "playground": {
         "title": "RETRIEVAL PLAYGROUND",

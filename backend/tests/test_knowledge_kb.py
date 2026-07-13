@@ -359,3 +359,89 @@ def test_strip_kb_from_agents_updates_specs(monkeypatch):
     row = db.query(Agent).filter(Agent.name == "kb-user").one()
     assert [r["kb_id"] for r in row.spec["knowledge_bases"]] == ["KBLIVE0002"]
     db.close()
+
+
+# ── data-source document listing ─────────────────────────────────────────────
+
+
+def _docs_client(next_token=None):
+    from unittest.mock import MagicMock
+
+    client = MagicMock()
+    client.get_knowledge_base.return_value = {
+        "knowledgeBase": {"knowledgeBaseConfiguration": {"type": "MANAGED"}}
+    }
+    client.list_knowledge_base_documents.return_value = {
+        "documentDetails": [
+            {
+                "status": "INDEXED",
+                "identifier": {"s3": {"uri": "s3://bkt/kb/KB1/guide.pdf"}},
+                "updatedAt": "2026-07-13T06:12:42+00:00",
+            },
+            {
+                "status": "FAILED",
+                "statusReason": "unsupported format",
+                "identifier": {"s3": {"uri": "s3://bkt/kb/KB1/weird.bin"}},
+            },
+        ],
+        **({"nextToken": next_token} if next_token else {}),
+    }
+    # connectorParameters as a JSON STRING — the GetDataSource document quirk
+    client.get_data_source.return_value = {
+        "dataSource": {
+            "dataSourceConfiguration": {
+                "managedKnowledgeBaseConnectorConfiguration": {
+                    "connectorParameters": (
+                        '{"connectionConfiguration": {"bucketName": "bkt"},'
+                        ' "filterConfiguration": {"inclusionPrefixes": ["kb/KB1/"]}}'
+                    )
+                }
+            }
+        }
+    }
+    return client
+
+
+def test_list_documents_joins_s3_meta_and_paginates(monkeypatch):
+    client = _docs_client(next_token="tok-2")
+    monkeypatch.setattr(knowledge, "agent_client", lambda: client)
+    monkeypatch.setattr(
+        knowledge,
+        "_s3_object_meta",
+        lambda bucket, prefix: {"kb/KB1/guide.pdf": (361727, "2026-07-13T06:09:31+00:00")},
+    )
+    out = knowledge.list_documents("KB1", "DS1", page_size=2, token="tok-1")
+
+    kwargs = client.list_knowledge_base_documents.call_args.kwargs
+    assert kwargs == {
+        "knowledgeBaseId": "KB1", "dataSourceId": "DS1",
+        "maxResults": 2, "nextToken": "tok-1",
+    }
+    assert out["next_token"] == "tok-2"
+    first, second = out["documents"]
+    assert first == {
+        "name": "guide.pdf",
+        "uri": "s3://bkt/kb/KB1/guide.pdf",
+        "status": "INDEXED",
+        "status_reason": None,
+        "indexed_at": "2026-07-13T06:12:42+00:00",
+        "size_bytes": 361727,
+        "uploaded_at": "2026-07-13T06:09:31+00:00",
+    }
+    # not in the S3 map + FAILED reason surfaced
+    assert second["size_bytes"] is None and second["uploaded_at"] is None
+    assert second["status_reason"] == "unsupported format"
+
+
+def test_list_documents_degrades_without_s3_access(monkeypatch):
+    client = _docs_client()
+    monkeypatch.setattr(knowledge, "agent_client", lambda: client)
+
+    def denied(bucket, prefix):
+        raise RuntimeError("AccessDenied")
+
+    monkeypatch.setattr(knowledge, "_s3_object_meta", denied)
+    out = knowledge.list_documents("KB1", "DS1")
+    assert out["next_token"] is None
+    assert all(d["size_bytes"] is None for d in out["documents"])
+    assert [d["name"] for d in out["documents"]] == ["guide.pdf", "weird.bin"]

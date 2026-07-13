@@ -673,3 +673,36 @@ Managed KB 管理 + agent 挂载全链路落地。要点:
 - 活体验证抓到 4 个真 bug:KB 创建异步 1.5–3min(创建接口改快路径+source_pending 前端接力)、GetDataSource 的 connectorParameters 是 JSON 字符串、target DELETING 态不能 update(等消失再建)、**UpdateHarness omit=keep 语义**(wrap_params_for_update 现在显式发空 tools/skills——此前删光工具的 re-publish 从未真正生效,存量 bug)。
 - E2E 证据:aurora-support 对话中可见 `aurora-deck-docs-bl6zkavwfb___Retrieve` TOOL CALLED×2,回答含 30-days 退款/AD-4411 workaround(样例文档独有事实)。
 - 留存 demo:KB aurora-deck-docs(BL6ZKAVWFB)+ agent aurora-support + launchpad-kb-gw。e2e 脚本:backend/scripts/e2e_knowledge_base.py / e2e_kb_gateway.py。
+
+---
+
+## 2026-07-13 — KB data sources: per-document metadata table (paginated)
+
+**Date**: 2026-07-13
+**Task**: (no Trellis task — small feature, user request)
+**Package**: launchpad backend + frontend
+**Branch**: `main`
+
+### Summary
+
+KB detail's data-source cards now expose the actual documents:
+`knowledge.list_documents` = ListKnowledgeBaseDocuments (works on MANAGED
+KBs; token-paginated) joined with S3 object metadata (size + upload time,
+one capped list_objects_v2 over the source prefix, best-effort for external
+buckets). New GET /{kb_id}/data-sources/{ds_id}/documents?page_size&token.
+Frontend `SourceDocuments`: lazy-expand "▤ 文档 (n)" per source → table
+名称/大小/上传时间/状态/索引时间 with FAILED statusReason tooltip, ⟳ refresh,
+and LOAD MORE token pagination. resourceTone learned document statuses
+(INDEXED good, INDEXING/PARTIALLY_INDEXED warn, NOT_FOUND crit).
+
+### Verified
+
+- Live on aurora-deck-docs: 3 docs incl. Chinese-named PDF (353.2 KB,
+  uploaded 06:09:31, INDEXED 06:12:42); token pagination proven at
+  page_size=2 (page1 2 rows + LOAD MORE → 3 rows, button gone).
+- 482 backend tests (2 new: S3-join shape + degrade-without-access);
+  tsc/eslint/i18n PASS. Screenshot kb-source-documents-zh.png.
+
+### Status
+
+[OK] **Completed**

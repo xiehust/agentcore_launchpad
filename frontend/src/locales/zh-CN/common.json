@@ -479,7 +479,16 @@
         "removeBody": "从此知识库移除“{{name}}”?该来源已 ingestion 的内容将不再可检索。",
         "deleted": "数据源已移除。",
         "jobsTitle": "INGESTION 任务",
-        "autoCreated": "数据源已自动创建。"
+        "autoCreated": "数据源已自动创建。",
+        "documents": "文档",
+        "docsRefresh": "刷新",
+        "docName": "名称",
+        "docSize": "大小",
+        "docUploaded": "上传时间",
+        "docStatus": "状态",
+        "docIndexed": "索引时间",
+        "docsEmpty": "尚无已索引文档——请先同步数据源",
+        "docsLoadMore": "加载更多"
       },
       "playground": {
         "title": "检索 PLAYGROUND",

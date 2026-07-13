@@ -11,7 +11,13 @@ import {
   type KnowledgeBaseDetail,
   type QueryResultItem,
 } from "../KnowledgeBases";
-import { extractConflictAgents, kbErrorMessage, pendingSourceKey, resourceTone } from "./kb-helpers";
+import {
+  extractConflictAgents,
+  formatBytes,
+  kbErrorMessage,
+  pendingSourceKey,
+  resourceTone,
+} from "./kb-helpers";
 import { SourcePicker, type SourceMode } from "./SourcePicker";
 
 interface DetailViewProps {
@@ -35,6 +41,156 @@ function isInFlight(d: KnowledgeBaseDetail): boolean {
 // "numberOfDocumentsScanned" → "Documents Scanned" (AWS stat keys, shown raw).
 function humanizeStat(key: string): string {
   return key.replace(/^numberOf/, "").replace(/([A-Z])/g, " $1").trim();
+}
+
+interface KBDocument {
+  name: string;
+  uri: string;
+  status: string;
+  status_reason?: string | null;
+  indexed_at?: string | null;
+  size_bytes?: number | null;
+  uploaded_at?: string | null;
+}
+
+const DOC_PAGE_SIZE = 50;
+
+// Per-source document listing — loaded lazily on expand; the backend page is
+// token-based (ListKnowledgeBaseDocuments), so pagination is a LOAD MORE that
+// appends the next page.
+function SourceDocuments({ kbId, dsId }: { kbId: string; dsId: string }) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const [docs, setDocs] = useState<KBDocument[] | null>(null);
+  const [nextToken, setNextToken] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadPage = async (token: string | null) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const qs = new URLSearchParams({ page_size: String(DOC_PAGE_SIZE) });
+      if (token) qs.set("token", token);
+      const res = await fetch(
+        `/api/knowledge-bases/${kbId}/data-sources/${dsId}/documents?${qs.toString()}`,
+      );
+      const body = (await res.json().catch(() => ({}))) as {
+        documents?: KBDocument[];
+        next_token?: string | null;
+        message?: string;
+      };
+      if (!res.ok) {
+        setError(kbErrorMessage(body, res.status));
+        return;
+      }
+      setDocs((prev) =>
+        token ? [...(prev ?? []), ...(body.documents ?? [])] : (body.documents ?? []),
+      );
+      setNextToken(body.next_token ?? null);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const linkStyle: CSSProperties = {
+    background: "none",
+    border: 0,
+    color: "var(--amber)",
+    cursor: "pointer",
+    fontFamily: "var(--mono)",
+    fontSize: 10,
+    padding: 0,
+  };
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <button
+          type="button"
+          style={{ ...linkStyle, letterSpacing: ".14em" }}
+          onClick={() => {
+            const next = !open;
+            setOpen(next);
+            if (next && docs === null) void loadPage(null);
+          }}
+          data-testid="kb-docs-toggle"
+        >
+          ▤ {t("knowledge.detail.sources.documents")} {open ? "▾" : "▸"}
+          {docs !== null && ` (${docs.length}${nextToken ? "+" : ""})`}
+        </button>
+        {open && docs !== null && (
+          <button
+            type="button"
+            style={linkStyle}
+            onClick={() => void loadPage(null)}
+            data-testid="kb-docs-refresh"
+          >
+            ⟳ {t("knowledge.detail.sources.docsRefresh")}
+          </button>
+        )}
+      </div>
+
+      {open && (
+        <div style={{ marginTop: 8 }}>
+          {error && (
+            <div className="note" style={{ color: "var(--crit)", borderColor: "var(--crit)" }}>
+              <span className="i">!</span>
+              <span>{error}</span>
+            </div>
+          )}
+          {docs !== null && docs.length === 0 && !loading && !error && (
+            <p className="dim" style={{ fontSize: 12, margin: 0 }}>
+              {t("knowledge.detail.sources.docsEmpty")}
+            </p>
+          )}
+          {docs !== null && docs.length > 0 && (
+            <table data-testid="kb-docs-table">
+              <thead>
+                <tr>
+                  <th>{t("knowledge.detail.sources.docName")}</th>
+                  <th>{t("knowledge.detail.sources.docSize")}</th>
+                  <th>{t("knowledge.detail.sources.docUploaded")}</th>
+                  <th>{t("knowledge.detail.sources.docStatus")}</th>
+                  <th>{t("knowledge.detail.sources.docIndexed")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {docs.map((doc) => (
+                  <tr key={doc.uri}>
+                    <td title={doc.uri} style={{ wordBreak: "break-all" }}>
+                      {doc.name}
+                    </td>
+                    <td className="mono">{formatBytes(doc.size_bytes)}</td>
+                    <td className="mono">{doc.uploaded_at?.slice(0, 19).replace("T", " ") ?? "—"}</td>
+                    <td>
+                      <Chip tone={resourceTone(doc.status)}>{doc.status}</Chip>
+                      {doc.status_reason && (
+                        <span className="dim" style={{ fontSize: 10.5, marginLeft: 6 }} title={doc.status_reason}>
+                          !
+                        </span>
+                      )}
+                    </td>
+                    <td className="mono">{doc.indexed_at?.slice(0, 19).replace("T", " ") ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {loading && <div className="loading-line">{t("common.loading")}</div>}
+          {!loading && nextToken && (
+            <div style={{ marginTop: 8 }}>
+              <Btn onClick={() => void loadPage(nextToken)} data-testid="kb-docs-more">
+                {t("knowledge.detail.sources.docsLoadMore")} ▸
+              </Btn>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function DetailView({ kbId, onBack }: DetailViewProps) {
@@ -646,6 +802,8 @@ export function DetailView({ kbId, onBack }: DetailViewProps) {
                     <span>{ds.failure_reasons.join("; ")}</span>
                   </div>
                 )}
+
+                <SourceDocuments kbId={kbId} dsId={ds.ds_id} />
 
                 {jobs.length > 0 && (
                   <div style={{ marginTop: 12 }}>

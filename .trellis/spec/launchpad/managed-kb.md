@@ -36,6 +36,15 @@ method. Introduced by task `07-13-managed-kb`.
 - Retrieval data plane: `bedrock-agent-runtime.retrieve(knowledgeBaseId,
   retrievalQuery, retrievalConfiguration={managedSearchConfiguration:
   {numberOfResults}})` (NOT vectorSearchConfiguration for managed KBs).
+- Document listing: `ListKnowledgeBaseDocuments(knowledgeBaseId, dataSourceId,
+  maxResults, nextToken)` works on managed KBs — per doc: S3 uri identifier,
+  `status` (INDEXED/FAILED/…, `statusReason` on failures), `updatedAt` (index
+  time). Size + upload time come from S3 (`knowledge._s3_object_meta`, one
+  list_objects_v2 over the source prefix, capped 5k keys, best-effort — external
+  buckets may deny). `GET /{kb_id}/data-sources/{ds_id}/documents?page_size=
+  1..100&token=` is token-paginated; the DetailView `SourceDocuments` section
+  (lazy expand per source) renders name/size/uploaded/status/indexed with a
+  LOAD MORE appender.
 - Gateway connector: `create_gateway_target(targetConfiguration.mcp.connector
   ={source:{connectorId:"bedrock-knowledge-bases"}, configurations:[…]})`,
   credential type `GATEWAY_IAM_ROLE` only. Two tool entries: `Retrieve`

@@ -404,6 +404,75 @@ def get_kb_detail(kb_id: str) -> dict[str, Any]:
     }
 
 
+def _s3_object_meta(bucket: str, prefix: str | None) -> dict[str, tuple[int, str | None]]:
+    """key → (size, last_modified ISO) over the source location. Best-effort
+    upload-time/size enrichment — external buckets may deny the backend, and
+    huge buckets are capped (enrichment, not the source of truth)."""
+    s3 = boto3.client("s3", region_name=get_settings().region)
+    out: dict[str, tuple[int, str | None]] = {}
+    kwargs: dict[str, Any] = {"Bucket": bucket}
+    if prefix:
+        kwargs["Prefix"] = prefix
+    for _ in range(5):  # ≤5k objects
+        resp = s3.list_objects_v2(**kwargs)
+        for obj in resp.get("Contents", []):
+            out[obj["Key"]] = (obj.get("Size", 0), _iso(obj.get("LastModified")))
+        if not resp.get("IsTruncated"):
+            break
+        kwargs["ContinuationToken"] = resp["NextContinuationToken"]
+    return out
+
+
+def list_documents(
+    kb_id: str, ds_id: str, *, page_size: int = 50, token: str | None = None
+) -> dict[str, Any]:
+    """One page of a data source's documents (ListKnowledgeBaseDocuments,
+    token-paginated) with the KB-side index status plus S3-side size and
+    upload time joined in by object key."""
+    client = agent_client()
+    _require_managed(_get_kb(client, kb_id))
+    kwargs: dict[str, Any] = {
+        "knowledgeBaseId": kb_id,
+        "dataSourceId": ds_id,
+        "maxResults": page_size,
+    }
+    if token:
+        kwargs["nextToken"] = token
+    try:
+        resp = client.list_knowledge_base_documents(**kwargs)
+        full = client.get_data_source(knowledgeBaseId=kb_id, dataSourceId=ds_id)["dataSource"]
+    except client.exceptions.ResourceNotFoundException as exc:
+        raise NotFoundError("kb.ds_not_found", "data source not found") from exc
+    bucket, prefix = _parse_ds_location(full)
+    meta: dict[str, tuple[int, str | None]] = {}
+    if bucket:
+        try:
+            meta = _s3_object_meta(bucket, prefix)
+        except Exception:
+            meta = {}
+    documents: list[dict[str, Any]] = []
+    for doc in resp.get("documentDetails", []):
+        uri = ((doc.get("identifier") or {}).get("s3") or {}).get("uri") or ""
+        key = uri.removeprefix(f"s3://{bucket}/") if bucket else ""
+        size, uploaded = meta.get(key, (None, None)) if key != uri else (None, None)
+        documents.append(
+            {
+                "name": uri.rsplit("/", 1)[-1] or uri or "—",
+                "uri": uri,
+                "status": doc.get("status"),
+                "status_reason": doc.get("statusReason"),
+                "indexed_at": _iso(doc.get("updatedAt")),
+                "size_bytes": size,
+                "uploaded_at": uploaded,
+            }
+        )
+    return {
+        "documents": documents,
+        "next_token": resp.get("nextToken"),
+        "page_size": page_size,
+    }
+
+
 def _wait_kb_active(client: Any, kb_id: str, timeout_s: int = 60, interval_s: int = 3) -> str:
     """Poll until the KB leaves CREATING (or the fast-path window closes).
     Returns the last observed status; only FAILED raises. KB creation was

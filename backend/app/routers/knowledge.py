@@ -4,7 +4,7 @@ handling mirrors routers/registry.py (domain AppErrors surface as envelopes)."""
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel, Field
 from starlette.datastructures import UploadFile
 
@@ -101,6 +101,16 @@ def sync_data_source(kb_id: str, ds_id: str) -> dict[str, Any]:
 @router.get("/{kb_id}/data-sources/{ds_id}/ingestion-jobs")
 def list_ingestion_jobs(kb_id: str, ds_id: str) -> dict[str, Any]:
     return {"items": knowledge.list_ingestion_jobs(kb_id, ds_id)}
+
+
+@router.get("/{kb_id}/data-sources/{ds_id}/documents")
+def list_documents(
+    kb_id: str,
+    ds_id: str,
+    page_size: int = Query(default=50, ge=1, le=100),
+    token: str | None = None,
+) -> dict[str, Any]:
+    return knowledge.list_documents(kb_id, ds_id, page_size=page_size, token=token)
 
 
 @router.post("/{kb_id}/query")
