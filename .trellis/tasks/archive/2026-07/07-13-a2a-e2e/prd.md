@@ -35,17 +35,17 @@ system). Suggested execution order: agent-create → registry-cards → demo.
 
 ## Cross-child acceptance criteria (integration review)
 
-- [ ] An A2A agent created through the UI appears in Registry with a card whose
+- [x] An A2A agent created through the UI appears in Registry with a card whose
       `url` resolves (well-known agent-card fetch succeeds via SigV4) and whose
       `skills` match what was configured at create time.
-- [ ] Chat playground works against an A2A agent (JSON-RPC under the hood) with
+- [x] Chat playground works against an A2A agent (JSON-RPC under the hood) with
       the same UX as HTTP agents.
-- [ ] The front-desk demo discovers ONLY APPROVED records: rejecting a
+- [x] The front-desk demo discovers ONLY APPROVED records: rejecting a
       specialist's record removes it from routing within one query; re-approving
       restores it (governance loop uses REJECTED, never DEPRECATED — terminal).
-- [ ] A2A agents are excluded from experiments with a reasoned disabled state
+- [x] A2A agents are excluded from experiments with a reasoned disabled state
       (no config-bundle consumption), mirroring the harness gating pattern.
-- [ ] Bilingual (en/zh-CN) for every new UI surface; backend tests green.
+- [x] Bilingual (en/zh-CN) for every new UI surface; backend tests green.
 
 ## Out of scope (parent-level)
 
@@ -53,3 +53,13 @@ system). Suggested execution order: agent-create → registry-cards → demo.
 - A2A streaming responses in chat (sync message/send first; streaming later).
 - Cross-account / external A2A agent registration.
 - AGUI protocol (enum exists; not this effort).
+
+## Integration review (2026-07-13)
+
+All three children DONE + archived. Cross-child criteria verified live:
+UI-created A2A agent has a resolvable card with configured skills; chat/eval
+parity via the protocol dispatch; the demo discovers only APPROVED records
+and the REJECT/APPROVE loop flips routing within one question (proven with
+the aurora pair — the reject leg is ALSO the standard-A2A-transport proof);
+experiments disable A2A agents bilingually; 551 backend tests green.
+Kept resources: aurora-faq-a2a (A2A specialist), front-desk (router).
