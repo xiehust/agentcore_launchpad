@@ -615,7 +615,6 @@ export function CreateAgent() {
                 ) : method === "container" ? (
                   <>
                     <span className="selchip on">Task · subagents ✓</span>
-                    <span className="selchip on">fact-checker · .claude/agents ✓</span>
                     {remoteMcp.map((server) => (
                       <button
                         key={server.name}
