@@ -705,13 +705,20 @@
       "title": "EVALUATORS",
       "meta": "BUILTIN CATALOG · CUSTOM LLM-AS-A-JUDGE — CREATE / EDIT / DELETE",
       "listTitle": "CATALOG",
-      "listSub": "builtin (read-only) + custom judges",
-      "builtinSection": "BUILTIN",
-      "customSection": "CUSTOM",
+      "listSub": "builtin (read-only) + custom judges — click a row",
+      "new": "NEW EVALUATOR",
+      "col": {
+        "name": "NAME",
+        "level": "LEVEL",
+        "source": "SOURCE",
+        "gt": "GT",
+        "status": "STATUS"
+      },
       "readonly": "READONLY",
-      "empty": "NO CUSTOM EVALUATORS YET — CREATE ONE ON THE RIGHT",
+      "readonlyHint": "Builtin evaluators are service-managed and read-only — borrow their ideas into a custom judge if you need changes.",
+      "empty": "NO EVALUATORS — CREATE A CUSTOM JUDGE BELOW",
       "loadFailed": "account evaluator listing unavailable",
-      "edit": "EDIT",
+      "detailFailed": "evaluator detail unavailable — reload and try again",
       "delete": "DELETE",
       "formTitleCreate": "CREATE EVALUATOR",
       "formTitleEdit": "EDIT EVALUATOR",
@@ -735,34 +742,55 @@
       "removePoint": "remove this point",
       "create": "CREATE",
       "save": "SAVE CHANGES",
-      "cancelEdit": "CANCEL",
       "created": "Evaluator created — it appears in the list once ACTIVE.",
       "updated": "Evaluator updated.",
       "deleted": "Evaluator deleted.",
       "confirmDelete": {
         "title": "Delete evaluator",
         "body": "Delete custom evaluator “{{name}}”? Past run scores keep their values; the evaluator is removed from the account."
+      },
+      "how": {
+        "title": "HOW A JUDGE WORKS",
+        "sub": "LLM-as-a-judge · create → select in runs",
+        "s1": "LEVEL — TRACE / SESSION / TOOL_CALL decide which placeholders resolve",
+        "s2": "INSTRUCTIONS — a judge prompt with at least one {placeholder} token",
+        "s3": "RATING SCALE — a numerical scale with 2+ labeled points",
+        "s4": "SELECT — pick the judge as an evaluator in NEW RUN",
+        "note": "Builtin evaluators are service-managed and read-only; custom judges run on the Bedrock model you pick."
       }
     },
     "datasets": {
       "title": "DATASETS",
       "meta": "LOCAL SQLITE SOURCE · ONE-WAY SYNC TO AWS DATASET RESOURCES",
-      "listTitle": "LOCAL DATASETS",
-      "listSub": "the source of truth — cloud copies are immutable snapshots",
-      "empty": "NO DATASETS YET — CREATE ONE ON THE RIGHT",
+      "listTitle": "ALL DATASETS",
+      "listSub": "local source rows + cloud-only snapshots — click a row",
+      "new": "NEW DATASET",
+      "col": {
+        "name": "NAME",
+        "items": "ITEMS",
+        "kind": "KIND",
+        "gt": "GT",
+        "cloud": "CLOUD"
+      },
+      "empty": "NO DATASETS YET — CREATE ONE BELOW",
       "gt": "GT",
       "notSynced": "NOT SYNCED",
       "cloudGone": "CLOUD DELETED",
-      "edit": "EDIT",
       "sync": "SYNC TO AWS",
       "syncing": "SYNCING",
       "synced": "Dataset synced — the AWS copy is ACTIVE.",
       "delete": "DELETE",
       "deleted": "Dataset deleted.",
       "cloudDeleted": "Cloud dataset deleted.",
-      "cloudSection": "AWS CLOUD DATASETS",
       "cloudUnavailable": "cloud dataset listing unavailable",
-      "cloudEmpty": "NO CLOUD DATASETS — SYNC A LOCAL ONE",
+      "cloudReadonly": "Cloud datasets are immutable snapshots — edit the local source and re-sync, or delete this copy.",
+      "detail": {
+        "id": "DATASET ID",
+        "schema": "SCHEMA",
+        "examples": "EXAMPLES",
+        "status": "STATUS",
+        "updated": "UPDATED"
+      },
       "formTitleCreate": "CREATE DATASET",
       "formTitleEdit": "EDIT DATASET",
       "formSub": "scenarios · turns · ground truth",
@@ -790,7 +818,6 @@
       "importEmpty": "nothing to import — paste JSON first",
       "create": "CREATE",
       "save": "SAVE CHANGES",
-      "cancelEdit": "CANCEL",
       "created": "Dataset created.",
       "updated": "Dataset updated.",
       "confirmDelete": {
@@ -800,6 +827,15 @@
       "confirmCloudDelete": {
         "title": "Delete cloud dataset",
         "body": "Delete AWS dataset “{{name}}”? Cloud datasets are immutable — this removes the resource from the account."
+      },
+      "how": {
+        "title": "HOW DATASETS WORK",
+        "sub": "local source of truth · one-way sync to AWS",
+        "s1": "AUTHOR — scenarios with turns, assertions and an expected trajectory (ground truth), or import JSON/JSONL",
+        "s2": "STORE — the local SQLite row stays editable and is the source of truth",
+        "s3": "SYNC — SYNC TO AWS creates an immutable cloud dataset snapshot",
+        "s4": "RUN — pick the dataset (local or ☁ cloud) as the scope in NEW RUN",
+        "note": "kind is inferred from the items and immutable server-side; cloud copies can only be deleted, never edited."
       }
     },
     "evaluatorNames": {
