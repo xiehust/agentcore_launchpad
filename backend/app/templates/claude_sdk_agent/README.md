@@ -14,6 +14,7 @@ ARM64 image for AgentCore Runtime. Pinned versions verified 2026-07-09:
 Bedrock mode: `CLAUDE_CODE_USE_BEDROCK=1` is baked into the image; the claude CLI
 uses the runtime execution role for `bedrock:InvokeModel*` — no API key anywhere.
 
-Subagents: drop markdown definitions into `.claude/agents/` (one sample,
-`fact-checker`, ships with the scaffold). `setting_sources=["project"]` makes the
-SDK load them from `/app/.claude`.
+Subagents/skills: drop markdown definitions into `.claude/agents/` (none ship by
+default) — registry/custom skills selected in the wizard are bundled into
+`.claude/skills/` at build time. `setting_sources=["project"]` makes the SDK
+load both from `/app/.claude`.

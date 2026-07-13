@@ -65,6 +65,11 @@ def assemble_build_context(spec: AgentSpec, target_dir: Path) -> Path:
     for name in ("Dockerfile", "requirements.txt", "buildspec.yml", "README.md",
                  "tracing.py"):
         shutil.copy2(TEMPLATE_DIR / name, target_dir / name)
-    shutil.copytree(TEMPLATE_DIR / ".claude", target_dir / ".claude")
+    # .claude scaffold ships empty since the fact-checker sample was dropped —
+    # git can't track empty dirs, so copy only if a future scaffold reappears;
+    # the skill bundler creates .claude/skills/ on demand.
+    scaffold = TEMPLATE_DIR / ".claude"
+    if scaffold.exists():
+        shutil.copytree(scaffold, target_dir / ".claude")
     (target_dir / "main.py").write_text(render_main_py(spec), encoding="utf-8")
     return target_dir

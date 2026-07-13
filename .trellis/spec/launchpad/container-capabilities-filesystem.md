@@ -109,7 +109,9 @@ its picks in ONE call — per-item calls would drop staging after the first).
 - `spec.skills` (both registry `skills/{name}/` and custom
   `agent-skills/{uid}/{name}/` prefixes) are downloaded at generate-time into
   the build context `.claude/skills/{name}/` — the claude CLI discovers them
-  next to `agents/` (HOME=/app). Skill failures log + skip, never sink a deploy.
+  under `/app/.claude` (HOME=/app; the scaffold ships no baked-in subagents
+  since 2026-07-13 — the fact-checker sample was dropped as not SDK-native).
+  Skill failures log + skip, never sink a deploy.
 - Deploy passes `filesystemConfigurations` + `vpc` on BOTH create and update;
   network flips PUBLIC→VPC exactly when BYO mounts exist. Old specs (no
   `filesystem` key) default to session-ON — safe because the version bump resets

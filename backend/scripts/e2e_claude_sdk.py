@@ -17,8 +17,7 @@ import httpx
 
 AGENT_NAME = "e2e-claude-sdk"
 SYSTEM_PROMPT = (
-    "You are a terse assistant. For arithmetic, dispatch the fact-checker subagent "
-    "to verify your result before answering. Answer with just the result."
+    "You are a terse assistant. Answer with just the result."
 )
 
 

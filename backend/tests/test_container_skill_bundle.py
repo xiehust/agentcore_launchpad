@@ -118,5 +118,5 @@ def test_container_build_context_includes_skills(tmp_path: Path, monkeypatch):
 
     ctx_dir = c._build_context(spec, AgentRow(), lambda m: None)
     assert (ctx_dir / ".claude/skills/web-analyzer/SKILL.md").exists()
-    assert (ctx_dir / ".claude/agents/fact-checker.md").exists()  # scaffold intact
+    assert not (ctx_dir / ".claude/agents").exists()  # no baked-in subagents anymore
     assert (ctx_dir / "main.py").exists()

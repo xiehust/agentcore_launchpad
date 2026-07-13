@@ -4,7 +4,9 @@ The BedrockAgentCoreApp wrapper adapts AgentCore Runtime's /invocations contract
 to a claude-agent-sdk query. Models are served through Bedrock
 (CLAUDE_CODE_USE_BEDROCK=1) using the runtime execution role — no API key.
 
-Subagents live in /app/.claude/agents/ and are discovered by the claude CLI.
+Wizard-selected skills are bundled into /app/.claude/skills/ (and any
+subagent markdown dropped into /app/.claude/agents/) — both discovered by
+the claude CLI via setting_sources.
 
 Telemetry: the SDK drives the claude CLI as a subprocess, invisible to ADOT
 auto-instrumentation — tracing.py emits the gen_ai spans/events manually

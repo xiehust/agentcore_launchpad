@@ -106,7 +106,8 @@ def test_assemble_build_context(tmp_path: Path):
     files = {str(p.relative_to(ctx)) for p in ctx.rglob("*") if p.is_file()}
     assert {"Dockerfile", "requirements.txt", "buildspec.yml", "main.py",
             "tracing.py"} <= files
-    assert ".claude/agents/fact-checker.md" in files
+    # no baked-in subagents: the fact-checker sample was dropped (not SDK-native)
+    assert not any(f.startswith(".claude/agents/") for f in files)
     dockerfile = (ctx / "Dockerfile").read_text()
     assert "linux/arm64" in dockerfile
     assert "CLAUDE_CODE_USE_BEDROCK=1" in dockerfile
