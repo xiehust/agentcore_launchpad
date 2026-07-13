@@ -706,3 +706,48 @@ and LOAD MORE token pagination. resourceTone learned document statuses
 ### Status
 
 [OK] **Completed**
+
+---
+
+## 2026-07-13 · 07-13-experiment-stepwise
+
+**Task**: .trellis/tasks/07-13-experiment-stepwise · **Branch**: main
+
+### Summary
+
+Experiments 模块从"单线程自动流水线"重构为 step-by-step 用户驱动流（参考
+agentxray Live-on-AWS 控制台,含部署站点实访取证）。后端:11 个 action 动词复用
+`POST /experiments/{id}/action`(长动作 202+daemon 线程,短动作 200 inline),
+行级 `running_action/progress` 列(刷新/重启可恢复),accept 可编辑推荐,
+traffic 支持数据集回放(复用 scenario_prompts 解包 dict input),
+`clear_stale_running_actions()` 启动清扫(--reload 杀线程导致 409 永锁的真实缺
+口,活体踩到后补齐)。前端:EvaluationExperiment.tsx 重建为 artifact 驱动的渐进
+式阶段卡片(active 琥珀边框/done 绿✓),DiffPanes(CHANGED 标记)+可编辑
+textarea+ACCEPT,actionBtn 模式(按钮→进度行→工件回显→失败 `action:` 前缀定位
+重试),i18n en/zh-CN 各 +24 键。旧 auto-pipeline 记录零迁移兼容(A8,活体 DB 验证)。
+
+### Verified
+
+- 后端 506 tests 全绿(+18 stepwise;含 check 子代理补充的 rerun-preserves-accept
+  与 dict-input 用例);改动文件 ruff 干净;前端 lint/build 干净。
+- fetch-stub 浏览器取证 13 张(evidence/):fresh/running/diff-accept/gwab/
+  traffic 数据集选择/verdict 非显著(次级 PROMOTE+建议注记)/verdict 显著/canary
+  权重条+RAMP/failed 重试/old-row A8。
+- e2e_experiment.py 重写为逐 action 驱动,真实 AWS 运行中(记录于本任务)。
+
+### Notes
+
+- impl-backend 子代理连续两次 API 504(~80min 零产出)→ 改为主会话直接实现;
+  check 子代理 PASS-WITH-FIXES:自修 2 处(scenario_prompts 复用+测试),另提出
+  2 个结构性问题——bundles 重试不幂等(已修:create_bundle_idempotent,
+  ListConfigurationBundles adopt-by-name)+ status=failed 仅遗留语义(已写入 spec:
+  stepwise 失败保持 running+内联重试,cleanup 是唯一占位逃生口)。
+- 活体踩坑复盘:--reload 两次杀掉进行中线程(编辑 backend py 触发),启动清扫都
+  正确转为可重试错误;e2e 脚本因此加了 resume(按工件跳过已完成 action)。
+  数据集路由是 /api/eval/datasets(前端与 e2e 初版都写错成 /api/evaluation/,
+  fetch-stub 掩盖了 404——stub URL 必须镜像真实路由)。
+- spec 新增 .trellis/spec/launchpad/experiment-stepwise.md(7-section code-spec)。
+
+### Status
+
+[OK] Blocks 1–2 complete; Block 3 e2e running

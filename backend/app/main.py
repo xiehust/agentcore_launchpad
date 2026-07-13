@@ -15,6 +15,7 @@ from app.deployer.pipeline import resume_pending_jobs
 from app.evaluation.routers import router as evaluation_router
 from app.evaluation.service import resume_interrupted_runs
 from app.optimization.routers import router as experiments_router
+from app.optimization.service import clear_stale_running_actions
 from app.routers.agent_skills import router as agent_skills_router
 from app.routers.agents import router as agents_router
 from app.routers.apikeys import router as apikeys_router
@@ -86,6 +87,12 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
             logging.getLogger("launchpad").info(
                 "reconciling %d interrupted eval run(s): %s",
                 len(resumed_evals), ", ".join(resumed_evals),
+            )
+        stale_actions = clear_stale_running_actions()
+        if stale_actions:
+            logging.getLogger("launchpad").info(
+                "cleared stale experiment action(s) on: %s",
+                ", ".join(stale_actions),
             )
         start_auto_refresh()  # periodic model-price refresh (real server only)
 

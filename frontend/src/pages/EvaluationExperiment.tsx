@@ -1,5 +1,5 @@
 import type { TFunction } from "i18next";
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
@@ -24,13 +24,27 @@ export interface ExperimentInfo {
   status: string;
   stage: string;
   stages: string[];
+  running_action: string | null;
+  progress: string | null;
   error: string | null;
   created_at: string | null;
   artifacts: {
-    recommend?: { recommended_prompt: string };
-    bundles?: { control: { arn: string }; treatment: { arn: string } };
+    agent_meta?: { system_prompt?: string; name?: string };
+    recommend?: {
+      recommended_prompt: string;
+      explanation?: string;
+      tool_descriptions?: Record<string, string>;
+      accepted_prompt?: string;
+      accepted_tool_descriptions?: Record<string, string>;
+    };
+    bundles?: {
+      control: { bundle_id?: string; arn: string; version?: string };
+      treatment: { bundle_id?: string; arn: string; version?: string };
+    };
+    gateway?: { gateway_id: string; gateway_url?: string; target_v1?: string };
     abtest?: { ab_test_id: string };
-    traffic?: { sent: number; failed: number };
+    traffic?: { sent: number; failed: number; dataset_id?: string;
+      dataset_name?: string };
     verdict?: { verdict: string; avg_delta?: number; n?: number;
       significant?: boolean; metrics: ABMetric[] };
     promote?: { after_weights: Record<string, number> };
@@ -43,6 +57,13 @@ export interface ExperimentInfo {
     };
     cleanup?: { category: string; status: string }[];
   };
+}
+
+interface DatasetInfo {
+  id: string;
+  name: string;
+  kind: string;
+  item_count: number;
 }
 
 // Mirrors backend STAGES (app/optimization/models.py) — the sidebar renders
@@ -76,64 +97,70 @@ export function experimentTone(status: string): "good" | "warn" | "crit" | "mute
   return "good"; // ready | promoted
 }
 
-// The 10-segment rail: done ✓ / current highlighted (pulse while running,
-// result color otherwise, ✕ on failure) / future grey, with a one-line hint
-// under the current segment saying what is happening and how long it takes.
-function StagePipeline({ exp }: { exp: ExperimentInfo }) {
-  const { t } = useTranslation();
-  const stages = exp.stages?.length ? exp.stages : LOOP_STAGES;
-  const cur = stages.indexOf(exp.stage);
-  const failed = exp.status === "failed";
+// Side-by-side before/after panes; the after pane goes green when it differs
+// (agentxray DiffView pattern — panel diff, deliberately not token-level).
+function DiffPanes({ before, after, beforeLabel, afterLabel }: {
+  before: string; after: string; beforeLabel: string; afterLabel: string;
+}) {
+  const changed = before.trim() !== after.trim();
+  const pane: CSSProperties = {
+    maxHeight: 180, overflow: "auto", whiteSpace: "pre-wrap",
+    fontSize: 10.5, margin: 0,
+  };
   return (
-    <div data-testid="stage-pipeline" style={{ marginBottom: 12 }}>
-      {stages.map((s, i) => {
-        const state = i < cur ? "done" : i === cur ? (failed ? "failed" : "current") : "future";
-        const color =
-          state === "done" ? "var(--good)"
-            : state === "failed" ? "var(--crit)"
-              : state === "current"
-                ? exp.status === "running" ? "var(--warn)" : "var(--good)"
-                : "var(--ink-3)";
-        const icon =
-          state === "done" ? "✓"
-            : state === "failed" ? "✕"
-              : state === "current" ? (exp.status === "running" ? "◐" : "●") : "·";
-        return (
-          <div key={s} data-testid={`stage-${s}`} data-state={state}>
-            <div style={{ display: "flex", gap: 9, alignItems: "baseline" }}>
-              <span className="mono" style={{ color, width: 12, textAlign: "center" }}>
-                {icon}
-              </span>
-              <span
-                className="mono"
-                style={{
-                  color,
-                  fontSize: 10.5,
-                  letterSpacing: ".1em",
-                  fontWeight: state === "current" || state === "failed" ? 700 : 400,
-                }}
-              >
-                {s.toUpperCase()}
-              </span>
-            </div>
-            {(state === "current" || state === "failed") && (
-              <div
-                data-testid="stage-hint"
-                className={failed ? "mono" : "dim"}
-                style={{
-                  fontSize: 10.5,
-                  margin: "2px 0 4px 21px",
-                  color: failed ? "var(--crit)" : undefined,
-                }}
-              >
-                {failed
-                  ? exp.error
-                  : t(`evalPage.experiment.stageHint.${exp.status === "ready" ? "ready" : s}`)}
-              </div>
-            )}
-          </div>
-        );
-      })}
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+      <div>
+        <div className="mono dim" style={{ fontSize: 9.5, marginBottom: 3 }}>
+          {beforeLabel}
+        </div>
+        <pre className="code" style={pane}>{before || "—"}</pre>
+      </div>
+      <div>
+        <div
+          className="mono"
+          style={{ fontSize: 9.5, marginBottom: 3, display: "flex",
+                   justifyContent: "space-between",
+                   color: changed ? "var(--good)" : undefined }}
+        >
+          <span>{afterLabel}</span>
+          {changed && <span>CHANGED</span>}
+        </div>
+        <pre
+          className="code"
+          style={{ ...pane,
+                   border: changed ? "1px solid rgba(63,185,80,.4)" : undefined }}
+        >
+          {after || "—"}
+        </pre>
+      </div>
+    </div>
+  );
+}
+
+// One stage card: numbered title, accent bar for the active stage, ✓ when done.
+function StageCard({ id, index, title, active, done, children }: {
+  id: string; index: number; title: string;
+  active: boolean; done: boolean; children: ReactNode;
+}) {
+  return (
+    <div
+      data-testid={`card-${id}`}
+      style={{
+        border: "1px solid var(--line)",
+        borderLeft: `3px solid ${
+          active ? "var(--warn)" : done ? "var(--good)" : "var(--line)"}`,
+        borderRadius: 4, padding: "10px 12px", marginBottom: 10,
+      }}
+    >
+      <div
+        className="mono"
+        style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".08em",
+                 marginBottom: 8,
+                 color: active ? "var(--warn)" : done ? "var(--good)" : "var(--ink-3)" }}
+      >
+        {String(index).padStart(2, "0")} · {title}{done ? " ✓" : ""}
+      </div>
+      {children}
     </div>
   );
 }
@@ -143,10 +170,14 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
   const toast = useToast();
   const [experiments, setExperiments] = useState<ExperimentInfo[]>([]);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [datasets, setDatasets] = useState<DatasetInfo[]>([]);
   const [busy, setBusy] = useState(false);
   const [startAgentId, setStartAgentId] = useState("");
   const [startError, setStartError] = useState<string | null>(null);
   const [challengerId, setChallengerId] = useState("");
+  const [trafficDatasetId, setTrafficDatasetId] = useState("");
+  const [editedPrompt, setEditedPrompt] = useState<string | null>(null);
+  const [editedToolJson, setEditedToolJson] = useState<string | null>(null);
   const [confirmCleanup, setConfirmCleanup] = useState(false);
   const [confirmPromote, setConfirmPromote] = useState(false);
 
@@ -174,6 +205,13 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
         setStartAgentId((prev) => prev || (eligible[0]?.id ?? ""));
       })
       .catch(() => {});
+    // simulated datasets need an actor loop — the traffic stage only replays
+    // plain prompt sets (legacy / predefined)
+    fetch("/api/eval/datasets")
+      .then((res) => (res.ok ? res.json() : { datasets: [] }))
+      .then((body: { datasets: DatasetInfo[] }) =>
+        setDatasets(body.datasets.filter((d) => d.kind !== "simulated")))
+      .catch(() => {});
     void refresh();
     const timer = setInterval(() => void refresh(), 8000);
     return () => clearInterval(timer);
@@ -193,12 +231,24 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
   // per-experiment control state must not leak across row switches
   useEffect(() => {
     setChallengerId("");
+    setTrafficDatasetId("");
+    setEditedPrompt(null);
+    setEditedToolJson(null);
     setConfirmCleanup(false);
     setConfirmPromote(false);
   }, [exp?.id]);
 
-  const verdict = exp?.artifacts.verdict;
-  const canary = exp?.artifacts.canary;
+  // an action is running server-side — poll fast so its progress line moves
+  const runningAction = exp?.running_action ?? null;
+  useEffect(() => {
+    if (!runningAction) return;
+    const timer = setInterval(() => void refresh(), 2500);
+    return () => clearInterval(timer);
+  }, [runningAction, refresh]);
+
+  const a = exp?.artifacts ?? {};
+  const verdict = a.verdict;
+  const canary = a.canary;
   const canaryWeights = canary?.after_weights ?? canary?.weights;
   const insufficient = !!verdict?.verdict.includes("insufficient");
   // significant:false means the service compared the arms and the delta is
@@ -212,6 +262,17 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
   // one active A/B test per shared gateway — the backend rejects a second
   // concurrent loop (409 experiment.already_running), so gate START up front.
   const hasRunning = experiments.some((e) => e.status === "running");
+
+  // old auto-pipeline rows never wrote accepted_* — their bundles artifact
+  // marks the recommend card done
+  const acceptedPrompt = a.recommend?.accepted_prompt;
+  const recommendDone = !!(acceptedPrompt || a.bundles);
+  const activeCard = !recommendDone ? "recommend"
+    : !a.bundles ? "bundles"
+      : !a.gateway || !a.abtest ? "gwab"
+        : !a.traffic ? "traffic"
+          : !a.verdict ? "verdict"
+            : "post";
 
   const onStart = async () => {
     setStartError(null);
@@ -236,17 +297,25 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
     }
   };
 
-  const onAction = async (expId: string, action: string, challengerAgentId?: string) => {
+  const onAction = async (
+    expId: string, action: string, extra?: Record<string, unknown>,
+  ) => {
     setBusy(true);
     try {
       const res = await fetch(`/api/experiments/${expId}/action`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, challenger_agent_id: challengerAgentId }),
+        body: JSON.stringify({ action, ...extra }),
       });
       if (!res.ok) {
         const env = (await res.json().catch(() => ({}))) as { message?: string };
         toast(t("common.actionFailed", { msg: env.message ?? `HTTP ${res.status}` }));
+      } else {
+        // 200/202 both echo the row — apply it now so the button flips to
+        // its running state before the next poll tick
+        const body = (await res.json()) as { experiment: ExperimentInfo };
+        setExperiments((prev) =>
+          prev.map((e) => (e.id === body.experiment.id ? body.experiment : e)));
       }
       void refresh();
     } catch (err) {
@@ -254,6 +323,51 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
     } finally {
       setBusy(false);
     }
+  };
+
+  // "button while pending → artifact echo once done": while the backend runs
+  // this action the button is a disabled spinner with the row's progress line;
+  // a stored `<action>: …` error turns it into a retry.
+  const actionBtn = (
+    action: string, label: string,
+    opts: { primary?: boolean; disabled?: boolean;
+      extra?: Record<string, unknown> } = {},
+  ) => {
+    if (!exp) return null;
+    const running = exp.running_action === action;
+    const failed = !running && !!exp.error?.startsWith(`${action}: `);
+    return (
+      <div>
+        <Btn
+          primary={opts.primary && !failed}
+          disabled={busy || !!exp.running_action || opts.disabled}
+          data-testid={`action-${action}`}
+          onClick={() => void onAction(exp.id, action, opts.extra)}
+        >
+          {running ? `◐ ${t("expPage.running")}`
+            : failed ? `↻ ${t("expPage.retry")}` : `▸ ${label}`}
+        </Btn>
+        {running && (
+          <div
+            className="mono dim"
+            data-testid="progress-line"
+            style={{ fontSize: 10, marginTop: 4 }}
+          >
+            {exp.progress ?? "…"}
+          </div>
+        )}
+        {failed && (
+          <div
+            className="note"
+            style={{ borderColor: "var(--crit)", marginTop: 6 }}
+            data-testid={`action-error-${action}`}
+          >
+            <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
+            <span className="mono" style={{ fontSize: 10.5 }}>{exp.error}</span>
+          </div>
+        )}
+      </div>
+    );
   };
 
   const startForm = (label: string) => (
@@ -269,9 +383,9 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
           {agents.length === 0 && (
             <option value="">{t("evalPage.newRun.noAgents")}</option>
           )}
-          {agents.map((a) => (
-            <option key={a.id} value={a.id} style={{ background: "#141816" }}>
-              {a.name} · {a.method}
+          {agents.map((ag) => (
+            <option key={ag.id} value={ag.id} style={{ background: "#141816" }}>
+              {ag.name} · {ag.method}
             </option>
           ))}
         </select>
@@ -299,6 +413,499 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
         </Btn>
       </div>
     </>
+  );
+
+  // ── stage cards ────────────────────────────────────────────────────────────
+  const currentPrompt = a.agent_meta?.system_prompt ?? "";
+  const rec = a.recommend;
+  const recToolDescs = Object.fromEntries(
+    Object.entries(rec?.tool_descriptions ?? {}).filter(([k]) => k !== "_error"));
+  const treatmentPrompt = acceptedPrompt ?? rec?.recommended_prompt ?? "";
+
+  const onAccept = () => {
+    if (!exp) return;
+    let toolDescs: Record<string, string> | undefined;
+    const raw = editedToolJson
+      ?? (Object.keys(recToolDescs).length
+        ? JSON.stringify(recToolDescs, null, 2) : "");
+    if (raw.trim()) {
+      try {
+        const parsed: unknown = JSON.parse(raw);
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+          throw new Error("not an object");
+        }
+        toolDescs = Object.fromEntries(
+          Object.entries(parsed as Record<string, unknown>)
+            .map(([k, v]) => [k, String(v)]));
+      } catch {
+        toast(t("expPage.invalidToolJson"));
+        return;
+      }
+    }
+    void onAction(exp.id, "accept", {
+      accepted_prompt: editedPrompt ?? rec?.recommended_prompt ?? "",
+      accepted_tool_descriptions: toolDescs,
+    });
+  };
+
+  const recommendCard = exp && (
+    <StageCard
+      id="recommend" index={1} title={t("expPage.card.recommend")}
+      active={activeCard === "recommend"} done={recommendDone}
+    >
+      {!rec && (
+        <div className="note" style={{ marginBottom: 8 }}>
+          <span className="i">[i]</span>
+          <span>{t("expPage.recommendHint")}</span>
+        </div>
+      )}
+      {!rec && actionBtn("recommend", t("expPage.generateRec"), { primary: true })}
+      {rec && (
+        <>
+          <DiffPanes
+            before={currentPrompt}
+            after={rec.recommended_prompt}
+            beforeLabel={t("expPage.currentLabel")}
+            afterLabel={t("expPage.recommendedLabel")}
+          />
+          {rec.explanation && (
+            <div className="dim" style={{ fontSize: 10.5, marginTop: 6 }}>
+              {rec.explanation}
+            </div>
+          )}
+          {!acceptedPrompt && !a.bundles && (
+            <div style={{ marginTop: 10 }}>
+              <div className="mono dim" style={{ fontSize: 10, marginBottom: 4 }}>
+                {t("expPage.editHint")}
+              </div>
+              <textarea
+                className="input"
+                rows={5}
+                data-testid="accept-prompt-input"
+                value={editedPrompt ?? rec.recommended_prompt}
+                onChange={(e) => setEditedPrompt(e.target.value)}
+                style={{ width: "100%", fontFamily: "inherit", fontSize: 11 }}
+              />
+              {Object.keys(recToolDescs).length > 0 && (
+                <>
+                  <div className="mono dim" style={{ fontSize: 10, margin: "6px 0 4px" }}>
+                    {t("expPage.toolDescs")}
+                  </div>
+                  <textarea
+                    className="input"
+                    rows={4}
+                    spellCheck={false}
+                    data-testid="accept-tools-input"
+                    value={editedToolJson ?? JSON.stringify(recToolDescs, null, 2)}
+                    onChange={(e) => setEditedToolJson(e.target.value)}
+                    style={{ width: "100%", fontFamily: "inherit", fontSize: 11 }}
+                  />
+                </>
+              )}
+              <div style={{ marginTop: 8 }}>
+                <Btn
+                  primary
+                  disabled={busy || !!exp.running_action}
+                  data-testid="action-accept"
+                  onClick={onAccept}
+                >
+                  ▸ {t("expPage.accept")}
+                </Btn>
+              </div>
+            </div>
+          )}
+          {acceptedPrompt && (
+            <div className="mono dim" style={{ fontSize: 10, marginTop: 6 }}>
+              ✓ {t("expPage.accepted")}
+              {acceptedPrompt.trim() !== rec.recommended_prompt.trim() &&
+                " (edited)"}
+            </div>
+          )}
+        </>
+      )}
+    </StageCard>
+  );
+
+  const bundlesCard = exp && recommendDone && (
+    <StageCard
+      id="bundles" index={2} title={t("expPage.card.bundles")}
+      active={activeCard === "bundles"} done={!!a.bundles}
+    >
+      <DiffPanes
+        before={currentPrompt}
+        after={treatmentPrompt}
+        beforeLabel={t("expPage.controlLabel")}
+        afterLabel={t("expPage.treatmentLabel")}
+      />
+      <div style={{ marginTop: 8 }}>
+        {!a.bundles && actionBtn("bundles", t("expPage.createBundles"),
+                                 { primary: true })}
+        {a.bundles && (
+          <div className="mono dim" style={{ fontSize: 10 }}>
+            control: {a.bundles.control.bundle_id ?? a.bundles.control.arn} @{" "}
+            {a.bundles.control.version ?? "1"}
+            <br />
+            treatment: {a.bundles.treatment.bundle_id ?? a.bundles.treatment.arn} @{" "}
+            {a.bundles.treatment.version ?? "1"}
+          </div>
+        )}
+      </div>
+    </StageCard>
+  );
+
+  const gwabCard = exp && !!a.bundles && (
+    <StageCard
+      id="gwab" index={3} title={t("expPage.card.gwab")}
+      active={activeCard === "gwab"} done={!!a.abtest}
+    >
+      {!a.gateway && actionBtn("gateway", t("expPage.createGateway"),
+                               { primary: true })}
+      {a.gateway && (
+        <div className="mono dim" style={{ fontSize: 10, marginBottom: 8 }}>
+          gw {a.gateway.gateway_id}
+          {a.gateway.target_v1 ? ` · target ${a.gateway.target_v1}` : ""}
+        </div>
+      )}
+      {a.gateway && !a.abtest &&
+        actionBtn("abtest", t("expPage.createAbTest"), { primary: true })}
+      {a.abtest && (
+        <div className="mono dim" style={{ fontSize: 10 }}>
+          ab {a.abtest.ab_test_id}
+        </div>
+      )}
+    </StageCard>
+  );
+
+  const trafficCard = exp && !!a.abtest && (
+    <StageCard
+      id="traffic" index={4} title={t("expPage.card.traffic")}
+      active={activeCard === "traffic"} done={!!a.traffic}
+    >
+      {!a.traffic && (
+        <div style={{ display: "flex", gap: 9, alignItems: "flex-start",
+                      flexWrap: "wrap" }}>
+          <select
+            className="input"
+            style={{ maxWidth: 260 }}
+            value={trafficDatasetId}
+            data-testid="traffic-dataset-select"
+            onChange={(e) => setTrafficDatasetId(e.target.value)}
+          >
+            <option value="">{t("expPage.builtinPrompts")}</option>
+            {datasets.map((d) => (
+              <option key={d.id} value={d.id} style={{ background: "#141816" }}>
+                {d.name} ({d.item_count})
+              </option>
+            ))}
+          </select>
+          {actionBtn("traffic", t("expPage.sendTraffic"), {
+            primary: true,
+            extra: trafficDatasetId ? { dataset_id: trafficDatasetId } : undefined,
+          })}
+        </div>
+      )}
+      {a.traffic && (
+        <div className="mono dim" style={{ fontSize: 10 }}>
+          sent {a.traffic.sent} · failed {a.traffic.failed}
+          {a.traffic.dataset_name
+            ? ` · ${t("expPage.datasetTag")} ${a.traffic.dataset_name}`
+            : ` · ${t("expPage.builtinPrompts")}`}
+        </div>
+      )}
+    </StageCard>
+  );
+
+  const verdictCard = exp && !!a.traffic && (
+    <StageCard
+      id="verdict" index={5} title={t("expPage.card.verdict")}
+      active={activeCard === "verdict"} done={!!verdict}
+    >
+      {!verdict && (
+        <>
+          <div className="note" style={{ marginBottom: 8 }}>
+            <span className="i">[i]</span>
+            <span>{t("expPage.aggregationHint")}</span>
+          </div>
+          {actionBtn("verdict", t("expPage.monitorResults"), { primary: true })}
+        </>
+      )}
+
+      {verdict?.metrics?.length ? (
+        verdict.metrics.map((metric) => {
+          const variant = metric.variants[0];
+          const delta =
+            metric.control.mean != null && variant?.mean != null
+              ? variant.mean - metric.control.mean
+              : null;
+          return (
+            <div className="ab-metric" key={metric.label}>
+              <div className="am-h">
+                <span>{evaluatorLabel(t, metric.label)}</span>
+                {delta != null && (
+                  <span className="d">{delta >= 0 ? "+" : ""}{delta.toFixed(2)}</span>
+                )}
+              </div>
+              <div className="abbar">
+                <span className="an">CONTROL</span>
+                <div className="track">
+                  <div className="fill" style={{
+                    width: `${(metric.control.mean ?? 0) * 100}%`,
+                    background: "var(--s1)",
+                  }} />
+                </div>
+                <span className="av">{metric.control.mean?.toFixed(2) ?? "—"}</span>
+              </div>
+              <div className="abbar">
+                <span className="an">TREAT</span>
+                <div className="track">
+                  <div className="fill" style={{
+                    width: `${(variant?.mean ?? 0) * 100}%`,
+                    background: "var(--s3)",
+                  }} />
+                </div>
+                <span className="av">{variant?.mean?.toFixed(2) ?? "—"}</span>
+              </div>
+              <div
+                className="mono dim"
+                data-testid="metric-stats"
+                style={{ fontSize: 9.5, marginTop: 2 }}
+              >
+                n {metric.control.sampleSize ?? "—"}/{variant?.sampleSize ?? "—"}
+                {" · "}p={variant?.pValue != null ? fmtP(variant.pValue) : "—"}
+                {variant?.isSignificant != null && (
+                  <span
+                    style={{
+                      color: variant.isSignificant ? "var(--good)" : undefined,
+                    }}
+                  >
+                    {" · "}
+                    {variant.isSignificant
+                      ? `✓ ${t("evalPage.experiment.significant")}`
+                      : t("evalPage.experiment.notSignificant")}
+                  </span>
+                )}
+              </div>
+            </div>
+          );
+        })
+      ) : null}
+
+      {verdict && (
+        <>
+          <div
+            className="verdict"
+            style={
+              insufficient || nonSignificant
+                ? { background: "rgba(250,178,25,.08)",
+                    border: "1px solid rgba(250,178,25,.35)" }
+                : undefined
+            }
+          >
+            <span
+              className="vt"
+              style={insufficient || nonSignificant
+                ? { color: "var(--warn)" } : undefined}
+            >
+              ◎ {verdictHeadline}
+            </span>
+            <span className="vm">
+              {verdict.avg_delta != null && `Δ ${verdict.avg_delta}`} · n={verdict.n ?? 0}
+              {verdict.significant === true && (
+                <span
+                  data-testid="verdict-significance"
+                  style={{ color: "var(--good)" }}
+                >
+                  {" · "}✓ {t("evalPage.experiment.significant")}
+                </span>
+              )}
+              {nonSignificant && (
+                <span
+                  data-testid="verdict-significance"
+                  style={{ color: "var(--warn)" }}
+                >
+                  {" · "}
+                  {t("evalPage.experiment.nonsig.observed",
+                    { verdict: verdict.verdict })}
+                </span>
+              )}
+            </span>
+            {!a.promote && (
+              // weak evidence (non-significant or no samples at all)
+              // demotes PROMOTE to a secondary, confirm-gated action
+              insufficient || nonSignificant ? (
+                <Btn
+                  style={{ marginLeft: "auto" }}
+                  disabled={busy || !!exp.running_action}
+                  data-testid="promote-btn"
+                  onClick={() => setConfirmPromote(true)}
+                >
+                  {t("expPage.promote")} ▸
+                </Btn>
+              ) : (
+                <Btn
+                  primary
+                  style={{ marginLeft: "auto" }}
+                  disabled={busy || !!exp.running_action}
+                  data-testid="promote-btn"
+                  onClick={() => void onAction(exp.id, "promote")}
+                >
+                  {t("expPage.promote")} ▸
+                </Btn>
+              )
+            )}
+            {a.promote && (
+              <Chip tone="good" icon="✓" style={{ marginLeft: "auto" }}>
+                {t("expPage.promoted")} · T1{" "}
+                {a.promote.after_weights?.T1 ?? 100}%
+              </Chip>
+            )}
+          </div>
+          {(insufficient || nonSignificant) && a.promote && (
+            <div
+              className="mono dim"
+              data-testid="promoted-context"
+              style={{ fontSize: 10.5, margin: "4px 0 8px" }}
+            >
+              ⚠ {insufficient
+                ? t("evalPage.experiment.insufficient.promotedContext")
+                : t("evalPage.experiment.nonsig.promotedContext")}
+            </div>
+          )}
+          {insufficient && !a.promote && (
+            <div
+              className="note"
+              style={{ borderColor: "var(--warn)", marginTop: 8 }}
+              data-testid="insufficient-note"
+            >
+              <span className="i" style={{ color: "var(--warn)" }}>[!]</span>
+              <span>
+                {t("evalPage.experiment.insufficient.reason")}
+                <br />· {t("evalPage.experiment.insufficient.a1")}
+                <br />· {t("evalPage.experiment.insufficient.a2")}
+                <br />· {t("evalPage.experiment.insufficient.a3")}
+              </span>
+            </div>
+          )}
+          {nonSignificant && !a.promote && (
+            <div
+              className="note"
+              style={{ borderColor: "var(--warn)", marginTop: 8 }}
+              data-testid="nonsig-note"
+            >
+              <span className="i" style={{ color: "var(--warn)" }}>[!]</span>
+              <span>
+                {t("evalPage.experiment.nonsig.reason")}
+                <br />· {t("evalPage.experiment.nonsig.a1")}
+                <br />· {t("evalPage.experiment.nonsig.a2")}
+                <br />· {t("evalPage.experiment.nonsig.a3")}
+              </span>
+            </div>
+          )}
+        </>
+      )}
+    </StageCard>
+  );
+
+  const eligibleChallengers = exp
+    ? agents.filter((ag) => ag.id !== exp.agent_id)
+    : [];
+
+  const canaryCard = exp && !!a.promote && (
+    <StageCard
+      id="canary" index={6} title={t("expPage.canaryTitle")}
+      active={activeCard === "post" && !canaryWeights}
+      done={(canary?.ramp_stage ?? 0) >= 2}
+    >
+      <div className="am-h" style={{ fontSize: 11, color: "var(--ink-3)" }}>
+        <span className="mono">
+          {canary?.challenger_agent ? `— ${canary.challenger_agent}` : ""}
+        </span>
+        <span className="mono">RAMP 10 → 50 → 100</span>
+      </div>
+      {canaryWeights ? (
+        <>
+          <div className="split">
+            <div style={{ flex: `0 0 ${canaryWeights.C ?? 90}%`,
+                          background: "var(--s1)" }} />
+            <div style={{ flex: 1, background: "var(--s3)" }} />
+          </div>
+          <div className="mono dim" style={{ fontSize: 9.5 }}>
+            champion {canaryWeights.C}% · challenger {canaryWeights.T1}% — stage{" "}
+            {(canary?.ramp_stage ?? 0) + 1}/3
+          </div>
+          {(canary?.ramp_stage ?? 0) < 2 && (
+            <div style={{ marginTop: 8, display: "flex", gap: 9 }}>
+              <Btn
+                disabled={busy || !!exp.running_action}
+                data-testid="ramp-btn"
+                onClick={() => void onAction(exp.id, "ramp")}
+              >
+                {t("expPage.ramp")} ▸
+              </Btn>
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          <div style={{ display: "flex", gap: 9, alignItems: "flex-start",
+                        flexWrap: "wrap" }}>
+            <select
+              className="input"
+              style={{ maxWidth: 220 }}
+              value={challengerId}
+              onChange={(e) => setChallengerId(e.target.value)}
+            >
+              <option value="">{t("expPage.pickChallenger")}</option>
+              {eligibleChallengers.map((ag) => (
+                <option key={ag.id} value={ag.id} style={{ background: "#141816" }}>
+                  {ag.name}
+                </option>
+              ))}
+            </select>
+            {actionBtn("canary", t("expPage.startCanary"), {
+              disabled: !challengerId,
+              extra: { challenger_agent_id: challengerId },
+            })}
+          </div>
+          {eligibleChallengers.length === 0 && (
+            <div className="mono dim" style={{ fontSize: 10, marginTop: 6 }}>
+              {t("expPage.noChallenger")}
+            </div>
+          )}
+        </>
+      )}
+    </StageCard>
+  );
+
+  const cleanupCard = exp && (
+    <StageCard
+      id="cleanup" index={a.promote ? 7 : 6} title={t("expPage.card.cleanup")}
+      active={false} done={!!a.cleanup}
+    >
+      {!a.cleanup && (
+        <Btn
+          disabled={busy || !!exp.running_action}
+          data-testid="cleanup-btn"
+          onClick={() => setConfirmCleanup(true)}
+        >
+          {exp.running_action === "cleanup"
+            ? `◐ ${t("expPage.running")}` : t("expPage.cleanup")}
+        </Btn>
+      )}
+      {exp.running_action === "cleanup" && exp.progress && (
+        <div className="mono dim" data-testid="progress-line"
+             style={{ fontSize: 10, marginTop: 4 }}>
+          {exp.progress}
+        </div>
+      )}
+      {a.cleanup && (
+        <div className="code" style={{ maxHeight: 120, overflowY: "auto" }}>
+          {a.cleanup
+            .map((row) => `${row.status.padEnd(8)} ${row.category}`)
+            .join("\n")}
+        </div>
+      )}
+    </StageCard>
   );
 
   return (
@@ -355,7 +962,11 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
               >
                 <td className="pri">{e.name}</td>
                 <td>{e.agent_name}</td>
-                <td className="mono dim">{e.stage.toUpperCase()}</td>
+                <td className="mono dim">
+                  {e.running_action
+                    ? `◐ ${e.running_action.toUpperCase()}`
+                    : e.stage.toUpperCase()}
+                </td>
                 <td className="mono dim">{verdictLabel(t, e.artifacts.verdict)}</td>
                 <td className="mono dim">
                   {e.created_at ? new Date(e.created_at).toLocaleString() : "—"}
@@ -423,9 +1034,9 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
                     {verdictHeadline}
                     {verdict?.significant === true &&
                       ` · ✓ ${t("evalPage.experiment.significant")}`}
-                    {exp.artifacts.promote &&
+                    {a.promote &&
                       ` · ${t("expPage.promoted")} T1 ${
-                        exp.artifacts.promote.after_weights?.T1 ?? 100}%`}
+                        a.promote.after_weights?.T1 ?? 100}%`}
                   </span>
                 </div>
                 <div className="kv">
@@ -434,7 +1045,7 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
                     {exp.created_at ? new Date(exp.created_at).toLocaleString() : "—"}
                   </span>
                 </div>
-                {exp.artifacts.promote && (insufficient || nonSignificant) && (
+                {a.promote && (insufficient || nonSignificant) && (
                   <div
                     className="mono dim"
                     data-testid="promoted-context"
@@ -464,9 +1075,9 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
                     </Btn>
                   </div>
                 )}
-                {exp.artifacts.cleanup && (
+                {a.cleanup && (
                   <div className="code" style={{ marginTop: 10, maxHeight: 120, overflowY: "auto" }}>
-                    {exp.artifacts.cleanup
+                    {a.cleanup
                       .map((row) => `${row.status.padEnd(8)} ${row.category}`)
                       .join("\n")}
                   </div>
@@ -483,267 +1094,17 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
 
           {exp && !terminal && (
             <>
-              <StagePipeline exp={exp} />
-
-              {verdict?.metrics?.length ? (
-                verdict.metrics.map((metric) => {
-                  const variant = metric.variants[0];
-                  const delta =
-                    metric.control.mean != null && variant?.mean != null
-                      ? variant.mean - metric.control.mean
-                      : null;
-                  return (
-                    <div className="ab-metric" key={metric.label}>
-                      <div className="am-h">
-                        <span>{evaluatorLabel(t, metric.label)}</span>
-                        {delta != null && (
-                          <span className="d">{delta >= 0 ? "+" : ""}{delta.toFixed(2)}</span>
-                        )}
-                      </div>
-                      <div className="abbar">
-                        <span className="an">CONTROL</span>
-                        <div className="track">
-                          <div className="fill" style={{
-                            width: `${(metric.control.mean ?? 0) * 100}%`,
-                            background: "var(--s1)",
-                          }} />
-                        </div>
-                        <span className="av">{metric.control.mean?.toFixed(2) ?? "—"}</span>
-                      </div>
-                      <div className="abbar">
-                        <span className="an">TREAT</span>
-                        <div className="track">
-                          <div className="fill" style={{
-                            width: `${(variant?.mean ?? 0) * 100}%`,
-                            background: "var(--s3)",
-                          }} />
-                        </div>
-                        <span className="av">{variant?.mean?.toFixed(2) ?? "—"}</span>
-                      </div>
-                      <div
-                        className="mono dim"
-                        data-testid="metric-stats"
-                        style={{ fontSize: 9.5, marginTop: 2 }}
-                      >
-                        n {metric.control.sampleSize ?? "—"}/{variant?.sampleSize ?? "—"}
-                        {" · "}p={variant?.pValue != null ? fmtP(variant.pValue) : "—"}
-                        {variant?.isSignificant != null && (
-                          <span
-                            style={{
-                              color: variant.isSignificant ? "var(--good)" : undefined,
-                            }}
-                          >
-                            {" · "}
-                            {variant.isSignificant
-                              ? `✓ ${t("evalPage.experiment.significant")}`
-                              : t("evalPage.experiment.notSignificant")}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })
-              ) : exp.status === "running" ? (
-                <div
-                  className="mono dim"
-                  data-testid="metrics-pending"
-                  style={{ fontSize: 11, marginBottom: 8 }}
-                >
-                  {t("evalPage.experiment.metricsPending")}
-                </div>
-              ) : null}
-
-              {verdict && (
-                <>
-                  <div
-                    className="verdict"
-                    style={
-                      insufficient || nonSignificant
-                        ? { background: "rgba(250,178,25,.08)",
-                            border: "1px solid rgba(250,178,25,.35)" }
-                        : undefined
-                    }
-                  >
-                    <span
-                      className="vt"
-                      style={insufficient || nonSignificant
-                        ? { color: "var(--warn)" } : undefined}
-                    >
-                      ◎ {verdictHeadline}
-                    </span>
-                    <span className="vm">
-                      {verdict.avg_delta != null && `Δ ${verdict.avg_delta}`} · n={verdict.n ?? 0}
-                      {verdict.significant === true && (
-                        <span
-                          data-testid="verdict-significance"
-                          style={{ color: "var(--good)" }}
-                        >
-                          {" · "}✓ {t("evalPage.experiment.significant")}
-                        </span>
-                      )}
-                      {nonSignificant && (
-                        <span
-                          data-testid="verdict-significance"
-                          style={{ color: "var(--warn)" }}
-                        >
-                          {" · "}
-                          {t("evalPage.experiment.nonsig.observed",
-                            { verdict: verdict.verdict })}
-                        </span>
-                      )}
-                    </span>
-                    {exp.status === "ready" && !exp.artifacts.promote && (
-                      // weak evidence (non-significant or no samples at all)
-                      // demotes PROMOTE to a secondary, confirm-gated action
-                      insufficient || nonSignificant ? (
-                        <Btn
-                          style={{ marginLeft: "auto" }}
-                          disabled={busy}
-                          data-testid="promote-btn"
-                          onClick={() => setConfirmPromote(true)}
-                        >
-                          {t("expPage.promote")} ▸
-                        </Btn>
-                      ) : (
-                        <Btn
-                          primary
-                          style={{ marginLeft: "auto" }}
-                          disabled={busy}
-                          data-testid="promote-btn"
-                          onClick={() => void onAction(exp.id, "promote")}
-                        >
-                          {t("expPage.promote")} ▸
-                        </Btn>
-                      )
-                    )}
-                    {exp.artifacts.promote && (
-                      <Chip tone="good" icon="✓" style={{ marginLeft: "auto" }}>
-                        {t("expPage.promoted")} · T1{" "}
-                        {exp.artifacts.promote.after_weights?.T1 ?? 100}%
-                      </Chip>
-                    )}
-                  </div>
-                  {(insufficient || nonSignificant) && exp.artifacts.promote && (
-                    <div
-                      className="mono dim"
-                      data-testid="promoted-context"
-                      style={{ fontSize: 10.5, margin: "4px 0 8px" }}
-                    >
-                      ⚠ {insufficient
-                        ? t("evalPage.experiment.insufficient.promotedContext")
-                        : t("evalPage.experiment.nonsig.promotedContext")}
-                    </div>
-                  )}
-                  {insufficient && !exp.artifacts.promote && (
-                    <div
-                      className="note"
-                      style={{ borderColor: "var(--warn)", marginTop: 8 }}
-                      data-testid="insufficient-note"
-                    >
-                      <span className="i" style={{ color: "var(--warn)" }}>[!]</span>
-                      <span>
-                        {t("evalPage.experiment.insufficient.reason")}
-                        <br />· {t("evalPage.experiment.insufficient.a1")}
-                        <br />· {t("evalPage.experiment.insufficient.a2")}
-                        <br />· {t("evalPage.experiment.insufficient.a3")}
-                      </span>
-                    </div>
-                  )}
-                  {nonSignificant && !exp.artifacts.promote && (
-                    <div
-                      className="note"
-                      style={{ borderColor: "var(--warn)", marginTop: 8 }}
-                      data-testid="nonsig-note"
-                    >
-                      <span className="i" style={{ color: "var(--warn)" }}>[!]</span>
-                      <span>
-                        {t("evalPage.experiment.nonsig.reason")}
-                        <br />· {t("evalPage.experiment.nonsig.a1")}
-                        <br />· {t("evalPage.experiment.nonsig.a2")}
-                        <br />· {t("evalPage.experiment.nonsig.a3")}
-                      </span>
-                    </div>
-                  )}
-                </>
-              )}
-
-              {exp.artifacts.promote && (
-                <div style={{ marginTop: 14 }} data-testid="canary-section">
-                  <div className="am-h" style={{ fontSize: 11, color: "var(--ink-3)" }}>
-                    <span className="mono">
-                      {t("expPage.canaryTitle")}
-                      {canary?.challenger_agent ? ` — ${canary.challenger_agent}` : ""}
-                    </span>
-                    <span className="mono">RAMP 10 → 50 → 100</span>
-                  </div>
-                  {canaryWeights ? (
-                    <>
-                      <div className="split">
-                        <div style={{ flex: `0 0 ${canaryWeights.C ?? 90}%`,
-                                      background: "var(--s1)" }} />
-                        <div style={{ flex: 1, background: "var(--s3)" }} />
-                      </div>
-                      <div className="mono dim" style={{ fontSize: 9.5 }}>
-                        champion {canaryWeights.C}% · challenger {canaryWeights.T1}% — stage{" "}
-                        {(canary?.ramp_stage ?? 0) + 1}/3
-                      </div>
-                      {(canary?.ramp_stage ?? 0) < 2 && (
-                        <div style={{ marginTop: 8, display: "flex", gap: 9 }}>
-                          <Btn
-                            disabled={busy}
-                            data-testid="ramp-btn"
-                            onClick={() => void onAction(exp.id, "ramp")}
-                          >
-                            {t("expPage.ramp")} ▸
-                          </Btn>
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    <div style={{ display: "flex", gap: 9, alignItems: "center" }}>
-                      <select
-                        className="input"
-                        style={{ maxWidth: 220 }}
-                        value={challengerId}
-                        onChange={(e) => setChallengerId(e.target.value)}
-                      >
-                        <option value="">{t("expPage.pickChallenger")}</option>
-                        {agents
-                          .filter((a) => a.id !== exp.agent_id)
-                          .map((a) => (
-                            <option key={a.id} value={a.id} style={{ background: "#141816" }}>
-                              {a.name}
-                            </option>
-                          ))}
-                      </select>
-                      <Btn
-                        disabled={busy || !challengerId}
-                        onClick={() => void onAction(exp.id, "canary", challengerId)}
-                      >
-                        {t("expPage.startCanary")}
-                      </Btn>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div style={{ marginTop: 14, display: "flex", gap: 9 }}>
-                <Btn
-                  disabled={busy}
-                  data-testid="cleanup-btn"
-                  onClick={() => setConfirmCleanup(true)}
-                >
-                  {t("expPage.cleanup")}
-                </Btn>
+              <div className="note" style={{ marginBottom: 10 }}>
+                <span className="i">[i]</span>
+                <span>{t("expPage.stepHint")}</span>
               </div>
-
-              {exp.artifacts.cleanup && (
-                <div className="code" style={{ marginTop: 10, maxHeight: 120, overflowY: "auto" }}>
-                  {exp.artifacts.cleanup
-                    .map((row) => `${row.status.padEnd(8)} ${row.category}`)
-                    .join("\n")}
-                </div>
-              )}
+              {recommendCard}
+              {bundlesCard}
+              {gwabCard}
+              {trafficCard}
+              {verdictCard}
+              {canaryCard}
+              {cleanupCard}
             </>
           )}
           {exp && (

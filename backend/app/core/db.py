@@ -63,3 +63,13 @@ def _migrate(bind) -> None:
             if column not in existing:
                 with bind.begin() as conn:
                     conn.execute(text(ddl))
+    if "experiments" in inspector.get_table_names():
+        existing = {c["name"] for c in inspector.get_columns("experiments")}
+        additions = {
+            "running_action": "ALTER TABLE experiments ADD COLUMN running_action VARCHAR(24)",
+            "progress": "ALTER TABLE experiments ADD COLUMN progress TEXT",
+        }
+        for column, ddl in additions.items():
+            if column not in existing:
+                with bind.begin() as conn:
+                    conn.execute(text(ddl))

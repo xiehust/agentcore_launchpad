@@ -916,7 +916,38 @@
     "confirmCleanup": {
       "title": "Clean up experiment",
       "body": "This deletes the experiment's AWS resources (challenger runtime, gateway targets, A/B tests, online evaluators). This cannot be undone."
-    }
+    },
+    "stepHint": "Each stage runs only when you trigger it — every result persists immediately, so you can reload or leave anytime.",
+    "card": {
+      "recommend": "AI RECOMMENDATIONS",
+      "bundles": "CONFIG BUNDLES",
+      "gwab": "GATEWAY + A/B TEST (50/50)",
+      "traffic": "SEND TRAFFIC",
+      "verdict": "MONITOR & VERDICT",
+      "cleanup": "CLEANUP"
+    },
+    "recommendHint": "Recommendations analyze this agent's recent CloudWatch traces — run an evaluation against it first.",
+    "generateRec": "GENERATE RECOMMENDATIONS",
+    "currentLabel": "CURRENT",
+    "recommendedLabel": "RECOMMENDED",
+    "editHint": "Edit the recommendation below before accepting — the treatment bundle uses exactly what you accept.",
+    "toolDescs": "TOOL DESCRIPTIONS (JSON)",
+    "accept": "ACCEPT & CONTINUE",
+    "accepted": "ACCEPTED",
+    "invalidToolJson": "tool descriptions must be a JSON object of name → description",
+    "controlLabel": "CONTROL (current config)",
+    "treatmentLabel": "TREATMENT (accepted recommendation)",
+    "createBundles": "CREATE CONTROL + TREATMENT BUNDLES",
+    "createGateway": "CREATE GATEWAY + ONLINE EVAL",
+    "createAbTest": "CREATE A/B TEST 50/50",
+    "builtinPrompts": "built-in demo prompts (12)",
+    "sendTraffic": "SEND TRAFFIC",
+    "monitorResults": "MONITOR RESULTS",
+    "aggregationHint": "Results aggregate ~10–15 min after the last session; this polls every 45s (15 min cap).",
+    "running": "RUNNING…",
+    "retry": "RETRY",
+    "datasetTag": "dataset",
+    "noChallenger": "No other active agent — publish a v2 candidate first."
   },
   "obs": {
     "kicker": "// TELEMETRY LAYER",

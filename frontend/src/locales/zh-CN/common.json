@@ -916,7 +916,38 @@
     "confirmCleanup": {
       "title": "清理实验",
       "body": "将删除该实验的 AWS 资源(挑战者运行时、网关目标、A/B 测试、在线评估器),此操作不可撤销。"
-    }
+    },
+    "stepHint": "每个阶段都由你手动触发——结果即时持久化，可随时刷新或离开页面。",
+    "card": {
+      "recommend": "AI 推荐",
+      "bundles": "配置 BUNDLE",
+      "gwab": "网关 + A/B 测试（50/50）",
+      "traffic": "发送流量",
+      "verdict": "监控与判定",
+      "cleanup": "资源清理"
+    },
+    "recommendHint": "推荐基于该 Agent 近期的 CloudWatch trace——请先在评估页对它跑一次评估。",
+    "generateRec": "生成 AI 推荐",
+    "currentLabel": "当前",
+    "recommendedLabel": "推荐",
+    "editHint": "可在下方编辑推荐结果后再接受——Treatment Bundle 将使用你接受的内容。",
+    "toolDescs": "工具描述（JSON）",
+    "accept": "接受并继续",
+    "accepted": "已接受",
+    "invalidToolJson": "工具描述必须是 name → description 形式的 JSON 对象",
+    "controlLabel": "CONTROL（当前配置）",
+    "treatmentLabel": "TREATMENT（接受的推荐）",
+    "createBundles": "创建 CONTROL + TREATMENT BUNDLE",
+    "createGateway": "创建网关 + 在线评估",
+    "createAbTest": "创建 A/B 测试 50/50",
+    "builtinPrompts": "内置演示提示词（12 条）",
+    "sendTraffic": "发送流量",
+    "monitorResults": "监控结果",
+    "aggregationHint": "最后一个会话后聚合约需 10–15 分钟；每 45 秒轮询（上限 15 分钟）。",
+    "running": "运行中…",
+    "retry": "重试",
+    "datasetTag": "数据集",
+    "noChallenger": "没有其他可用 Agent——请先发布一个 v2 候选。"
   },
   "obs": {
     "kicker": "// 遥测层",

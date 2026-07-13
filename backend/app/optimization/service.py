@@ -1,9 +1,12 @@
 """Optimization loop orchestration (adapted from agentcore_eva_opt
 routers/abtest.py + recommend.py + bundles.py — github.com/xiehust/agentcore_eva_opt).
 
-Auto stages (one background thread, artifacts persisted per stage):
-    recommend → bundles → gateway → abtest → traffic → verdict
-Explicit actions afterwards: promote, canary (v2 target 90/10), ramp, cleanup.
+Stepwise actions, each user-triggered (stage = furthest point completed):
+    recommend → accept → bundles → gateway → abtest → traffic → verdict
+    → promote | canary → ramp → cleanup
+Long actions run on a daemon thread via run_action, streaming a progress
+line onto the experiment row (running_action/progress) so the UI can poll
+and a reload resumes mid-action. Short actions run inline in the request.
 
 The experiment gateway is separate from launchpad-gw: AWS_IAM auth, no
 protocolType, targets of type http→agentcoreRuntime so A/B routing happens
@@ -14,6 +17,7 @@ import json
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from typing import Any
 
 import boto3
@@ -24,6 +28,7 @@ from botocore.awsrequest import AWSRequest
 from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.evaluation import agentcore_eval as ac
+from app.evaluation.scenarios import scenario_prompts
 from app.optimization.models import Experiment
 from app.services.agentcore.client import control_client, data_client
 
@@ -68,8 +73,97 @@ def _get(exp_id: str) -> Experiment:
         db.close()
 
 
+Progress = Callable[[str], None]
+
+
+def _spawn(target: Callable[[], None]) -> None:  # injectable for tests
+    threading.Thread(target=target, daemon=True).start()
+
+
+def run_action(exp_id: str, action: str, fn: Callable[[Progress], Any]) -> None:
+    """Run a stage action on a daemon thread with row-level progress.
+
+    The wrapped fn persists its own artifact + stage on success; this runner
+    only owns the running_action/progress/error lifecycle. A failure keeps
+    the stage so re-POSTing the same action retries it (AWS creates are
+    idempotent — conflict-adopt by name).
+    """
+    def progress(msg: str) -> None:
+        _update(exp_id, progress=msg[:300])
+
+    def runner() -> None:
+        try:
+            fn(progress)
+            _update(exp_id, running_action=None, progress=None)
+        except Exception as exc:
+            # the action prefix lets the UI pin the failure to its button
+            _update(exp_id, running_action=None, progress=None,
+                    error=f"{action}: {type(exc).__name__}: {exc}"[:500])
+
+    _update(exp_id, running_action=action, error=None)
+    _spawn(runner)
+
+
+def clear_stale_running_actions() -> list[str]:
+    """Startup sweep: a restarted worker can't still be running an action.
+
+    Action threads are daemons of the previous process — after a restart a
+    non-null running_action is stale and would 409 every retry forever. Clear
+    it and leave a retryable error so the UI shows what happened.
+    """
+    db = SessionLocal()
+    try:
+        rows = db.query(Experiment).filter(
+            Experiment.running_action.isnot(None)
+        ).all()
+        cleared: list[str] = []
+        for exp in rows:
+            exp.error = (f"{exp.running_action}: interrupted by a backend "
+                         "restart — retry the action")
+            exp.running_action = None
+            exp.progress = None
+            cleared.append(exp.id)
+        db.commit()
+        return cleared
+    finally:
+        db.close()
+
+
+def _agent_meta(exp: Experiment) -> dict[str, Any]:
+    """Runtime facts captured at create time; rebuilt lazily for old rows."""
+    meta = exp.artifacts.get("agent_meta")
+    if meta:
+        return meta
+    from app.models.ledger import Agent  # local import — avoids cycle at module load
+
+    db = SessionLocal()
+    try:
+        agent_row = db.get(Agent, exp.agent_id)
+    finally:
+        db.close()
+    if agent_row is None:
+        raise RuntimeError("agent behind this experiment no longer exists")
+    control = control_client()
+    meta = {
+        "id": agent_row.id,
+        "name": agent_row.name,
+        "arn": agent_row.arn,
+        "resource_id": agent_row.resource_id,
+        "runtime_name": rt_name(control, agent_row.resource_id),
+        "system_prompt": (agent_row.spec or {}).get("system_prompt", ""),
+    }
+    _update(exp.id, artifact={"agent_meta": meta})
+    return meta
+
+
+def _noop(_msg: str) -> None:
+    pass
+
+
 # ─── stage implementations ───────────────────────────────────────────────────
-def stage_recommend(exp_id: str, agent: dict[str, Any]) -> dict[str, Any]:
+def stage_recommend(
+    exp_id: str, agent: dict[str, Any], progress: Progress = _noop
+) -> dict[str, Any]:
     settings = get_settings()
     data = data_client()
     log_group = f"/aws/bedrock-agentcore/runtimes/{agent['resource_id']}-DEFAULT"
@@ -78,8 +172,9 @@ def stage_recommend(exp_id: str, agent: dict[str, Any]) -> dict[str, Any]:
         ac.to_log_group_arn("aws/spans", settings.region, settings.account_id),
     ]
     service_names = [f"{agent['runtime_name']}.DEFAULT"]
-    current_prompt = agent["spec"].get("system_prompt", "")
+    current_prompt = agent["system_prompt"]
 
+    progress("generating system-prompt recommendation from recent traces…")
     sp = ac.start_system_prompt_recommendation(
         data,
         name=f"exp_{exp_id[:8]}_sp",
@@ -100,6 +195,7 @@ def stage_recommend(exp_id: str, agent: dict[str, Any]) -> dict[str, Any]:
 
     tool_suggestion = {}
     try:
+        progress("generating tool-description recommendation…")
         td = ac.start_tool_description_recommendation(
             data,
             name=f"exp_{exp_id[:8]}_td",
@@ -140,25 +236,56 @@ def _fallback_treatment_prompt(current: str) -> str:
     )
 
 
-def stage_bundles(exp_id: str, agent: dict[str, Any], recommended_prompt: str) -> dict:
+DEFAULT_TOOL_DESCS = {"calculator": "Evaluate a basic arithmetic expression"}
+
+
+def create_bundle_idempotent(control: Any, **kwargs: Any) -> dict[str, Any]:
+    """create_configuration_bundle with conflict-adopt — a retried bundles
+    action after a partial failure must re-use the bundle it already made."""
+    try:
+        return ac.create_configuration_bundle(control, **kwargs)
+    except Exception as exc:
+        if not _is_conflict(exc):
+            raise
+        name = kwargs["bundle_name"]
+        match = None
+        token: str | None = None
+        while match is None:
+            page = control.list_configuration_bundles(
+                **({"nextToken": token} if token else {})
+            )
+            match = next((b for b in page.get("bundles", [])
+                          if b.get("bundleName") == name), None)
+            token = page.get("nextToken")
+            if match is None and not token:
+                raise
+        detail = control.get_configuration_bundle(bundleId=match["bundleId"])
+        return {"bundleId": match["bundleId"],
+                "bundleArn": match.get("bundleArn"),
+                "versionId": detail.get("versionId")}
+
+
+def stage_bundles(
+    exp_id: str, agent: dict[str, Any], treatment_prompt: str,
+    treatment_tool_descs: dict[str, str] | None = None,
+) -> dict:
     control = control_client()
-    current_prompt = agent["spec"].get("system_prompt", "")
-    tool_descs = {"calculator": "Evaluate a basic arithmetic expression"}
-    control_bundle = ac.create_configuration_bundle(
+    current_prompt = agent["system_prompt"]
+    control_bundle = create_bundle_idempotent(
         control,
         agent_arn=agent["arn"],
         bundle_name=f"exp_{exp_id[:8]}_control",
         system_prompt=current_prompt,
-        tool_descriptions=tool_descs,
+        tool_descriptions=DEFAULT_TOOL_DESCS,
         commit_message="control — current production config",
     )
-    treatment_bundle = ac.create_configuration_bundle(
+    treatment_bundle = create_bundle_idempotent(
         control,
         agent_arn=agent["arn"],
         bundle_name=f"exp_{exp_id[:8]}_treatment",
-        system_prompt=recommended_prompt,
-        tool_descriptions=tool_descs,
-        commit_message="treatment — AI-recommended config",
+        system_prompt=treatment_prompt,
+        tool_descriptions=treatment_tool_descs or DEFAULT_TOOL_DESCS,
+        commit_message="treatment — accepted recommendation",
     )
     return {
         "control": {
@@ -235,10 +362,13 @@ def create_online_eval_idempotent(
         )
 
 
-def stage_gateway(exp_id: str, agent: dict[str, Any]) -> dict[str, Any]:
+def stage_gateway(
+    exp_id: str, agent: dict[str, Any], progress: Progress = _noop
+) -> dict[str, Any]:
     settings = get_settings()
     control = control_client()
     role_arn = settings.resources["gateway_role_arn"]
+    progress("creating experiment gateway…")
     try:
         gateway = control.create_gateway(
             name=EXP_GATEWAY_NAME,
@@ -256,6 +386,7 @@ def stage_gateway(exp_id: str, agent: dict[str, Any]) -> dict[str, Any]:
             g["gatewayId"] for g in items if g.get("name") == EXP_GATEWAY_NAME
         )
     gateway_arn = gateway_url = ""
+    progress("waiting for gateway READY…")
     for _ in range(30):
         detail = control.get_gateway(gatewayIdentifier=gateway_id)
         if detail.get("status") == "READY":
@@ -265,8 +396,10 @@ def stage_gateway(exp_id: str, agent: dict[str, Any]) -> dict[str, Any]:
         _sleep(5)
 
     target_v1 = f"exp{exp_id[:6]}v1"
+    progress("creating v1 runtime target…")
     target_id = create_runtime_target_idempotent(control, gateway_id, target_v1, agent["arn"])
     log_group = f"/aws/bedrock-agentcore/runtimes/{agent['resource_id']}-DEFAULT"
+    progress("creating online evaluation config…")
     online_eval = create_online_eval_idempotent(
         control,
         name=f"exp_{exp_id[:8]}_oe1",
@@ -317,7 +450,7 @@ def stage_abtest(exp_id: str, gateway_art: dict, bundle_art: dict) -> dict[str, 
 
 def send_gateway_traffic(
     gateway_url: str, target: str, prompts: list[str],
-    poster: Any = None, signer: Any = None,
+    poster: Any = None, signer: Any = None, progress: Progress = _noop,
 ) -> dict[str, Any]:
     """SigV4 POST each prompt through the experiment gateway (A/B routes them)."""
     settings = get_settings()
@@ -350,6 +483,7 @@ def send_gateway_traffic(
                 session_ids.append(session_id)
             else:
                 failed += 1
+            progress(f"sent {len(session_ids)}/{len(prompts)} ({failed} failed)")
     return {"session_ids": session_ids, "sent": len(session_ids), "failed": failed}
 
 
@@ -385,73 +519,168 @@ def compute_verdict(metrics: list[dict[str, Any]], min_n: int = 3) -> dict[str, 
     }
 
 
-# ─── the auto loop ───────────────────────────────────────────────────────────
-def run_experiment_loop(exp_id: str, agent: dict[str, Any]) -> None:
-    try:
-        _update(exp_id, stage="recommend")
-        rec = stage_recommend(exp_id, agent)
-        _update(exp_id, artifact={"recommend": rec})
+# ─── stepwise actions ────────────────────────────────────────────────────────
+ASYNC_ACTIONS = frozenset(
+    {"recommend", "gateway", "abtest", "traffic", "verdict", "canary", "cleanup"}
+)
 
-        _update(exp_id, stage="bundles")
-        bundles = stage_bundles(exp_id, agent, rec["recommended_prompt"])
-        _update(exp_id, artifact={"bundles": bundles})
+_ACTION_PREREQS: dict[str, tuple[str, str]] = {
+    # action → (artifact that must exist, reason returned on 409)
+    "accept": ("recommend", "run recommend first"),
+    "gateway": ("bundles", "create the bundles first"),
+    "abtest": ("gateway", "create the gateway first"),
+    "traffic": ("abtest", "create the A/B test first"),
+    "verdict": ("traffic", "send traffic first"),
+    "promote": ("verdict", "wait for the verdict first"),
+    "canary": ("verdict", "wait for the verdict first"),
+    "ramp": ("canary", "start the canary first"),
+}
 
-        _update(exp_id, stage="gateway")
-        gateway = stage_gateway(exp_id, agent)
-        _update(exp_id, artifact={"gateway": gateway})
 
-        _update(exp_id, stage="abtest")
-        abtest = stage_abtest(exp_id, gateway, bundles)
-        _update(exp_id, artifact={"abtest": abtest})
+def stage_not_ready_reason(exp: Experiment, action: str) -> str | None:
+    """None when the action's prerequisite artifact exists, else the reason."""
+    if action == "bundles":
+        rec = exp.artifacts.get("recommend") or {}
+        # old auto-pipeline rows never wrote accepted_* — an existing bundles
+        # artifact keeps their retry path open
+        if rec.get("accepted_prompt") or "bundles" in exp.artifacts:
+            return None
+        return "accept a recommendation first"
+    rule = _ACTION_PREREQS.get(action)
+    if rule and rule[0] not in exp.artifacts:
+        return rule[1]
+    return None
 
-        _update(exp_id, stage="traffic")
-        traffic = send_gateway_traffic(
-            gateway["gateway_url"], gateway["target_v1"], TRAFFIC_PROMPTS * 2
-        )
-        _update(exp_id, artifact={"traffic": traffic})
 
-        _update(exp_id, stage="verdict")
-        data = data_client()
-        deadline = time.time() + 900
-        metrics: list[dict[str, Any]] = []
-        while time.time() < deadline:
-            result = ac.get_ab_test(data, ab_test_id=abtest["ab_test_id"])
-            metrics = ac.normalize_ab_results(result)
-            if compute_verdict(metrics)["verdict"] not in ("insufficient-data",):
-                break
-            _sleep(45)
-        verdict = compute_verdict(metrics)
-        _update(exp_id, status="ready",
-                artifact={"verdict": {"metrics": metrics, **verdict}})
-    except Exception as exc:
-        _update(exp_id, status="failed", error=f"{type(exc).__name__}: {exc}"[:500])
+def act_recommend(exp_id: str, progress: Progress) -> None:
+    exp = _get(exp_id)
+    rec = stage_recommend(exp_id, _agent_meta(exp), progress)
+    prior = exp.artifacts.get("recommend") or {}
+    for key in ("accepted_prompt", "accepted_tool_descriptions"):
+        if key in prior:  # a re-run must not drop an earlier accept
+            rec.setdefault(key, prior[key])
+    _update(exp_id, stage="recommend", artifact={"recommend": rec})
+
+
+def action_accept(
+    exp: Experiment, prompt: str, tool_descriptions: dict[str, str] | None
+) -> dict[str, Any]:
+    """Persist the (possibly user-edited) recommendation; unlocks bundles."""
+    rec = dict(exp.artifacts.get("recommend") or {})
+    rec["accepted_prompt"] = prompt[:4000]
+    if tool_descriptions:
+        rec["accepted_tool_descriptions"] = {
+            str(k): str(v) for k, v in tool_descriptions.items()
+        }
+    _update(exp.id, stage="bundles", artifact={"recommend": rec})
+    return rec
+
+
+def action_bundles(exp: Experiment) -> dict[str, Any]:
+    rec = exp.artifacts.get("recommend") or {}
+    treatment_prompt = rec.get("accepted_prompt") or rec.get("recommended_prompt") or ""
+    result = stage_bundles(
+        exp.id, _agent_meta(exp), treatment_prompt,
+        rec.get("accepted_tool_descriptions"),
+    )
+    _update(exp.id, stage="bundles", artifact={"bundles": result})
+    return result
+
+
+def act_gateway(exp_id: str, progress: Progress) -> None:
+    exp = _get(exp_id)
+    result = stage_gateway(exp_id, _agent_meta(exp), progress)
+    _update(exp_id, stage="gateway", artifact={"gateway": result})
+
+
+def act_abtest(exp_id: str, progress: Progress) -> None:
+    exp = _get(exp_id)
+    progress("creating config-bundle A/B test (50/50)…")
+    result = stage_abtest(exp_id, exp.artifacts["gateway"], exp.artifacts["bundles"])
+    _update(exp_id, stage="abtest", artifact={"abtest": result})
+
+
+def resolve_traffic_prompts(dataset: Any) -> list[str]:
+    """Extract sendable prompts from an EvalDataset (legacy/predefined only)."""
+    if dataset.kind == "simulated":
+        raise ValueError("simulated datasets need an actor loop — pick a "
+                         "predefined or legacy prompt dataset")
+    prompts: list[str] = []
+    for item in dataset.items or []:
+        if dataset.kind == "predefined":
+            # a scenario's first user turn — reuse the eval replay extractor so
+            # dict inputs ({"content"|"prompt": …}, imported JSON) unwrap the
+            # same way here as when the dataset is replayed for evaluation
+            turn_prompts = [p for p in scenario_prompts(item) if p.strip()]
+            text = turn_prompts[0] if turn_prompts else ""
+        else:
+            text = str(item.get("prompt") or "")
+        if text.strip():
+            prompts.append(text.strip())
+    if not prompts:
+        raise ValueError("dataset has no usable prompts")
+    return prompts
+
+
+def act_traffic(
+    exp_id: str, prompts: list[str] | None, dataset_info: dict[str, str] | None,
+    progress: Progress,
+) -> None:
+    exp = _get(exp_id)
+    gateway = exp.artifacts["gateway"]
+    result = send_gateway_traffic(
+        gateway["gateway_url"], gateway["target_v1"],
+        prompts if prompts is not None else TRAFFIC_PROMPTS * 2,
+        progress=progress,
+    )
+    if dataset_info:
+        result.update(dataset_info)
+    _update(exp_id, stage="traffic", artifact={"traffic": result})
+
+
+def act_verdict(exp_id: str, progress: Progress) -> None:
+    exp = _get(exp_id)
+    ab_test_id = exp.artifacts["abtest"]["ab_test_id"]
+    data = data_client()
+    deadline = time.time() + 900
+    metrics: list[dict[str, Any]] = []
+    while True:
+        result = ac.get_ab_test(data, ab_test_id=ab_test_id)
+        metrics = ac.normalize_ab_results(result)
+        if compute_verdict(metrics)["verdict"] not in ("insufficient-data",):
+            break
+        if time.time() >= deadline:
+            break
+        progress(f"aggregating · status {result.get('executionStatus', '?')} — "
+                 "results take ~10–15 min after the last session")
+        _sleep(45)
+    verdict = compute_verdict(metrics)
+    _update(exp_id, status="ready", stage="verdict",
+            artifact={"verdict": {"metrics": metrics, **verdict}})
 
 
 def start_experiment(agent_row: Any) -> Experiment:
+    """Create the experiment row only — every stage waits for its action."""
     control = control_client()
-    runtime_name = rt_name(control, agent_row.resource_id)
-    agent = {
+    agent_meta = {
         "id": agent_row.id,
         "name": agent_row.name,
         "arn": agent_row.arn,
         "resource_id": agent_row.resource_id,
-        "runtime_name": runtime_name,
-        "spec": agent_row.spec or {},
+        "runtime_name": rt_name(control, agent_row.resource_id),
+        "system_prompt": (agent_row.spec or {}).get("system_prompt", ""),
     }
     db = SessionLocal()
     try:
         exp = Experiment(
             name=f"EXP-{agent_row.name[:20]}", agent_id=agent_row.id,
-            agent_name=agent_row.name,
+            agent_name=agent_row.name, artifacts={"agent_meta": agent_meta},
         )
         db.add(exp)
         db.commit()
         exp_id = exp.id
     finally:
         db.close()
-    threading.Thread(
-        target=run_experiment_loop, args=(exp_id, agent), daemon=True
-    ).start()
     return _get(exp_id)
 
 
@@ -503,25 +732,35 @@ def action_promote(exp: Experiment) -> dict[str, Any]:
     return result
 
 
-def action_canary(exp: Experiment, challenger: Any) -> dict[str, Any]:
-    """Target-based canary: add the v2 agent as a 10% challenger target."""
+def act_canary(
+    exp_id: str, challenger: dict[str, str], progress: Progress = _noop
+) -> dict[str, Any]:
+    """Target-based canary: add the v2 agent as a 10% challenger target.
+
+    challenger is a plain snapshot {name, arn, resource_id} — the ORM row
+    must not cross into this thread.
+    """
+    exp = _get(exp_id)
     settings = get_settings()
     control = control_client()
     data = data_client()
     gateway = exp.artifacts["gateway"]
     target_v2 = f"exp{exp.id[:6]}v2"
+    progress("creating challenger target + waiting READY…")
     target_id_v2 = create_runtime_target_idempotent(
-        control, gateway["gateway_id"], target_v2, challenger.arn
+        control, gateway["gateway_id"], target_v2, challenger["arn"]
     )
-    log_group_v2 = f"/aws/bedrock-agentcore/runtimes/{challenger.resource_id}-DEFAULT"
+    log_group_v2 = f"/aws/bedrock-agentcore/runtimes/{challenger['resource_id']}-DEFAULT"
+    progress("creating challenger online evaluation config…")
     online_eval_v2 = create_online_eval_idempotent(
         control,
         name=f"exp_{exp.id[:8]}_oe2",
         log_group=log_group_v2,
-        service_name=f"{rt_name(control, challenger.resource_id)}.DEFAULT",
+        service_name=f"{rt_name(control, challenger['resource_id'])}.DEFAULT",
         role_arn=settings.resources["execution_role_arn"],
     )
     # only one A/B test runs per gateway — stop the bundle test first
+    progress("stopping the bundle A/B test (one test per gateway)…")
     try:
         data.update_ab_test(
             abTestId=exp.artifacts["abtest"]["ab_test_id"], executionStatus="STOPPED"
@@ -529,6 +768,7 @@ def action_canary(exp: Experiment, challenger: Any) -> dict[str, Any]:
     except Exception:
         pass
     variants = ac.target_variants(gateway["target_v1"], target_v2)  # 90/10
+    progress("creating target-routing canary A/B test (90/10)…")
     try:
         response = ac.create_ab_test(
             data,
@@ -560,7 +800,7 @@ def action_canary(exp: Experiment, challenger: Any) -> dict[str, Any]:
         "target_v2": target_v2,
         "target_id_v2": target_id_v2,
         "online_eval_id_v2": online_eval_v2.get("onlineEvaluationConfigId"),
-        "challenger_agent": challenger.name,
+        "challenger_agent": challenger["name"],
         "weights": {v["name"]: v["weight"] for v in variants},
         "ramp_stage": 0,
     }
@@ -595,11 +835,13 @@ def action_ramp(exp: Experiment) -> dict[str, Any]:
     return result
 
 
-def action_cleanup(exp: Experiment) -> list[dict[str, str]]:
+def act_cleanup(exp_id: str, progress: Progress = _noop) -> list[dict[str, str]]:
     """Tear down experiment resources; the shared launchpad-gw is untouched."""
+    exp = _get(exp_id)
     control = control_client()
     data = data_client()
     artifacts = exp.artifacts
+    progress("tearing down A/B tests, online evals, bundles, gateway targets…")
     ab_ids = [a for a in [
         (artifacts.get("abtest") or {}).get("ab_test_id"),
         (artifacts.get("canary") or {}).get("canary_ab_test_id"),
