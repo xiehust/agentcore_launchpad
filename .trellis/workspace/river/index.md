@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 9
+- **Total Sessions**: 10
 - **Last Active**: 2026-07-13
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~859 | Active |
+| `journal-1.md` | ~893 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 10 | 2026-07-13 | Evaluators/Datasets sub-pages adopt Experiment-style interaction | `ef0d412` | `main` |
 | 9 | 2026-07-13 | Harness → runtime conversion: one-click experiment enablement | `e983613`, `e028413` | `main` |
 | 8 | 2026-07-13 | Experiment stepwise rework: user-driven stage actions (agentxray Live parity) | `a4a3efb` | `main` |
 | 7 | 2026-07-12 | Gate USE IN NEW AGENT on APPROVED status | `5893cf1` | `main` |

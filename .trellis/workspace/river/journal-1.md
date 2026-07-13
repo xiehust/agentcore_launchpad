@@ -857,3 +857,37 @@ User challenged the 'harness has no runtime ARN' claim — verified the real gat
 ### Next Steps
 
 - None - task complete
+
+
+## Session 10: Evaluators/Datasets sub-pages adopt Experiment-style interaction
+
+**Date**: 2026-07-13
+**Task**: Evaluators/Datasets sub-pages adopt Experiment-style interaction
+**Package**: lab4-interactive
+**Branch**: `main`
+
+### Summary
+
+Refactored ?view=evaluators and ?view=datasets to the Experiment interaction: top table Panel with URL-param row selection (?ev=<id>|new; ?ds=<id>|cloud:<id>|new), detail/editor panel below (Delete/Sync/Save moved in from list rows; builtin evaluators + cloud-only datasets get read-only variants), how-it-works side panel. Editor rehydration keyed on stable selKey (+selRef) so load() refreshes never wipe unsaved edits. i18n en/zh-CN keys added/pruned in sync. Verified live: evaluator create→auto-select→delete, idempotent PUT save, dataset form+import create, edit save, real sync (cloud copy ACTIVE) then UI cloud delete, draft-leak reset, deep links + browser back; 10 screenshots in design/screenshots/eval-pages/. New spec launchpad/evaluation-subpage-interaction.md.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ef0d412` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
