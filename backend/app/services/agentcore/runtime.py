@@ -6,11 +6,23 @@ Explicit-client style (tests inject stubs). Shapes per bedrock-agentcore-control
 
 import json
 import time
+import uuid
 from typing import Any
 
 from app.services.agentcore.harness import new_session_id
 
 TERMINAL_FAILURES = {"CREATE_FAILED", "UPDATE_FAILED"}
+
+
+def _protocol_configuration(protocol: str | None) -> dict[str, Any] | None:
+    """protocolConfiguration param, or None for the HTTP default.
+
+    NB (probed live): UpdateAgentRuntime treats an omitted protocolConfiguration
+    as a RESET to HTTP — every update path must echo the agent's protocol.
+    """
+    if not protocol or protocol == "http":
+        return None
+    return {"serverProtocol": protocol.upper()}
 
 
 def create_code_runtime(
@@ -21,6 +33,7 @@ def create_code_runtime(
     s3_key: str,
     role_arn: str,
     environment: dict[str, str] | None = None,
+    protocol: str | None = None,
 ) -> dict[str, Any]:
     """CreateAgentRuntime from a zip on S3, instrumented via ADOT."""
     params: dict[str, Any] = {
@@ -37,6 +50,9 @@ def create_code_runtime(
     }
     if environment:
         params["environmentVariables"] = dict(environment)
+    proto = _protocol_configuration(protocol)
+    if proto:
+        params["protocolConfiguration"] = proto
     return client.create_agent_runtime(**params)
 
 
@@ -98,9 +114,13 @@ def update_code_runtime(
     s3_key: str,
     role_arn: str,
     environment: dict[str, str] | None = None,
+    protocol: str | None = None,
 ) -> dict[str, Any]:
     """UpdateAgentRuntime with a new zip artifact — publishes a new version in
-    place (same agentRuntimeId/ARN; the DEFAULT endpoint auto-rolls to it)."""
+    place (same agentRuntimeId/ARN; the DEFAULT endpoint auto-rolls to it).
+
+    ``protocol`` must be passed for A2A agents on EVERY update — the service
+    resets an omitted protocolConfiguration back to HTTP (probed live)."""
     params: dict[str, Any] = {
         "agentRuntimeId": runtime_id,
         "agentRuntimeArtifact": _code_artifact(s3_bucket, s3_key),
@@ -109,6 +129,9 @@ def update_code_runtime(
     }
     if environment:
         params["environmentVariables"] = dict(environment)
+    proto = _protocol_configuration(protocol)
+    if proto:
+        params["protocolConfiguration"] = proto
     return client.update_agent_runtime(**params)
 
 
@@ -226,3 +249,64 @@ def invoke_runtime_text(
         raise RuntimeError(f"runtime returned error: {body['error']}")
     text = body.get("result", "") if isinstance(body, dict) else str(body)
     return {"text": str(text), "session_id": session_id}
+
+
+def a2a_result_text(result: dict[str, Any]) -> str:
+    """Reply text from a message/send result (Task or Message shape).
+
+    Task replies carry the final text in artifacts[].parts[]; Task.history is
+    streaming fragments (probed live: agent messages arrive split mid-word)
+    and must never be joined. Message replies carry parts directly.
+    """
+    parts: list[Any] = []
+    if result.get("kind") == "message":
+        parts = result.get("parts") or []
+    else:  # task shape
+        for artifact in result.get("artifacts") or []:
+            parts.extend(artifact.get("parts") or [])
+    return "".join(
+        p.get("text", "") for p in parts if isinstance(p, dict)
+    ).strip()
+
+
+def invoke_a2a_text(
+    client: Any,
+    runtime_arn: str,
+    prompt: str,
+    session_id: str | None = None,
+) -> dict[str, Any]:
+    """JSON-RPC message/send against an A2A-protocol runtime.
+
+    InvokeAgentRuntime passes the JSON-RPC envelope through unmodified for
+    serverProtocol=A2A runtimes; the A2A server owns conversation state, so
+    there is no actor_id/memory envelope here.
+    """
+    session_id = session_id or new_session_id()
+    payload = {
+        "jsonrpc": "2.0",
+        "id": uuid.uuid4().hex,
+        "method": "message/send",
+        "params": {
+            "message": {
+                "role": "user",
+                "messageId": uuid.uuid4().hex,
+                "parts": [{"kind": "text", "text": prompt}],
+            }
+        },
+    }
+    response = client.invoke_agent_runtime(
+        agentRuntimeArn=runtime_arn,
+        runtimeSessionId=session_id,
+        payload=json.dumps(payload).encode("utf-8"),
+    )
+    body = json.loads(response["response"].read())
+    if isinstance(body, dict) and body.get("error"):
+        err = body["error"]
+        raise RuntimeError(
+            f"A2A error {err.get('code', '?')}: {err.get('message', '')}"
+        )
+    result = body.get("result") if isinstance(body, dict) else None
+    return {
+        "text": a2a_result_text(result if isinstance(result, dict) else {}),
+        "session_id": session_id,
+    }

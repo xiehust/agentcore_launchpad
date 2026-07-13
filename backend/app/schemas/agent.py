@@ -43,6 +43,19 @@ class MemoryConfig(BaseModel):
     long_term: bool = False
 
 
+class A2ASkill(BaseModel):
+    """One AgentCard skill advertised by an A2A-protocol agent.
+
+    Becomes both the A2A server's served card content and the Registry
+    record's card `skills` entry — the routing surface other agents match on.
+    """
+
+    id: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
+    name: str = Field(min_length=1, max_length=100)
+    description: str = Field(default="", max_length=1000)
+    tags: list[str] = Field(default_factory=list, max_length=10)
+
+
 # AgentCore filesystemConfigurations mount-path contract: exactly one level under
 # /mnt, 6-200 chars (see task research: runtime-filesystem-configurations).
 MOUNT_PATH_RE = r"^/mnt/[a-zA-Z0-9._-]+/?$"
@@ -142,6 +155,30 @@ class AgentSpec(BaseModel):
     # Managed KBs mounted via the shared KB gateway — harness-only in v1
     # (container/zip/studio have no authenticated gateway channel yet)
     knowledge_bases: list[KnowledgeBaseRef] = Field(default_factory=list, max_length=10)
+    # Runtime service protocol. "a2a" deploys a standard A2A JSON-RPC server
+    # (port 9000, serverProtocol=A2A) — zip_runtime only in v1.
+    protocol: Literal["http", "a2a"] = "http"
+    # AgentCard skills served by the A2A server and published to the Registry
+    a2a_skills: list[A2ASkill] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def _a2a_constraints(self) -> "AgentSpec":
+        if self.protocol == "a2a" and self.method != "zip_runtime":
+            raise ValueError(
+                "the A2A protocol is only supported by the zip_runtime method in v1"
+            )
+        if self.protocol == "a2a" and (self.code or self.code_bundle):
+            raise ValueError(
+                "protocol=a2a always uses the platform A2A template — "
+                "custom code/code_bundle is not supported in v1"
+            )
+        if self.a2a_skills and self.protocol != "a2a":
+            raise ValueError("a2a_skills require protocol=a2a")
+        if self.protocol == "a2a":
+            ids = [s.id for s in self.a2a_skills]
+            if len(ids) != len(set(ids)):
+                raise ValueError("a2a_skills ids must be unique")
+        return self
 
     @model_validator(mode="after")
     def _byo_needs_vpc(self) -> "AgentSpec":

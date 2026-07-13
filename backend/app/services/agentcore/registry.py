@@ -10,6 +10,7 @@ Explicit-client style; payload builders are pure for unit testing.
 import json
 import time
 from typing import Any
+from urllib.parse import quote
 
 A2A_SCHEMA_VERSION = "0.3.0"
 MCP_SERVER_SCHEMA_VERSION = "2025-07-09"  # MCP registry server.json schema date
@@ -19,21 +20,51 @@ SKILL_SCHEMA_VERSION = "0.1.0"
 
 # ---------- payload builders (pure) ----------
 
+def data_plane_invocations_url(arn: str, region: str) -> str:
+    """The runtime's HTTP data-plane base URL — for serverProtocol=A2A runtimes
+    this is a real A2A endpoint (well-known agent card + JSON-RPC root)."""
+    return (
+        f"https://bedrock-agentcore.{region}.amazonaws.com/runtimes/"
+        f"{quote(arn, safe='')}/invocations/"
+    )
+
+
 def build_a2a_card(
-    *, name: str, description: str, arn: str, version: str, method: str
+    *,
+    name: str,
+    description: str,
+    arn: str,
+    version: str,
+    method: str,
+    url: str | None = None,
+    skills: list[dict[str, Any]] | None = None,
+    transport: str = "agentcore-http",
 ) -> dict[str, Any]:
+    """A2A AgentCard for the registry record.
+
+    ``transport`` tells consumers whether ``url`` speaks real A2A JSON-RPC
+    (`a2a-jsonrpc` — serverProtocol=A2A runtimes) or the AgentCore HTTP
+    invocations contract (`agentcore-http` — call via the platform API).
+    """
     return {
         "protocolVersion": A2A_SCHEMA_VERSION,
         "name": name,
         "description": description,
-        "url": arn,
+        "url": url or arn,
         "preferredTransport": "JSONRPC",
         "version": version or "1",
         "capabilities": {"streaming": True},
         "defaultInputModes": ["text/plain"],
         "defaultOutputModes": ["text/plain"],
-        "skills": [],
-        "metadata": {"launchpad.method": method, "launchpad.invoke": "platform /v1 API"},
+        "skills": list(skills or []),
+        "metadata": {
+            "launchpad.method": method,
+            "launchpad.transport": transport,
+            "launchpad.invoke": (
+                "standard A2A JSON-RPC (InvokeAgentRuntime passthrough)"
+                if transport == "a2a-jsonrpc" else "platform /v1 API"
+            ),
+        },
     }
 
 

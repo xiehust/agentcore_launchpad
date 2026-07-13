@@ -277,6 +277,10 @@ def _generate_code(spec: AgentSpec) -> tuple[str, str]:
         from app.templates.studio_agent import adapt_studio_code
 
         return adapt_studio_code(spec.code), "studio artifact (adapted)"
+    if spec.protocol == "a2a":
+        from app.templates.strands_a2a_agent import render_a2a_main_py
+
+        return render_a2a_main_py(spec), "strands A2A template"
     return render_main_py(spec), "strands template"
 
 
@@ -300,6 +304,10 @@ STUDIO_EXTRA_REQUIREMENTS = [
 
 
 def _method_requirements(spec: AgentSpec) -> list[str]:
+    if spec.protocol == "a2a":
+        from app.templates.strands_a2a_agent import a2a_base_requirements
+
+        return a2a_base_requirements() + spec.requirements
     extra = STUDIO_EXTRA_REQUIREMENTS if spec.method == "studio" else []
     return base_requirements() + extra + spec.requirements
 
@@ -379,6 +387,9 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 "role_arn": ctx.scratch.get("execution_role_arn")
                 or settings.resources.get("execution_role_arn", ""),
                 "environment": environment or None,
+                # A2A runtimes must echo the protocol on update too —
+                # UpdateAgentRuntime resets an omitted protocolConfiguration
+                "protocol": spec.protocol,
             }
 
         if mode == "update" and row.resource_id:  # re-publish → UpdateAgentRuntime (new version)

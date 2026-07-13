@@ -1,0 +1,5 @@
+strands-agents[a2a,otel]>=1.0,<2
+bedrock-agentcore==1.17.*
+aws-opentelemetry-distro>=0.10,<1
+fastapi
+uvicorn

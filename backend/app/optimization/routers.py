@@ -73,6 +73,15 @@ def create_experiment(req: ExperimentCreate, db: Session = Depends(get_db)) -> d
             "experiments target runtime-backed agents",
             status_code=400,
         )
+    if (agent.spec or {}).get("protocol") == "a2a":
+        # A2A servers own their prompt/tooling — they never read config
+        # bundles, so an A/B experiment would compare identical arms
+        raise AppError(
+            "experiment.protocol_unsupported",
+            "A2A-protocol agents don't consume config bundles — experiments "
+            "need an HTTP-protocol runtime agent",
+            status_code=400,
+        )
     exp = service.start_experiment(agent)
     return _out(exp)
 

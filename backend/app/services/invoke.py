@@ -21,6 +21,12 @@ def invoke_agent_text(
             data_client(), agent.arn, prompt, session_id=session_id, actor_id=actor_id
         )
     if agent.method in ("zip_runtime", "studio", "container"):
+        # A2A-protocol runtimes speak JSON-RPC; the A2A server owns
+        # conversation state (no actor_id/memory envelope)
+        if (agent.spec or {}).get("protocol") == "a2a":
+            return rt.invoke_a2a_text(
+                data_client(), agent.arn, prompt, session_id=session_id
+            )
         return rt.invoke_runtime_text(
             data_client(), agent.arn, prompt, session_id=session_id, actor_id=actor_id
         )
