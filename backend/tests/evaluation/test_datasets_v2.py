@@ -232,7 +232,7 @@ def test_multi_turn_scenarios_replay_in_one_session(monkeypatch):
 
     items = [SCENARIO, {"prompt": "standalone question"}]
     svc.execute_run(
-        run_id, agent_arn=agent.arn, service_name="svc.DEFAULT", log_group="/lg",
+        run_id, agent_arn=agent.arn, method="zip_runtime", service_name="svc.DEFAULT", log_group="/lg",
         items=items, evaluators=["Builtin.Correctness"], mode="evaluators",
         wait_seconds=0,
     )

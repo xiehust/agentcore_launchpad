@@ -219,9 +219,9 @@ export function Evaluation() {
     api
       .listAgents()
       .then((res) => {
-        const eligible = res.agents.filter(
-          (a) => a.status === "active" && a.method !== "harness",
-        );
+        // all active agents — harness is eval-supported since 07-13 (its managed
+        // runtime emits strands-scoped spans under harness_{name}.DEFAULT)
+        const eligible = res.agents.filter((a) => a.status === "active");
         setAgents(eligible);
         if (eligible.length) setAgentId(eligible[0].id);
       })

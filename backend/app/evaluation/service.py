@@ -7,15 +7,21 @@ Pipeline per run (behind the account lock):
     evaluating — StartBatchEvaluation scoped to exactly those sessions
     completed  — per-evaluator average scores (or insight trees)
 
-Batch evaluation reads CloudWatch traces, so it targets runtime-backed agents
-(zip_runtime / studio / container). Managed-harness agents don't expose a
-service name for span scoping — they're excluded from batch eval and the UI
-says so (documented limitation).
+Batch evaluation reads CloudWatch traces. Runtime-backed agents (zip_runtime /
+studio / container) derive their span service name from the runtime; managed
+harnesses run on an internal Strands runtime that emits
+``service.name = "harness_{harnessName}.DEFAULT"`` with the
+evaluation-parseable ``strands.telemetry.tracer`` scope (live-probed
+2026-07-13) — the backing runtime id differs from the harnessId, so the
+content-log group is discovered by log-group prefix instead of derived.
 """
 
 import time
 from typing import Any
 
+import boto3
+
+from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.errors import AppError
 from app.evaluation import agentcore_eval as ac
@@ -27,25 +33,50 @@ from app.evaluation.scenarios import (
     scenario_prompts,
 )
 from app.models.ledger import Agent
+from app.services.agentcore import harness as hc
 from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import control_client, data_client
 
 _sleep = time.sleep  # injectable for tests
 
-EVAL_SUPPORTED_METHODS = {"zip_runtime", "studio", "container"}
+EVAL_SUPPORTED_METHODS = {"zip_runtime", "studio", "container", "harness"}
 
 
-def resolve_telemetry(agent: Agent) -> tuple[str, str]:
-    """(service_name, log_group) for a runtime-backed platform agent."""
+def _harness_telemetry(agent: Agent, logs_client: Any = None) -> tuple[str, str]:
+    """Harness span identity: the harnessId is ``{harnessName}-{suffix}`` and the
+    managed backing runtime emits ``harness_{harnessName}.DEFAULT``. Its log
+    group carries the BACKING runtime's own id (≠ harnessId) — discover it by
+    prefix; a re-created harness leaves stale groups behind, so newest wins."""
+    base = agent.resource_id.rsplit("-", 1)[0]
+    prefix = f"/aws/bedrock-agentcore/runtimes/harness_{base}-"
+    logs = logs_client or boto3.client("logs", region_name=get_settings().region)
+    groups = [
+        g for g in logs.describe_log_groups(logGroupNamePrefix=prefix).get("logGroups", [])
+        if g["logGroupName"].endswith("-DEFAULT")
+    ]
+    if not groups:
+        raise AppError(
+            "eval.harness_no_telemetry",
+            "this harness has no telemetry log group yet — run at least one "
+            "chat/invoke session first, then start the evaluation",
+            status_code=400,
+        )
+    newest = max(groups, key=lambda g: g.get("creationTime", 0))
+    return f"harness_{base}.DEFAULT", newest["logGroupName"]
+
+
+def resolve_telemetry(agent: Agent, logs_client: Any = None) -> tuple[str, str]:
+    """(service_name, log_group) for a platform agent's spans + content logs."""
     if agent.method not in EVAL_SUPPORTED_METHODS:
         raise AppError(
             "eval.method_unsupported",
-            "batch evaluation targets runtime-backed agents "
-            "(harness agents are excluded — no span service name)",
+            f"batch evaluation is not available for method '{agent.method}'",
             status_code=400,
         )
     if not agent.resource_id:
         raise AppError("eval.agent_not_deployed", "agent has no runtime", status_code=400)
+    if agent.method == "harness":
+        return _harness_telemetry(agent, logs_client)
     detail = rt.get_runtime(control_client(), agent.resource_id)
     runtime_name = detail["agentRuntimeName"]
     return f"{runtime_name}.DEFAULT", (
@@ -68,6 +99,7 @@ def execute_run(
     run_id: str,
     *,
     agent_arn: str,
+    method: str,
     service_name: str,
     log_group: str,
     items: list[dict[str, Any]],
@@ -96,7 +128,10 @@ def execute_run(
             for scenario in scenarios:
                 sid: str | None = None
                 for prompt in scenario_prompts(scenario):
-                    result = rt.invoke_runtime_text(data, agent_arn, prompt, session_id=sid)
+                    if method == "harness":  # InvokeHarness, not the runtime data plane
+                        result = hc.invoke_harness_text(data, agent_arn, prompt, session_id=sid)
+                    else:
+                        result = rt.invoke_runtime_text(data, agent_arn, prompt, session_id=sid)
                     sid = result["session_id"]
                 session_ids.append(sid)
                 _update(run_id, session_ids=list(session_ids))
@@ -238,6 +273,7 @@ def submit_run(
         db.commit()
         run_id = run.id
         agent_arn = agent.arn
+        agent_method = agent.method
     finally:
         db.close()
 
@@ -246,6 +282,7 @@ def submit_run(
         lambda: execute_run(
             run_id,
             agent_arn=agent_arn,
+            method=agent_method,
             service_name=service_name,
             log_group=log_group,
             items=dataset_items,

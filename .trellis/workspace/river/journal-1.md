@@ -424,3 +424,44 @@ tracked in data/fs-byo-state.json (gitignored).
 ### Status
 
 [OK] **Completed**
+
+---
+
+## 2026-07-13 — Harness agents enabled in evaluation (new run / insight)
+
+**Date**: 2026-07-13
+**Task**: 07-13-harness-eval-support
+**Package**: launchpad backend + frontend + real AWS probe
+**Branch**: `main`
+
+### Summary
+
+User asked why active harnesses don't appear in the eval agent dropdown. The
+old exclusion ("no span service name", evaluation/service.py) turned out WRONG:
+live probe of a fresh hr-assistant session showed managed harnesses run on an
+internal Strands runtime emitting service.name harness_{harnessName}.DEFAULT
+with scope strands.telemetry.tracer (the evaluation-parseable scope) and full
+gen_ai attrs. Enabled harness in the eval pipeline:
+
+- resolve_telemetry harness branch — service name derived from the harnessId
+  base; content-log group PREFIX-DISCOVERED (/aws/bedrock-agentcore/runtimes/
+  harness_{name}-) because the backing runtime id ≠ harnessId and GetHarness
+  doesn't expose it; multiple groups → newest creationTime; cold harness (no
+  group yet) → 400 eval.harness_no_telemetry with a "chat first" hint.
+- execute_run dataset invoking dispatches by method (InvokeHarness vs runtime
+  data plane); Evaluation.tsx dropdown filter now status-only. Experiments
+  KEEP excluding harness (config-bundle A/B doesn't apply).
+
+### Verified
+
+- Live: window:1h run fbbd4043f0fe vs hr-assistant → COMPLETED,
+  Correctness 1.0 / Helpfulness 0.83 (probe session evaluated).
+- Browser: both harness agents render in the ?view=new dropdown
+  (design/screenshots/agent-sdk-caps-fs/11-harness-in-eval-dropdown.png).
+- 420 backend tests green (excluded-test rewritten to happy path + cold-harness
+  400 test); frontend lint/build clean.
+- Spec: .trellis/spec/launchpad/evaluation-agent-eligibility.md (new).
+
+### Status
+
+[OK] **Completed**

@@ -122,15 +122,88 @@ def test_run_failure_recorded(client, monkeypatch):
     db.close()
 
 
-def test_harness_agents_excluded(client, monkeypatch):
+class StubLogs:
+    """describe_log_groups stub — harness backing-runtime group discovery."""
+
+    def __init__(self, groups):
+        self.groups = groups
+        self.prefixes: list[str] = []
+
+    def describe_log_groups(self, logGroupNamePrefix):
+        self.prefixes.append(logGroupNamePrefix)
+        return {"logGroups": [g for g in self.groups
+                              if g["logGroupName"].startswith(logGroupNamePrefix)]}
+
+
+def _stub_harness_logs(monkeypatch, groups):
+    logs = StubLogs(groups)
+    monkeypatch.setattr(svc.boto3, "client", lambda *a, **k: logs)
+    return logs
+
+
+def test_harness_run_completes(client, monkeypatch):
+    """Harness agents are eval-supported since 07-13: service name derives from
+    the harnessId base, the content-log group is prefix-discovered (backing
+    runtime id ≠ harnessId), and invoking goes through InvokeHarness."""
     db = SessionLocal()
     agent = make_agent(db, name="harness-agent", method="harness")
-    dataset = EvalDataset(name="mini3", items=[{"prompt": "x"}])
+    agent.resource_id = "harness_agent-Flr7ibmASq"
+    agent.arn = "arn:aws:bedrock-agentcore:us-west-2:1:harness/harness_agent-Flr7ibmASq"
+    dataset = EvalDataset(name="mini3", items=[{"prompt": "x"}, {"prompt": "y"}])
     db.add(dataset)
     db.commit()
+    data, calls = stub_environment(monkeypatch)
+    logs = _stub_harness_logs(monkeypatch, [
+        {"logGroupName": "/aws/bedrock-agentcore/runtimes/harness_harness_agent-OLD111-DEFAULT",
+         "creationTime": 1},
+        {"logGroupName": "/aws/bedrock-agentcore/runtimes/harness_harness_agent-GIRksPB4NZ-DEFAULT",
+         "creationTime": 2},
+    ])
+    harness_calls = {"n": 0}
+
+    def invoke_harness_text(client_, arn, prompt, session_id=None, actor_id="default"):
+        harness_calls["n"] += 1
+        return {"text": "ok", "session_id": f"hsess-{harness_calls['n']:03d}" + "x" * 30}
+
+    monkeypatch.setattr(svc.hc, "invoke_harness_text", invoke_harness_text)
+
+    res = client.post("/api/eval/runs", json={
+        "agent_id": agent.id, "dataset_id": dataset.id,
+        "evaluators": ["Builtin.Correctness"], "wait_seconds": 0,
+    })
+    assert res.status_code == 201
+    run_id = res.json()["id"]
+    import time
+    for _ in range(50):
+        run = client.get(f"/api/eval/runs/{run_id}").json()
+        if run["status"] in ("completed", "failed"):
+            break
+        time.sleep(0.1)
+    assert run["status"] == "completed", run.get("error")
+    assert harness_calls["n"] == 2 and calls["n"] == 0  # InvokeHarness, not runtime
+    assert logs.prefixes == ["/aws/bedrock-agentcore/runtimes/harness_harness_agent-"]
+    cw = data.start_batch_evaluation.call_args.kwargs["dataSourceConfig"]["cloudWatchLogs"]
+    assert cw["serviceNames"] == ["harness_harness_agent.DEFAULT"]
+    # newest backing-runtime group wins over the stale one
+    assert cw["logGroupNames"] == [
+        "aws/spans",
+        "/aws/bedrock-agentcore/runtimes/harness_harness_agent-GIRksPB4NZ-DEFAULT",
+    ]
+    db.close()
+
+
+def test_harness_without_telemetry_group_rejected(client, monkeypatch):
+    db = SessionLocal()
+    agent = make_agent(db, name="harness-cold", method="harness")
+    agent.resource_id = "harness_cold-Abc123XYZ0"
+    db.commit()
+    dataset = EvalDataset(name="mini4", items=[{"prompt": "x"}])
+    db.add(dataset)
+    db.commit()
+    _stub_harness_logs(monkeypatch, [])
     res = client.post("/api/eval/runs", json={
         "agent_id": agent.id, "dataset_id": dataset.id,
     })
     assert res.status_code == 400
-    assert res.json()["code"] == "eval.method_unsupported"
+    assert res.json()["code"] == "eval.harness_no_telemetry"
     db.close()

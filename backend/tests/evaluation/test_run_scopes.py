@@ -117,7 +117,7 @@ def test_session_metadata_passthrough(client, monkeypatch):
                  "groundTruth": {"expectedResponse": "42"}}]
     svc.execute_run(
         run_id,
-        agent_arn=agent.arn, service_name="svc.DEFAULT", log_group="/lg",
+        agent_arn=agent.arn, method="zip_runtime", service_name="svc.DEFAULT", log_group="/lg",
         items=[], evaluators=["Builtin.Correctness"], mode="evaluators",
         wait_seconds=0, existing_session_ids=["s1" + "x" * 32],
         session_metadata=metadata,
