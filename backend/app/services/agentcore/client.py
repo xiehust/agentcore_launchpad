@@ -19,3 +19,13 @@ def control_client():
 @lru_cache
 def data_client():
     return boto3.client("bedrock-agentcore", region_name=get_settings().region)
+
+
+@lru_cache
+def agent_client():
+    return boto3.client("bedrock-agent", region_name=get_settings().region)
+
+
+@lru_cache
+def agent_runtime_client():
+    return boto3.client("bedrock-agent-runtime", region_name=get_settings().region)

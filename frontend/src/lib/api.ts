@@ -74,6 +74,8 @@ export interface AgentSpecInput {
   system_prompt: string;
   tools?: { type: string; name: string; config?: Record<string, unknown> }[];
   skills?: string[];
+  // Managed KB references mounted onto the agent (harness method only).
+  knowledge_bases?: { kb_id: string; name: string; description: string }[];
   memory?: { short_term: boolean; long_term: boolean };
   code?: string;
   requirements?: string[];

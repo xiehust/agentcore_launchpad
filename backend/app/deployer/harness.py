@@ -14,6 +14,7 @@ from app.core.config import get_settings
 from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
+from app.services import kb_gateway as kbgw
 from app.services.agentcore import harness as hc
 from app.services.agentcore.client import control_client
 
@@ -24,23 +25,51 @@ BUILTIN_TOOL_TYPES = {
 GATEWAY_SCOPE = "launchpad-gw/invoke"
 
 
+def _kb_prompt(spec: AgentSpec) -> str:
+    """System-prompt section mapping mounted KBs to their gateway tool names."""
+    agentic = kbgw.agentic_target_name(spec.name)
+    lines = [
+        "",
+        "## Knowledge bases",
+        f"Retrieval tools are mounted for you. Prefer `{agentic}___AgenticRetrieveStream`",
+        "(multi-step retrieval across every mounted knowledge base, returns a cited",
+        "answer) for open questions; use a per-KB `…___Retrieve` tool for a targeted",
+        "single search. Mounted knowledge bases:",
+    ]
+    for kb in spec.knowledge_bases:
+        label = kb.name or kb.kb_id
+        target = kbgw.retrieve_target_name(kb.kb_id, kb.name or kb.kb_id)
+        desc = f" — {kb.description}" if kb.description else ""
+        lines.append(f"- {label} (tool `{target}___Retrieve`){desc}")
+    lines.append(
+        "Ground answers on retrieved content and cite sources when you use them."
+    )
+    return "\n".join(lines)
+
+
 def build_create_params(
     spec: AgentSpec,
     execution_role_arn: str,
     memory_arn: str | None,
     gateway: dict[str, str] | None = None,
+    kb_gateway: dict[str, str] | None = None,
 ) -> dict:
     """AgentSpec → CreateHarness kwargs. Harness names disallow hyphens.
 
     ``gateway`` carries {arn, oauth_provider_arn} — any spec tool of type
     "gateway" attaches the shared gateway with CLIENT_CREDENTIALS outbound auth
     (the harness fetches Cognito M2M tokens itself via AgentCore Identity).
+    ``kb_gateway`` carries the same shape for launchpad-kb-gw; it attaches when
+    the spec mounts knowledge bases.
     """
+    system_prompt = spec.system_prompt
+    if spec.knowledge_bases:
+        system_prompt += _kb_prompt(spec)
     params: dict[str, Any] = {
         "harnessName": spec.name.replace("-", "_"),
         "executionRoleArn": execution_role_arn,
         "model": {"bedrockModelConfig": {"modelId": spec.model_id}},
-        "systemPrompt": [{"text": spec.system_prompt}],
+        "systemPrompt": [{"text": system_prompt}],
         "maxIterations": spec.max_iterations,
         "timeoutSeconds": spec.timeout_seconds,
     }
@@ -70,6 +99,25 @@ def build_create_params(
                         "outboundAuth": {
                             "oauth": {
                                 "providerArn": gateway["oauth_provider_arn"],
+                                "grantType": "CLIENT_CREDENTIALS",
+                                "scopes": [GATEWAY_SCOPE],
+                            }
+                        },
+                    }
+                },
+            }
+        )
+    if kb_gateway and spec.knowledge_bases:
+        tools.append(
+            {
+                "type": "agentcore_gateway",
+                "name": "launchpad_kb_gw",
+                "config": {
+                    "agentCoreGateway": {
+                        "gatewayArn": kb_gateway["arn"],
+                        "outboundAuth": {
+                            "oauth": {
+                                "providerArn": kb_gateway["oauth_provider_arn"],
                                 "grantType": "CLIENT_CREDENTIALS",
                                 "scopes": [GATEWAY_SCOPE],
                             }
@@ -108,13 +156,26 @@ def _gateway_config(resources: dict[str, Any]) -> dict[str, str] | None:
     return None
 
 
+def _kb_gateway_config(resources: dict[str, Any]) -> dict[str, str] | None:
+    if resources.get("kb_gateway_arn") and resources.get("oauth_provider_arn"):
+        return {
+            "arn": resources["kb_gateway_arn"],
+            "oauth_provider_arn": resources["oauth_provider_arn"],
+        }
+    return None
+
+
 def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
     settings = get_settings()
     spec = AgentSpec(**agent.spec)
     role_arn = settings.resources.get("execution_role_arn", "")
     memory_arn = settings.resources.get("memory_arn")
     params = build_create_params(
-        spec, role_arn, memory_arn, gateway=_gateway_config(settings.resources)
+        spec,
+        role_arn,
+        memory_arn,
+        gateway=_gateway_config(settings.resources),
+        kb_gateway=_kb_gateway_config(settings.resources),
     )
     ctx.scratch["create_params"] = params
     ctx.log(f"harness request generated for {params['harnessName']} · model {spec.model_id}")
@@ -133,6 +194,45 @@ def _stage_provision(ctx: StageContext, agent: Agent) -> StageResult:
         )
     ctx.scratch["execution_role_arn"] = role_arn
     ctx.log(f"reusing shared execution role {role_arn}")
+
+    spec = AgentSpec(**agent.spec)
+    if spec.knowledge_bases:
+        control = control_client()
+        gw = kbgw.ensure_kb_gateway_persisted(control)
+        for kb in spec.knowledge_bases:
+            kbgw.ensure_retrieve_target(
+                control, gw["id"], kb.kb_id, kb.name or kb.kb_id, kb.description
+            )
+        kbgw.sync_agentic_target(
+            control,
+            gw["id"],
+            spec.name,
+            [
+                {"kb_id": kb.kb_id, "description": kb.description or kb.name}
+                for kb in spec.knowledge_bases
+            ],
+        )
+        # generate ran before the KB gateway existed on first attach — rebuild
+        # the request now that kb_gateway_* resources are persisted
+        settings = get_settings()
+        ctx.scratch["create_params"] = build_create_params(
+            spec,
+            settings.resources.get("execution_role_arn", ""),
+            settings.resources.get("memory_arn"),
+            gateway=_gateway_config(settings.resources),
+            kb_gateway=_kb_gateway_config(settings.resources),
+        )
+        ctx.log(f"kb gateway ready · {len(spec.knowledge_bases)} knowledge base(s) mounted")
+        return StageResult(
+            detail=f"iam role reused · kb targets ready ({len(spec.knowledge_bases)})"
+        )
+
+    # re-publish with every KB unselected → drop the stale per-agent target
+    resources = get_settings().resources
+    if resources.get("kb_gateway_id"):
+        kbgw.sync_agentic_target(
+            control_client(), resources["kb_gateway_id"], spec.name, []
+        )
     return StageResult(detail="iam role reused · launchpad-base")
 
 
@@ -152,6 +252,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                     settings.resources.get("execution_role_arn", ""),
                     settings.resources.get("memory_arn"),
                     gateway=_gateway_config(settings.resources),
+                    kb_gateway=_kb_gateway_config(settings.resources),
                 )
             return params
 
@@ -205,10 +306,17 @@ register_method("harness", STAGES)
 
 
 def delete_agent_resources(agent: Agent) -> None:
-    """Remove the AWS-side harness for a ledger row (idempotent)."""
+    """Remove the AWS-side harness + per-agent KB target for a ledger row (idempotent)."""
+    client = control_client()
+    resources = get_settings().resources
+    if resources.get("kb_gateway_id"):
+        spec_name = (agent.spec or {}).get("name") or agent.name
+        try:
+            kbgw.delete_agentic_target(client, resources["kb_gateway_id"], spec_name)
+        except Exception:  # noqa: BLE001 — target cleanup must not block deletion
+            pass
     if not agent.resource_id:
         return
-    client = control_client()
     try:
         hc.delete_harness(client, agent.resource_id)
     except client.exceptions.ResourceNotFoundException:

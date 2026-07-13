@@ -25,6 +25,18 @@ class ToolRef(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
 
 
+class KnowledgeBaseRef(BaseModel):
+    """Managed Knowledge Base mounted on the agent via the shared KB gateway.
+
+    name/description are denormalized at selection time — they feed the system
+    prompt and detail views without a Bedrock round-trip.
+    """
+
+    kb_id: str = Field(min_length=1, max_length=32, pattern=r"^[A-Za-z0-9]+$")
+    name: str = Field(default="", max_length=200)
+    description: str = Field(default="", max_length=1000)
+
+
 class MemoryConfig(BaseModel):
     short_term: bool = True
     long_term: bool = False
@@ -119,12 +131,23 @@ class AgentSpec(BaseModel):
     filesystem: FilesystemConfig = Field(default_factory=FilesystemConfig)
     # VPC networkModeConfig; mandatory whenever a BYO file system is mounted
     network: VpcNetwork | None = None
+    # Managed KBs mounted via the shared KB gateway — harness-only in v1
+    # (container/zip/studio have no authenticated gateway channel yet)
+    knowledge_bases: list[KnowledgeBaseRef] = Field(default_factory=list, max_length=10)
 
     @model_validator(mode="after")
     def _byo_needs_vpc(self) -> "AgentSpec":
         if self.filesystem.byo and self.network is None:
             raise ValueError(
                 "BYO file systems (S3 Files / EFS) require VPC network configuration"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _kb_needs_harness(self) -> "AgentSpec":
+        if self.knowledge_bases and self.method != "harness":
+            raise ValueError(
+                "knowledge_bases are only supported by the harness method in v1"
             )
         return self
 

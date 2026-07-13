@@ -7,6 +7,7 @@ import { CreateAgent } from "./pages/CreateAgent";
 import { CreateAgentStudio } from "./pages/CreateAgentStudio";
 import { Evaluation } from "./pages/Evaluation";
 import { Governance } from "./pages/Governance";
+import { KnowledgeBases } from "./pages/KnowledgeBases";
 import { Observability } from "./pages/Observability";
 import { Overview } from "./pages/Overview";
 import { Registry } from "./pages/Registry";
@@ -21,6 +22,7 @@ export default function App() {
             <Route path="create" element={<CreateAgent />} />
             <Route path="create/studio" element={<CreateAgentStudio />} />
             <Route path="registry" element={<Registry />} />
+            <Route path="knowledge-bases" element={<KnowledgeBases />} />
             <Route path="chat" element={<Chat />} />
             <Route path="observability" element={<Observability />} />
             <Route path="evaluation" element={<Evaluation />} />

@@ -28,9 +28,13 @@ def wrap_params_for_update(params: dict[str, Any]) -> dict[str, Any]:
     ``wrap_descriptors_for_update``). Update reuses the create shapes except
     ``memory``, whose value must sit in {"optionalValue": …}. Omitting memory
     means "keep the old config", so a spec without memory sends the explicit
-    ``disabled`` variant to detach it. Drops the immutable ``harnessName``."""
+    ``disabled`` variant to detach it. ``tools``/``skills`` share that omit=keep
+    semantic — send explicit empty lists so deselecting the last tool (e.g. the
+    only mounted KB) actually detaches it. Drops the immutable ``harnessName``."""
     update = {k: v for k, v in params.items() if k != "harnessName"}
     update["memory"] = {"optionalValue": update.get("memory") or {"disabled": {}}}
+    update.setdefault("tools", [])
+    update.setdefault("skills", [])
     return update
 
 

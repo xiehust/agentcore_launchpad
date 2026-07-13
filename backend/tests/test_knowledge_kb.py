@@ -1,0 +1,361 @@
+"""Managed KB unit coverage — pure logic, no AWS:
+
+- AgentSpec.knowledge_bases validation (harness-only, KnowledgeBaseRef shape)
+- kb_gateway target-name sanitization
+- knowledge external-source validation (bucket/prefix → IAM policy safety)
+- filename safety, per-KB inline policy scoping
+- harness build_create_params KB prompt + gateway attach
+- wrap_params_for_update empty tools/skills detach semantics
+- kb_gateway.sync_agentic_target create/delete + ensure_retrieve_target race
+"""
+
+import pytest
+from pydantic import ValidationError
+
+from app.core.errors import AppError
+from app.deployer.harness import build_create_params
+from app.schemas.agent import AgentSpec, KnowledgeBaseRef
+from app.services import kb_gateway, knowledge
+from app.services.agentcore import harness as hc
+
+ROLE_ARN = "arn:aws:iam::111:role/launchpad-agent-execution-role"
+KB_GW = {"arn": "arn:aws:...:gateway/launchpad-kb-gw", "oauth_provider_arn": "arn:aws:...:oauth/p"}
+
+
+def _spec(**over):
+    base = {"name": "support-bot", "method": "harness", "system_prompt": "You help users."}
+    base.update(over)
+    return AgentSpec(**base)
+
+
+# ── AgentSpec.knowledge_bases validation ─────────────────────────────────────
+
+
+def test_kb_requires_harness_method():
+    with pytest.raises(ValidationError, match="harness"):
+        _spec(method="container", knowledge_bases=[{"kb_id": "ABC123", "name": "docs"}])
+
+
+def test_kb_on_harness_ok():
+    spec = _spec(
+        knowledge_bases=[{"kb_id": "ABC123XYZ", "name": "Product Docs", "description": "d"}]
+    )
+    assert spec.knowledge_bases[0].kb_id == "ABC123XYZ"
+
+
+def test_kb_default_empty():
+    assert _spec().knowledge_bases == []
+
+
+@pytest.mark.parametrize("bad_id", ["", "abc-123", "kb/xyz", "a" * 33, "has space"])
+def test_kb_id_pattern_rejected(bad_id):
+    with pytest.raises(ValidationError):
+        KnowledgeBaseRef(kb_id=bad_id)
+
+
+def test_kb_list_capped_at_ten():
+    refs = [{"kb_id": f"KB{i:08d}"} for i in range(11)]
+    with pytest.raises(ValidationError):
+        _spec(knowledge_bases=refs)
+
+
+# ── kb_gateway target-name sanitization ──────────────────────────────────────
+
+
+def test_retrieve_target_name_slug_and_suffix():
+    name = kb_gateway.retrieve_target_name("K5YAKY", "Product Docs & FAQs!")
+    assert name == "product-docs-faqs-k5yaky"
+
+
+def test_retrieve_target_name_blank_name_falls_back():
+    assert kb_gateway.retrieve_target_name("ABC12", "  ").startswith("kb-")
+
+
+def test_agentic_target_name():
+    assert kb_gateway.agentic_target_name("Support Bot") == "agentic-support-bot"
+    assert kb_gateway.agentic_target_name("") == "agentic-agent"
+
+
+def test_sanitize_truncates_and_trims():
+    assert kb_gateway._sanitize("A" * 100, 10) == "a" * 10
+    assert kb_gateway._sanitize("--weird__name--", 30) == "weird-name"
+
+
+# ── external-source validation (blocks IAM policy widening) ───────────────────
+
+
+def test_resolve_source_existing_ok():
+    assert knowledge._resolve_source("KB1", {"mode": "existing", "bucket": "my-corpus"}) == (
+        "my-corpus",
+        "",
+    )
+    assert knowledge._resolve_source(
+        "KB1", {"mode": "existing", "bucket": "my-corpus", "prefix": "/docs/"}
+    ) == ("my-corpus", "docs/")
+
+
+@pytest.mark.parametrize("bucket", ["*", "My-Bucket", "bad/bucket", "ab", "has space", "x" * 64])
+def test_resolve_source_rejects_bad_bucket(bucket):
+    with pytest.raises(AppError) as ei:
+        knowledge._resolve_source("KB1", {"mode": "existing", "bucket": bucket})
+    assert ei.value.code == "kb.invalid_bucket"
+    assert ei.value.status_code == 400
+
+
+def test_resolve_source_rejects_wildcard_prefix():
+    with pytest.raises(AppError) as ei:
+        knowledge._resolve_source("KB1", {"mode": "existing", "bucket": "corpus", "prefix": "a*"})
+    assert ei.value.code == "kb.invalid_prefix"
+
+
+def test_resolve_source_requires_bucket():
+    with pytest.raises(AppError) as ei:
+        knowledge._resolve_source("KB1", {"mode": "existing", "bucket": "  "})
+    assert ei.value.code == "kb.bucket_required"
+
+
+def test_resolve_source_bad_mode():
+    with pytest.raises(AppError) as ei:
+        knowledge._resolve_source("KB1", {"mode": "ftp"})
+    assert ei.value.code == "kb.invalid_source"
+
+
+# ── filename safety + per-KB inline policy scoping ───────────────────────────
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("../../etc/passwd", "passwd"),
+        ("a/b/c.txt", "c.txt"),
+        ("C:\\Users\\x\\f.txt", "f.txt"),
+        ("", "file"),
+        ("..", "file"),
+        (".", "file"),
+        ("report.pdf", "report.pdf"),
+    ],
+)
+def test_safe_filename(raw, expected):
+    assert knowledge._safe_filename(raw) == expected
+
+
+def test_kb_policy_document_scopes_to_prefix():
+    doc = knowledge._kb_policy_document("corp-docs", "docs/")
+    get_stmt, list_stmt = doc["Statement"]
+    assert get_stmt["Action"] == ["s3:GetObject"]
+    assert get_stmt["Resource"] == "arn:aws:s3:::corp-docs/docs/*"
+    assert list_stmt["Resource"] == "arn:aws:s3:::corp-docs"
+    assert list_stmt["Condition"] == {"StringLike": {"s3:prefix": ["docs/*"]}}
+
+
+def test_kb_policy_document_no_prefix_has_no_list_condition():
+    doc = knowledge._kb_policy_document("corp-docs", "")
+    get_stmt, list_stmt = doc["Statement"]
+    assert get_stmt["Resource"] == "arn:aws:s3:::corp-docs/*"
+    assert "Condition" not in list_stmt
+
+
+# ── harness build_create_params: KB prompt + gateway attach ──────────────────
+
+
+def test_build_params_no_kb_leaves_prompt_and_tools_clean():
+    params = build_create_params(_spec(), ROLE_ARN, None, kb_gateway=KB_GW)
+    assert params["systemPrompt"] == [{"text": "You help users."}]
+    assert "tools" not in params  # no KB selected → no kb-gw attach
+
+
+def test_build_params_kb_injects_prompt_and_attaches_gateway():
+    spec = _spec(
+        knowledge_bases=[
+            {"kb_id": "KB1", "name": "Product Docs", "description": "how features work"}
+        ]
+    )
+    params = build_create_params(spec, ROLE_ARN, None, kb_gateway=KB_GW)
+    prompt = params["systemPrompt"][0]["text"]
+    assert "Knowledge bases" in prompt
+    assert "agentic-support-bot___AgenticRetrieveStream" in prompt
+    assert "product-docs-kb1___Retrieve" in prompt
+    assert "how features work" in prompt
+    gw_tools = [t for t in params["tools"] if t["name"] == "launchpad_kb_gw"]
+    assert len(gw_tools) == 1
+    assert gw_tools[0]["config"]["agentCoreGateway"]["gatewayArn"] == KB_GW["arn"]
+
+
+def test_build_params_kb_without_gateway_config_skips_attach():
+    """Half-bootstrapped env (no kb-gw resources): prompt still lists the KBs but
+    no gateway tool is attached rather than emitting a malformed tool."""
+    spec = _spec(knowledge_bases=[{"kb_id": "KB1", "name": "Docs"}])
+    params = build_create_params(spec, ROLE_ARN, None, kb_gateway=None)
+    assert "Knowledge bases" in params["systemPrompt"][0]["text"]
+    assert "tools" not in params
+
+
+# ── wrap_params_for_update: empty tools/skills detach ────────────────────────
+
+
+def test_wrap_update_sends_empty_tools_when_last_removed():
+    """A spec with no tools/skills must send explicit [] so UpdateHarness detaches
+    the previously-mounted tools (e.g. the only KB) instead of keeping them."""
+    update = hc.wrap_params_for_update(build_create_params(_spec(), ROLE_ARN, None))
+    assert update["tools"] == []
+    assert update["skills"] == []
+
+
+def test_wrap_update_preserves_present_tools():
+    spec = _spec(tools=[{"type": "builtin", "name": "browser"}])
+    params = build_create_params(spec, ROLE_ARN, None)
+    update = hc.wrap_params_for_update(params)
+    assert update["tools"] == [{"type": "agentcore_browser", "name": "browser"}]
+
+
+# ── kb_gateway target sync with a stubbed control plane ──────────────────────
+
+
+class _Conflict(Exception):
+    pass
+
+
+class StubControl:
+    """Minimal bedrock-agentcore-control stub: an in-memory target map."""
+
+    def __init__(self):
+        self.targets: dict[str, dict] = {}
+        self.creates = 0
+        self.updates = 0
+        self.deletes = 0
+
+        class _Exc:
+            ConflictException = _Conflict
+
+        self.exceptions = _Exc()
+
+    def list_gateway_targets(self, gatewayIdentifier, maxResults=100):
+        return {"items": list(self.targets.values())}
+
+    def create_gateway_target(self, **kw):
+        self.creates += 1
+        name = kw["name"]
+        if name in self.targets:
+            raise self.exceptions.ConflictException()
+        tid = f"tid-{name}"
+        self.targets[name] = {"name": name, "targetId": tid, "status": "READY"}
+        return {"targetId": tid}
+
+    def update_gateway_target(self, **kw):
+        self.updates += 1
+        return {"targetId": kw["targetId"]}
+
+    def delete_gateway_target(self, gatewayIdentifier, targetId):
+        self.deletes += 1
+        for n, t in list(self.targets.items()):
+            if t["targetId"] == targetId:
+                del self.targets[n]
+
+    def get_gateway_target(self, gatewayIdentifier, targetId):
+        return {"status": "READY"}
+
+
+def test_sync_agentic_target_noop_when_empty_and_absent():
+    ctl = StubControl()
+    assert kb_gateway.sync_agentic_target(ctl, "gw", "bot", []) is None
+    assert ctl.creates == 0 and ctl.deletes == 0
+
+
+def test_sync_agentic_target_deletes_when_emptied():
+    ctl = StubControl()
+    tid = kb_gateway.sync_agentic_target(ctl, "gw", "bot", [{"kb_id": "KB1", "description": "d"}])
+    assert tid == "tid-agentic-bot"
+    assert kb_gateway.sync_agentic_target(ctl, "gw", "bot", []) is None
+    assert ctl.deletes == 1
+    assert kb_gateway.agentic_target_name("bot") not in ctl.targets
+
+
+def test_sync_agentic_target_updates_existing():
+    ctl = StubControl()
+    kb_gateway.sync_agentic_target(ctl, "gw", "bot", [{"kb_id": "KB1", "description": "d"}])
+    kb_gateway.sync_agentic_target(ctl, "gw", "bot", [{"kb_id": "KB2", "description": "e"}])
+    assert ctl.updates == 1  # second call updates rather than recreates
+
+
+class StubRace(StubControl):
+    """create_gateway_target loses a race: raises Conflict but the target then
+    appears (as if a concurrent publish created it)."""
+
+    def __init__(self, name):
+        super().__init__()
+        self._name = name
+        self._revealed = False
+
+    def list_gateway_targets(self, gatewayIdentifier, maxResults=100):
+        if self._revealed:
+            return {"items": [{"name": self._name, "targetId": "tid-race", "status": "READY"}]}
+        return {"items": []}
+
+    def create_gateway_target(self, **kw):
+        self.creates += 1
+        self._revealed = True
+        raise self.exceptions.ConflictException()
+
+
+def test_ensure_retrieve_target_adopts_racing_winner():
+    tname = kb_gateway.retrieve_target_name("KB1", "Docs")
+    ctl = StubRace(tname)
+    tid = kb_gateway.ensure_retrieve_target(ctl, "gw", "KB1", "Docs", "d")
+    assert tid == "tid-race"
+    assert ctl.creates == 1  # we tried once, then adopted the winner
+
+
+def test_ensure_retrieve_target_creates_when_absent():
+    ctl = StubControl()
+    tid = kb_gateway.ensure_retrieve_target(ctl, "gw", "KB1", "Docs", "d")
+    assert tid == f"tid-{kb_gateway.retrieve_target_name('KB1', 'Docs')}"
+    # idempotent: second call finds the existing target, no second create
+    tid2 = kb_gateway.ensure_retrieve_target(ctl, "gw", "KB1", "Docs", "d")
+    assert tid2 == tid and ctl.creates == 1
+
+
+# ── force-delete strips the KB from mounted agents ──────────────────────────
+
+
+def test_strip_kb_from_agents_updates_specs(monkeypatch):
+    from app.core.db import SessionLocal
+    from app.models.ledger import Agent
+    from app.services import knowledge
+
+    db = SessionLocal()
+    mounted = Agent(
+        name="kb-user", method="harness", status="active",
+        spec={"name": "kb-user", "method": "harness",
+              "knowledge_bases": [
+                  {"kb_id": "KBDEAD0001", "name": "dead", "description": "d"},
+                  {"kb_id": "KBLIVE0002", "name": "live", "description": "l"},
+              ]},
+    )
+    other = Agent(
+        name="kb-free", method="harness", status="active",
+        spec={"name": "kb-free", "method": "harness"},
+    )
+    db.add_all([mounted, other])
+    db.commit()
+    db.close()
+
+    synced: list[tuple[str, list[str]]] = []
+
+    class _Settings:
+        resources = {"kb_gateway_id": "gw-1"}
+
+    monkeypatch.setattr(knowledge, "get_settings", lambda: _Settings())
+    monkeypatch.setattr(knowledge, "control_client", lambda: object())
+    monkeypatch.setattr(
+        knowledge.kb_gateway, "sync_agentic_target",
+        lambda control, gw, name, refs: synced.append((name, [r["kb_id"] for r in refs])),
+    )
+
+    stripped = knowledge._strip_kb_from_agents("KBDEAD0001")
+
+    assert stripped == ["kb-user"]
+    assert synced == [("kb-user", ["KBLIVE0002"])]
+    db = SessionLocal()
+    row = db.query(Agent).filter(Agent.name == "kb-user").one()
+    assert [r["kb_id"] for r in row.spec["knowledge_bases"]] == ["KBLIVE0002"]
+    db.close()
