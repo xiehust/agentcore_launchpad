@@ -705,13 +705,20 @@
       "title": "评估器",
       "meta": "内置目录 · 自定义 LLM 评审 — 创建 / 编辑 / 删除",
       "listTitle": "目录",
-      "listSub": "内置(只读)+ 自定义评审",
-      "builtinSection": "内置",
-      "customSection": "自定义",
+      "listSub": "内置(只读)+ 自定义评审——点击行选中",
+      "new": "新建评估器",
+      "col": {
+        "name": "名称",
+        "level": "级别",
+        "source": "来源",
+        "gt": "真值",
+        "status": "状态"
+      },
       "readonly": "只读",
-      "empty": "暂无自定义评估器——在右侧创建一个",
+      "readonlyHint": "内置评估器由服务托管、只读——如需修改,可参考其思路创建自定义评审。",
+      "empty": "暂无评估器——在下方创建自定义评审",
       "loadFailed": "账户评估器列表不可用",
-      "edit": "编辑",
+      "detailFailed": "评估器详情不可用——请刷新后重试",
       "delete": "删除",
       "formTitleCreate": "创建评估器",
       "formTitleEdit": "编辑评估器",
@@ -735,34 +742,55 @@
       "removePoint": "删除此档位",
       "create": "创建",
       "save": "保存修改",
-      "cancelEdit": "取消",
       "created": "评估器已创建——ACTIVE 后出现在列表中。",
       "updated": "评估器已更新。",
       "deleted": "评估器已删除。",
       "confirmDelete": {
         "title": "删除评估器",
         "body": "删除自定义评估器“{{name}}”?历史运行分数保留;评估器将从账户中移除。"
+      },
+      "how": {
+        "title": "评审是如何工作的",
+        "sub": "LLM 评审 · 创建后在运行中选用",
+        "s1": "级别——TRACE / SESSION / TOOL_CALL 决定可用的占位符",
+        "s2": "指令——评审提示词,至少包含一个 {placeholder} 占位符",
+        "s3": "评分量表——至少 2 档的数值量表(标签+定义)",
+        "s4": "选用——在 NEW RUN 中把评审勾选为评估器",
+        "note": "内置评估器由服务托管、只读;自定义评审运行在所选 Bedrock 模型上。"
       }
     },
     "datasets": {
       "title": "数据集",
       "meta": "本地 SQLITE 为源 · 一键单向同步为 AWS DATASET 资源",
-      "listTitle": "本地数据集",
-      "listSub": "本地为准——云端副本是不可变快照",
-      "empty": "暂无数据集——在右侧创建一个",
+      "listTitle": "全部数据集",
+      "listSub": "本地源 + 仅云端快照——点击行选中",
+      "new": "新建数据集",
+      "col": {
+        "name": "名称",
+        "items": "条目",
+        "kind": "类型",
+        "gt": "真值",
+        "cloud": "云端"
+      },
+      "empty": "暂无数据集——在下方创建一个",
       "gt": "真值",
       "notSynced": "未同步",
       "cloudGone": "云端已删",
-      "edit": "编辑",
       "sync": "同步 AWS",
       "syncing": "同步中",
       "synced": "数据集已同步——AWS 副本已 ACTIVE。",
       "delete": "删除",
       "deleted": "数据集已删除。",
       "cloudDeleted": "云端数据集已删除。",
-      "cloudSection": "AWS 云端数据集",
       "cloudUnavailable": "云端数据集列表不可用",
-      "cloudEmpty": "暂无云端数据集——同步一个本地数据集",
+      "cloudReadonly": "云端数据集是不可变快照——修改本地源后重新同步,或删除此副本。",
+      "detail": {
+        "id": "数据集 ID",
+        "schema": "SCHEMA",
+        "examples": "样例数",
+        "status": "状态",
+        "updated": "更新时间"
+      },
       "formTitleCreate": "创建数据集",
       "formTitleEdit": "编辑数据集",
       "formSub": "scenario · 多轮 · 真值",
@@ -790,7 +818,6 @@
       "importEmpty": "没有可导入内容——请先粘贴 JSON",
       "create": "创建",
       "save": "保存修改",
-      "cancelEdit": "取消",
       "created": "数据集已创建。",
       "updated": "数据集已更新。",
       "confirmDelete": {
@@ -800,6 +827,15 @@
       "confirmCloudDelete": {
         "title": "删除云端数据集",
         "body": "删除 AWS 数据集“{{name}}”?云端数据集不可变——此操作将从账户中移除该资源。"
+      },
+      "how": {
+        "title": "数据集是如何工作的",
+        "sub": "本地为源 · 单向同步到 AWS",
+        "s1": "编写——scenario 含多轮、断言与期望轨迹(真值),或导入 JSON/JSONL",
+        "s2": "存储——本地 SQLite 记录可编辑,是唯一数据源",
+        "s3": "同步——SYNC TO AWS 生成不可变的云端数据集快照",
+        "s4": "运行——在 NEW RUN 中选择数据集(本地或 ☁ 云端)作为评估范围",
+        "note": "kind 由条目内容推断且服务端不可变;云端副本只能删除、不能编辑。"
       }
     },
     "evaluatorNames": {

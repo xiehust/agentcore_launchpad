@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useSearchParams } from "react-router-dom";
 
 import { Btn, Chip, ConfirmDialog, Panel, useToast, ViewHead } from "../components";
 
@@ -44,6 +45,14 @@ interface ScenarioDraft {
   assertions: string[];
   expected_trajectory: string; // comma-separated tool names
 }
+
+// Same "cloud:" id encoding as the New Run scope dropdown / runs-list rows.
+const CLOUD_PREFIX = "cloud:";
+
+type Selection =
+  | { kind: "local"; row: DatasetRow }
+  | { kind: "cloud"; row: CloudRow }
+  | null;
 
 const emptyScenario = (index: number): ScenarioDraft => ({
   scenario_id: `scenario_${index}`,
@@ -163,7 +172,6 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
 
   // editor state
   const [editorMode, setEditorMode] = useState<"form" | "import">("form");
-  const [editingId, setEditingId] = useState<string | null>(null);
   const [editingKind, setEditingKind] = useState("predefined");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -196,6 +204,70 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // "?ds=<id>" selects a local row, "?ds=cloud:<datasetId>" a cloud-only row,
+  // "?ds=new" the create form (linkable, back-button friendly).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const dsParam = searchParams.get("ds");
+  const creatingNew = dsParam === "new";
+  const selectDs = (id: string | null) => {
+    setSearchParams(id ? { view: "datasets", ds: id } : { view: "datasets" });
+  };
+
+  // Cloud rows that are the synced copy of a local dataset render as that
+  // row's CLOUD chip — only cloud-ONLY snapshots get their own table row.
+  const cloudOnly = useMemo(
+    () => cloudRows.filter((c) => !rows.some((r) => r.cloud?.dataset_id === c.datasetId)),
+    [cloudRows, rows],
+  );
+
+  const selection = useMemo<Selection>(() => {
+    if (creatingNew) return null;
+    if (dsParam?.startsWith(CLOUD_PREFIX)) {
+      // no local fallback while the cloud list loads — hydrating the editor
+      // with an unrelated local row would be worse than a brief empty panel
+      const id = dsParam.slice(CLOUD_PREFIX.length);
+      const row = cloudRows.find((r) => r.datasetId === id);
+      return row ? { kind: "cloud", row } : null;
+    }
+    const row = (dsParam ? rows.find((r) => r.id === dsParam) : undefined) ?? rows[0];
+    return row ? { kind: "local", row } : null;
+  }, [creatingNew, dsParam, rows, cloudRows]);
+
+  const local = selection?.kind === "local" ? selection.row : null;
+  const cloud = selection?.kind === "cloud" ? selection.row : null;
+  const editingId = local?.id ?? null;
+
+  // Editor hydration keys off the selected KEY, not the row object: sync()
+  // and save() both re-load(), which replaces row identities — re-hydrating
+  // then would wipe unsaved edits. The ref carries the current row into the
+  // effect without widening its dependency list.
+  const selKey =
+    selection === null
+      ? "new"
+      : selection.kind === "local"
+        ? `local:${selection.row.id}`
+        : `cloud:${selection.row.datasetId}`;
+  const selRef = useRef<Selection>(null);
+  selRef.current = selection;
+  useEffect(() => {
+    const sel = selRef.current;
+    setEditorMode("form");
+    setFormError(null);
+    setSyncError(null);
+    if (sel?.kind === "local") {
+      setEditingKind(sel.row.kind);
+      setName(sel.row.name);
+      setDescription(sel.row.description ?? "");
+      setScenarios(toDrafts(sel.row.items));
+    } else {
+      setEditingKind("predefined");
+      setName("");
+      setDescription("");
+      setScenarios([emptyScenario(1)]);
+      setImportText("");
+    }
+  }, [selKey]);
 
   const importPreview = useMemo((): { items: Record<string, unknown>[]; error: string | null } => {
     const trimmed = importText.trim();
@@ -231,27 +303,6 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
     return { items, error: null };
   }, [importText, t]);
 
-  const resetEditor = () => {
-    setEditorMode("form");
-    setEditingId(null);
-    setEditingKind("predefined");
-    setName("");
-    setDescription("");
-    setScenarios([emptyScenario(1)]);
-    setImportText("");
-    setFormError(null);
-  };
-
-  const startEdit = (row: DatasetRow) => {
-    setEditorMode("form");
-    setEditingId(row.id);
-    setEditingKind(row.kind);
-    setName(row.name);
-    setDescription(row.description ?? "");
-    setScenarios(toDrafts(row.items));
-    setFormError(null);
-  };
-
   const patchScenario = (index: number, patch: Partial<ScenarioDraft>) => {
     setScenarios((prev) => prev.map((s, i) => (i === index ? { ...s, ...patch } : s)));
   };
@@ -286,9 +337,15 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
         setFormError(env.message ?? `HTTP ${res.status}`);
         return;
       }
-      toast(editingId ? t("evalPage.datasets.updated") : t("evalPage.datasets.created"));
-      resetEditor();
-      await load();
+      if (editingId) {
+        toast(t("evalPage.datasets.updated"));
+        await load(); // selKey unchanged — the saved edits stay on screen
+      } else {
+        toast(t("evalPage.datasets.created"));
+        const created = (await res.json()) as { id: string };
+        await load();
+        selectDs(created.id);
+      }
     } finally {
       setBusy(false);
     }
@@ -319,7 +376,7 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
       return;
     }
     toast(t("evalPage.datasets.deleted"));
-    if (editingId === row.id) resetEditor();
+    if (dsParam === row.id) selectDs(null);
     await load();
   };
 
@@ -331,6 +388,7 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
       return;
     }
     toast(t("evalPage.datasets.cloudDeleted"));
+    if (dsParam === CLOUD_PREFIX + row.datasetId) selectDs(null);
     await load();
   };
 
@@ -342,6 +400,147 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
     return <Chip tone="crit" icon="✕">{row.cloud.status}</Chip>;
   };
 
+  const scenarioEditor = (
+    <>
+      {scenarios.map((scenario, si) => (
+        <div
+          key={si}
+          style={{
+            border: "1px solid rgba(255,255,255,.08)",
+            borderRadius: 4,
+            padding: "10px 12px",
+            marginBottom: 10,
+          }}
+        >
+          <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 8 }}>
+            <input
+              className="input mono"
+              value={scenario.scenario_id}
+              aria-label={t("evalPage.datasets.scenarioId")}
+              style={{ maxWidth: 220 }}
+              onChange={(e) => patchScenario(si, { scenario_id: e.target.value })}
+            />
+            <Btn
+              disabled={scenarios.length <= 1}
+              style={{ marginLeft: "auto" }}
+              title={t("evalPage.datasets.removeScenario")}
+              onClick={() => setScenarios((prev) => prev.filter((_, i) => i !== si))}
+            >
+              ✕
+            </Btn>
+          </div>
+          {scenario.turns.map((turn, ti) => (
+            <div key={ti} style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+              <span className="mono dim" style={{ fontSize: 9.5, paddingTop: 8 }}>
+                T{ti + 1}
+              </span>
+              <textarea
+                className="input"
+                rows={1}
+                placeholder={t("evalPage.datasets.turnInput")}
+                value={turn.input}
+                style={{ flex: 2, resize: "vertical", fontSize: 11.5 }}
+                onChange={(e) =>
+                  patchScenario(si, {
+                    turns: scenario.turns.map((x, i) =>
+                      i === ti ? { ...x, input: e.target.value } : x,
+                    ),
+                  })
+                }
+              />
+              <input
+                className="input"
+                placeholder={t("evalPage.datasets.turnExpected")}
+                value={turn.expected_response}
+                style={{ flex: 1, fontSize: 11.5 }}
+                onChange={(e) =>
+                  patchScenario(si, {
+                    turns: scenario.turns.map((x, i) =>
+                      i === ti ? { ...x, expected_response: e.target.value } : x,
+                    ),
+                  })
+                }
+              />
+              <Btn
+                disabled={scenario.turns.length <= 1}
+                title={t("evalPage.datasets.removeTurn")}
+                onClick={() =>
+                  patchScenario(si, {
+                    turns: scenario.turns.filter((_, i) => i !== ti),
+                  })
+                }
+              >
+                ✕
+              </Btn>
+            </div>
+          ))}
+          <Btn
+            onClick={() =>
+              patchScenario(si, {
+                turns: [...scenario.turns, { input: "", expected_response: "" }],
+              })
+            }
+          >
+            + {t("evalPage.datasets.addTurn")}
+          </Btn>
+          <div className="field" style={{ marginTop: 8 }}>
+            <label>{t("evalPage.datasets.assertions")}</label>
+            {scenario.assertions.map((assertion, ai) => (
+              <div key={ai} style={{ display: "flex", gap: 6, marginBottom: 4 }}>
+                <input
+                  className="input"
+                  value={assertion}
+                  style={{ fontSize: 11.5 }}
+                  onChange={(e) =>
+                    patchScenario(si, {
+                      assertions: scenario.assertions.map((x, i) =>
+                        i === ai ? e.target.value : x,
+                      ),
+                    })
+                  }
+                />
+                <Btn
+                  title={t("evalPage.datasets.removeAssertion")}
+                  onClick={() =>
+                    patchScenario(si, {
+                      assertions: scenario.assertions.filter((_, i) => i !== ai),
+                    })
+                  }
+                >
+                  ✕
+                </Btn>
+              </div>
+            ))}
+            <Btn
+              onClick={() =>
+                patchScenario(si, { assertions: [...scenario.assertions, ""] })
+              }
+            >
+              + {t("evalPage.datasets.addAssertion")}
+            </Btn>
+          </div>
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label>{t("evalPage.datasets.trajectory")}</label>
+            <input
+              className="input mono"
+              placeholder="calculator, current_time"
+              value={scenario.expected_trajectory}
+              style={{ fontSize: 11 }}
+              onChange={(e) =>
+                patchScenario(si, { expected_trajectory: e.target.value })
+              }
+            />
+          </div>
+        </div>
+      ))}
+      <Btn
+        onClick={() => setScenarios((prev) => [...prev, emptyScenario(prev.length + 1)])}
+      >
+        + {t("evalPage.datasets.addScenario")}
+      </Btn>
+    </>
+  );
+
   return (
     <section>
       <ViewHead
@@ -352,338 +551,297 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
       <div style={{ marginBottom: 14 }}>
         <Btn onClick={onBack}>◂ {t("evalPage.backToRuns")}</Btn>
       </div>
+
+      <Panel
+        brk
+        pad={false}
+        title={t("evalPage.datasets.listTitle")}
+        sub={t("evalPage.datasets.listSub")}
+        end={
+          <Btn primary data-testid="new-dataset-btn" onClick={() => selectDs("new")}>
+            + {t("evalPage.datasets.new")}
+          </Btn>
+        }
+        style={{ "--i": 0, marginBottom: 14 } as CSSProperties}
+      >
+        <table>
+          <thead>
+            <tr>
+              <th>{t("evalPage.datasets.col.name")}</th>
+              <th>{t("evalPage.datasets.col.items")}</th>
+              <th>{t("evalPage.datasets.col.kind")}</th>
+              <th>{t("evalPage.datasets.col.gt")}</th>
+              <th>{t("evalPage.datasets.col.cloud")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr
+                key={row.id}
+                data-testid={`dataset-row-${row.id}`}
+                onClick={() => selectDs(row.id)}
+                style={{
+                  cursor: "pointer",
+                  background:
+                    local?.id === row.id ? "rgba(255,176,0,.045)" : undefined,
+                }}
+              >
+                <td className="pri">{row.name}</td>
+                <td className="mono dim">{row.item_count}</td>
+                <td className="mono dim">{row.kind}</td>
+                <td>
+                  {row.has_ground_truth ? (
+                    <Chip tone="aqua" icon="◆">{t("evalPage.datasets.gt")}</Chip>
+                  ) : (
+                    <span className="mono dim">—</span>
+                  )}
+                </td>
+                <td>{cloudChip(row)}</td>
+              </tr>
+            ))}
+            {cloudOnly.map((row) => (
+              <tr
+                key={row.datasetId}
+                data-testid={`dataset-row-cloud-${row.datasetId}`}
+                onClick={() => selectDs(CLOUD_PREFIX + row.datasetId)}
+                style={{
+                  cursor: "pointer",
+                  background:
+                    cloud?.datasetId === row.datasetId ? "rgba(255,176,0,.045)" : undefined,
+                }}
+              >
+                <td className="mono">☁ {row.name ?? row.datasetId}</td>
+                <td className="mono dim">{row.exampleCount ?? "—"}</td>
+                <td className="mono dim">
+                  {(row.schemaType ?? "").replace("AGENTCORE_EVALUATION_", "")}
+                </td>
+                <td className="mono dim">—</td>
+                <td>
+                  <Chip tone={row.status === "ACTIVE" ? "good" : "warn"}>{row.status}</Chip>
+                </td>
+              </tr>
+            ))}
+            {loading && (
+              <tr>
+                <td colSpan={5} className="dim mono" style={{ textAlign: "center" }}>
+                  {t("common.loading")}
+                </td>
+              </tr>
+            )}
+            {!loading && rows.length === 0 && cloudOnly.length === 0 && !cloudError && (
+              <tr>
+                <td colSpan={5} className="dim mono" style={{ textAlign: "center" }}>
+                  {t("evalPage.datasets.empty")}
+                </td>
+              </tr>
+            )}
+            {cloudError && (
+              <tr>
+                <td colSpan={5} className="dim mono" style={{ textAlign: "center" }}>
+                  {t("evalPage.datasets.cloudUnavailable")}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </Panel>
+
       <div className="eval-grid">
         <Panel
           brk
-          title={t("evalPage.datasets.listTitle")}
-          sub={t("evalPage.datasets.listSub")}
-          style={{ "--i": 0 } as CSSProperties}
-        >
-          {loading && <div className="empty">{t("common.loading")}</div>}
-          {!loading && rows.length === 0 && (
-            <div className="empty">{t("evalPage.datasets.empty")}</div>
-          )}
-          {rows.map((row) => (
-            <div
-              key={row.id}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 7,
-                padding: "6px 0",
-                borderBottom: "1px solid rgba(255,255,255,.04)",
-                flexWrap: "wrap",
-              }}
-            >
-              <span className="pri" style={{ fontSize: 12.5 }}>{row.name}</span>
-              <span className="mono dim" style={{ fontSize: 10 }}>
-                {row.item_count} · {row.kind}
-              </span>
-              {row.has_ground_truth && (
-                <Chip tone="aqua" icon="◆">{t("evalPage.datasets.gt")}</Chip>
-              )}
-              {cloudChip(row)}
-              <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-                <Btn onClick={() => startEdit(row)}>{t("evalPage.datasets.edit")}</Btn>
+          title={
+            local
+              ? t("evalPage.datasets.formTitleEdit")
+              : cloud
+                ? `☁ ${cloud.name ?? cloud.datasetId}`
+                : t("evalPage.datasets.formTitleCreate")
+          }
+          sub={
+            local
+              ? `${local.id} · ${local.kind}`
+              : cloud
+                ? (cloud.schemaType ?? "").replace("AGENTCORE_EVALUATION_", "")
+                : t("evalPage.datasets.formSub")
+          }
+          end={
+            local ? (
+              <>
                 <Btn
                   disabled={syncingId !== null}
-                  onClick={() => void sync(row)}
-                  data-testid={`sync-${row.name}`}
+                  onClick={() => void sync(local)}
+                  data-testid={`sync-${local.name}`}
                 >
-                  {syncingId === row.id
+                  {syncingId === local.id
                     ? `◐ ${t("evalPage.datasets.syncing")}`
                     : t("evalPage.datasets.sync")}
                 </Btn>
-                <Btn onClick={() => setConfirmLocal(row)}>{t("evalPage.datasets.delete")}</Btn>
-              </span>
-              {row.cloud?.failure_reason && (
-                <div className="note" style={{ borderColor: "var(--crit)", width: "100%" }}>
-                  <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
-                  <span className="mono" style={{ fontSize: 10 }}>
-                    {row.cloud.failure_reason}
-                  </span>
-                </div>
-              )}
-            </div>
-          ))}
-          {syncError && (
-            <div className="note" style={{ borderColor: "var(--crit)", marginTop: 8 }}>
-              <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
-              <span>{syncError}</span>
-            </div>
-          )}
-
-          <div
-            className="mono dim"
-            style={{ fontSize: 9.5, letterSpacing: ".12em", margin: "16px 0 6px" }}
-          >
-            {t("evalPage.datasets.cloudSection")} · {cloudRows.length}
-          </div>
-          {cloudError && (
-            <div className="note">
-              <span className="i">[i]</span>
-              <span>{t("evalPage.datasets.cloudUnavailable")}</span>
-            </div>
-          )}
-          {!cloudError && cloudRows.length === 0 && (
-            <div className="empty">{t("evalPage.datasets.cloudEmpty")}</div>
-          )}
-          {cloudRows.map((row) => (
-            <div
-              key={row.datasetId}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 7,
-                padding: "5px 0",
-                borderBottom: "1px solid rgba(255,255,255,.04)",
-              }}
-            >
-              <span className="mono" style={{ fontSize: 11.5 }}>{row.name ?? row.datasetId}</span>
-              <span className="mono dim" style={{ fontSize: 10 }}>
-                {row.exampleCount ?? "—"} · {(row.schemaType ?? "").replace("AGENTCORE_EVALUATION_", "")}
-              </span>
-              <Chip tone={row.status === "ACTIVE" ? "good" : "warn"}>{row.status}</Chip>
-              <span style={{ marginLeft: "auto" }}>
-                <Btn onClick={() => setConfirmCloud(row)}>{t("evalPage.datasets.delete")}</Btn>
-              </span>
-            </div>
-          ))}
-        </Panel>
-
-        <Panel
-          title={
-            editingId
-              ? t("evalPage.datasets.formTitleEdit")
-              : t("evalPage.datasets.formTitleCreate")
-          }
-          sub={editingId ? `${editingId} · ${editingKind}` : t("evalPage.datasets.formSub")}
-          end={
-            <Btn
-              disabled={!!editingId}
-              onClick={() => {
-                setEditorMode("form");
-                setName("math-gt-sample");
-                setDescription("3 scenarios with ground truth (calculator trajectory)");
-                setScenarios(SAMPLE_SCENARIOS());
-              }}
-            >
-              {t("evalPage.datasets.prefill")}
-            </Btn>
+                <Btn onClick={() => setConfirmLocal(local)}>
+                  {t("evalPage.datasets.delete")}
+                </Btn>
+              </>
+            ) : cloud ? (
+              <Btn onClick={() => setConfirmCloud(cloud)}>
+                {t("evalPage.datasets.delete")}
+              </Btn>
+            ) : (
+              <Btn
+                onClick={() => {
+                  setEditorMode("form");
+                  setName("math-gt-sample");
+                  setDescription("3 scenarios with ground truth (calculator trajectory)");
+                  setScenarios(SAMPLE_SCENARIOS());
+                }}
+              >
+                {t("evalPage.datasets.prefill")}
+              </Btn>
+            )
           }
           style={{ "--i": 1 } as CSSProperties}
         >
-          <div className="field">
-            <div className="selchips">
-              <button
-                type="button"
-                className={`selchip${editorMode === "form" ? " on" : ""}`}
-                style={{ cursor: "pointer" }}
-                onClick={() => setEditorMode("form")}
-              >
-                {t("evalPage.datasets.modeForm")}
-              </button>
-              <button
-                type="button"
-                className={`selchip${editorMode === "import" ? " on" : ""}`}
-                style={{ cursor: "pointer" }}
-                disabled={!!editingId}
-                onClick={() => setEditorMode("import")}
-              >
-                {t("evalPage.datasets.modeImport")}
-              </button>
-            </div>
-          </div>
-          <div className="field">
-            <label>{t("evalPage.datasets.name")}</label>
-            <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
-          </div>
-          <div className="field">
-            <label>{t("evalPage.datasets.description")}</label>
-            <input
-              className="input"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-            />
-          </div>
-
-          {editorMode === "import" ? (
-            <div className="field">
-              <label>{t("evalPage.datasets.importLabel")}</label>
-              <textarea
-                className="input mono"
-                rows={9}
-                style={{ fontSize: 10.5, lineHeight: 1.5, resize: "vertical" }}
-                placeholder={'{"scenarios": [...]}  |  {"prompt": "...", "expected": "..."} per line'}
-                value={importText}
-                onChange={(e) => setImportText(e.target.value)}
-              />
-              {importPreview.error ? (
-                <div className="note" style={{ borderColor: "var(--crit)", marginTop: 6 }}>
-                  <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
-                  <span className="mono" style={{ fontSize: 10.5 }}>{importPreview.error}</span>
-                </div>
-              ) : (
-                <div className="mono dim" style={{ fontSize: 10, marginTop: 6 }}>
-                  {t("evalPage.datasets.importPreview", { count: importPreview.items.length })}
-                </div>
-              )}
-            </div>
+          {cloud ? (
+            <>
+              <div className="kv">
+                <span className="k mono">{t("evalPage.datasets.detail.id")}</span>
+                <span className="v mono">{cloud.datasetId}</span>
+              </div>
+              <div className="kv">
+                <span className="k mono">{t("evalPage.datasets.detail.schema")}</span>
+                <span className="v mono">{cloud.schemaType ?? "—"}</span>
+              </div>
+              <div className="kv">
+                <span className="k mono">{t("evalPage.datasets.detail.examples")}</span>
+                <span className="v mono">{cloud.exampleCount ?? "—"}</span>
+              </div>
+              <div className="kv">
+                <span className="k mono">{t("evalPage.datasets.detail.status")}</span>
+                <span className="v">
+                  <Chip tone={cloud.status === "ACTIVE" ? "good" : "warn"}>{cloud.status}</Chip>
+                </span>
+              </div>
+              <div className="kv">
+                <span className="k mono">{t("evalPage.datasets.detail.updated")}</span>
+                <span className="v mono">
+                  {cloud.updatedAt ? new Date(cloud.updatedAt).toLocaleString() : "—"}
+                </span>
+              </div>
+              <div className="note" style={{ marginTop: 10 }}>
+                <span className="i">[i]</span>
+                <span>{t("evalPage.datasets.cloudReadonly")}</span>
+              </div>
+            </>
           ) : (
             <>
-              {scenarios.map((scenario, si) => (
-                <div
-                  key={si}
-                  style={{
-                    border: "1px solid rgba(255,255,255,.08)",
-                    borderRadius: 4,
-                    padding: "10px 12px",
-                    marginBottom: 10,
-                  }}
-                >
-                  <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 8 }}>
-                    <input
-                      className="input mono"
-                      value={scenario.scenario_id}
-                      aria-label={t("evalPage.datasets.scenarioId")}
-                      style={{ maxWidth: 220 }}
-                      onChange={(e) => patchScenario(si, { scenario_id: e.target.value })}
-                    />
-                    <Btn
-                      disabled={scenarios.length <= 1}
-                      style={{ marginLeft: "auto" }}
-                      title={t("evalPage.datasets.removeScenario")}
-                      onClick={() => setScenarios((prev) => prev.filter((_, i) => i !== si))}
+              {/* import stays create-only: kind is inferred once at creation */}
+              {!local && (
+                <div className="field">
+                  <div className="selchips">
+                    <button
+                      type="button"
+                      className={`selchip${editorMode === "form" ? " on" : ""}`}
+                      style={{ cursor: "pointer" }}
+                      onClick={() => setEditorMode("form")}
                     >
-                      ✕
-                    </Btn>
-                  </div>
-                  {scenario.turns.map((turn, ti) => (
-                    <div key={ti} style={{ display: "flex", gap: 6, marginBottom: 6 }}>
-                      <span className="mono dim" style={{ fontSize: 9.5, paddingTop: 8 }}>
-                        T{ti + 1}
-                      </span>
-                      <textarea
-                        className="input"
-                        rows={1}
-                        placeholder={t("evalPage.datasets.turnInput")}
-                        value={turn.input}
-                        style={{ flex: 2, resize: "vertical", fontSize: 11.5 }}
-                        onChange={(e) =>
-                          patchScenario(si, {
-                            turns: scenario.turns.map((x, i) =>
-                              i === ti ? { ...x, input: e.target.value } : x,
-                            ),
-                          })
-                        }
-                      />
-                      <input
-                        className="input"
-                        placeholder={t("evalPage.datasets.turnExpected")}
-                        value={turn.expected_response}
-                        style={{ flex: 1, fontSize: 11.5 }}
-                        onChange={(e) =>
-                          patchScenario(si, {
-                            turns: scenario.turns.map((x, i) =>
-                              i === ti ? { ...x, expected_response: e.target.value } : x,
-                            ),
-                          })
-                        }
-                      />
-                      <Btn
-                        disabled={scenario.turns.length <= 1}
-                        title={t("evalPage.datasets.removeTurn")}
-                        onClick={() =>
-                          patchScenario(si, {
-                            turns: scenario.turns.filter((_, i) => i !== ti),
-                          })
-                        }
-                      >
-                        ✕
-                      </Btn>
-                    </div>
-                  ))}
-                  <Btn
-                    onClick={() =>
-                      patchScenario(si, {
-                        turns: [...scenario.turns, { input: "", expected_response: "" }],
-                      })
-                    }
-                  >
-                    + {t("evalPage.datasets.addTurn")}
-                  </Btn>
-                  <div className="field" style={{ marginTop: 8 }}>
-                    <label>{t("evalPage.datasets.assertions")}</label>
-                    {scenario.assertions.map((assertion, ai) => (
-                      <div key={ai} style={{ display: "flex", gap: 6, marginBottom: 4 }}>
-                        <input
-                          className="input"
-                          value={assertion}
-                          style={{ fontSize: 11.5 }}
-                          onChange={(e) =>
-                            patchScenario(si, {
-                              assertions: scenario.assertions.map((x, i) =>
-                                i === ai ? e.target.value : x,
-                              ),
-                            })
-                          }
-                        />
-                        <Btn
-                          title={t("evalPage.datasets.removeAssertion")}
-                          onClick={() =>
-                            patchScenario(si, {
-                              assertions: scenario.assertions.filter((_, i) => i !== ai),
-                            })
-                          }
-                        >
-                          ✕
-                        </Btn>
-                      </div>
-                    ))}
-                    <Btn
-                      onClick={() =>
-                        patchScenario(si, { assertions: [...scenario.assertions, ""] })
-                      }
+                      {t("evalPage.datasets.modeForm")}
+                    </button>
+                    <button
+                      type="button"
+                      className={`selchip${editorMode === "import" ? " on" : ""}`}
+                      style={{ cursor: "pointer" }}
+                      onClick={() => setEditorMode("import")}
                     >
-                      + {t("evalPage.datasets.addAssertion")}
-                    </Btn>
-                  </div>
-                  <div className="field" style={{ marginBottom: 0 }}>
-                    <label>{t("evalPage.datasets.trajectory")}</label>
-                    <input
-                      className="input mono"
-                      placeholder="calculator, current_time"
-                      value={scenario.expected_trajectory}
-                      style={{ fontSize: 11 }}
-                      onChange={(e) =>
-                        patchScenario(si, { expected_trajectory: e.target.value })
-                      }
-                    />
+                      {t("evalPage.datasets.modeImport")}
+                    </button>
                   </div>
                 </div>
-              ))}
-              <Btn
-                onClick={() => setScenarios((prev) => [...prev, emptyScenario(prev.length + 1)])}
-              >
-                + {t("evalPage.datasets.addScenario")}
-              </Btn>
+              )}
+              <div className="field">
+                <label>{t("evalPage.datasets.name")}</label>
+                <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
+              </div>
+              <div className="field">
+                <label>{t("evalPage.datasets.description")}</label>
+                <input
+                  className="input"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                />
+              </div>
+
+              {editorMode === "import" && !local ? (
+                <div className="field">
+                  <label>{t("evalPage.datasets.importLabel")}</label>
+                  <textarea
+                    className="input mono"
+                    rows={9}
+                    style={{ fontSize: 10.5, lineHeight: 1.5, resize: "vertical" }}
+                    placeholder={'{"scenarios": [...]}  |  {"prompt": "...", "expected": "..."} per line'}
+                    value={importText}
+                    onChange={(e) => setImportText(e.target.value)}
+                  />
+                  {importPreview.error ? (
+                    <div className="note" style={{ borderColor: "var(--crit)", marginTop: 6 }}>
+                      <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
+                      <span className="mono" style={{ fontSize: 10.5 }}>{importPreview.error}</span>
+                    </div>
+                  ) : (
+                    <div className="mono dim" style={{ fontSize: 10, marginTop: 6 }}>
+                      {t("evalPage.datasets.importPreview", { count: importPreview.items.length })}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                scenarioEditor
+              )}
+
+              {local?.cloud?.failure_reason && (
+                <div className="note" style={{ borderColor: "var(--crit)", marginTop: 10 }}>
+                  <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
+                  <span className="mono" style={{ fontSize: 10 }}>
+                    {local.cloud.failure_reason}
+                  </span>
+                </div>
+              )}
+              {syncError && (
+                <div className="note" style={{ borderColor: "var(--crit)", marginTop: 10 }}>
+                  <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
+                  <span>{syncError}</span>
+                </div>
+              )}
+              {formError && (
+                <div className="note" style={{ borderColor: "var(--crit)", margin: "10px 0" }}>
+                  <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
+                  <span>{formError}</span>
+                </div>
+              )}
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 10 }}>
+                <Btn primary disabled={busy || !name.trim()} onClick={() => void save()}>
+                  ▸ {local ? t("evalPage.datasets.save") : t("evalPage.datasets.create")}
+                </Btn>
+              </div>
             </>
           )}
+        </Panel>
 
-          {formError && (
-            <div className="note" style={{ borderColor: "var(--crit)", margin: "10px 0" }}>
-              <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
-              <span>{formError}</span>
+        <Panel
+          title={t("evalPage.datasets.how.title")}
+          sub={t("evalPage.datasets.how.sub")}
+          style={{ "--i": 2 } as CSSProperties}
+        >
+          {(["s1", "s2", "s3", "s4"] as const).map((step, i) => (
+            <div className="kv" key={step}>
+              <span className="k mono">{`0${i + 1}`}</span>
+              <span className="v" style={{ textAlign: "left", flex: 1, marginLeft: 12 }}>
+                {t(`evalPage.datasets.how.${step}`)}
+              </span>
             </div>
-          )}
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 10 }}>
-            {editingId && <Btn onClick={resetEditor}>{t("evalPage.datasets.cancelEdit")}</Btn>}
-            <Btn primary disabled={busy || !name.trim()} onClick={() => void save()}>
-              ▸ {editingId ? t("evalPage.datasets.save") : t("evalPage.datasets.create")}
-            </Btn>
+          ))}
+          <div className="note" style={{ marginTop: 10 }}>
+            <span className="i">[i]</span>
+            <span>{t("evalPage.datasets.how.note")}</span>
           </div>
         </Panel>
       </div>
+
       <ConfirmDialog
         open={confirmLocal !== null}
         title={t("evalPage.datasets.confirmDelete.title")}
