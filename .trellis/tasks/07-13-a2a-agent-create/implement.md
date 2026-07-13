@@ -1,0 +1,58 @@
+# Execution plan — A2A agent creation
+
+Validation command baseline (run before starting, after each step group):
+`backend`: `.venv/bin/pytest tests/ -q` · `.venv/bin/ruff check app tests`
+`frontend`: `npx tsc --noEmit` · `npm run -s lint`
+
+## Step 0 — probe (throwaway, DO FIRST)  [rollback point: nothing merged]
+
+- [ ] boto3 `create_agent_runtime` with a trivial zip artifact +
+      `protocolConfiguration={"serverProtocol": "A2A"}`; record accept/reject.
+- [ ] If accepted: fetch `/.well-known/agent-card.json` via SigV4 from a minimal
+      A2AServer zip; record exact URL/header/session requirements.
+- [ ] If rejected: switch design to container path for A2A (Dockerfile variant
+      of the template); update design.md before continuing.
+- [ ] `UpdateAgentRuntime` on the probe runtime — does protocolConfiguration
+      persist / need re-sending? Record in research.
+- [ ] Delete probe resources.
+
+## Step 1 — backend spec + deploy params
+
+- [ ] `AgentSpec.protocol` + `a2a_skills` + validator (422 matrix).
+- [ ] `create_code_runtime`/`update_code_runtime` accept protocol; wire
+      `AGENTCORE_RUNTIME_URL` env per probe findings.
+- [ ] Unit tests: validator, param builders.
+
+## Step 2 — A2A template + generate stage
+
+- [ ] `templates/strands_a2a_agent/` (main.py.tmpl + requirements.txt) per
+      design; generate stage selects by protocol; skills rendered into card.
+- [ ] Unit test: generated code contains A2AServer/9000/serve_at_root; skills
+      serialized; HTTP path output unchanged (snapshot guard).
+
+## Step 3 — invoke branch + gating
+
+- [ ] `_a2a_text` parser + branch in `invoke_runtime_text`; fixtures for
+      Message/Task/JSON-RPC-error shapes.
+- [ ] Experiment create guard + eval compatibility check (eval run scope calls
+      the same invoke path — verify no other direct invokers bypass it:
+      grep `invoke_agent_runtime(` callers).
+
+## Step 4 — register stage + UI
+
+- [ ] `register_agent_record` passes protocol/skills (coordinate with sibling
+      task if its builder change already landed; otherwise minimal local edit).
+- [ ] CreateAgent UI: protocol radio, skills editor, note card; agent
+      list/detail protocol chip + card URL copy; experiment picker disabled
+      state; i18n en/zh-CN.
+
+## Step 5 — live proof + wrap
+
+- [ ] Create `aurora-faq-a2a` (or similar) through the UI; walk all acceptance
+      criteria in prd.md; screenshots to `evidence/`.
+- [ ] Keep the agent (demo dependency); record in kept-resources memory.
+- [ ] Full-scope check (2.2), spec update (`.trellis/spec/launchpad/` new page
+      `a2a-agents.md`), commit.
+
+Review gates: after Step 0 (probe verdict may change design) and after Step 3
+(before UI work) — post findings, wait for user confirmation if design shifted.
