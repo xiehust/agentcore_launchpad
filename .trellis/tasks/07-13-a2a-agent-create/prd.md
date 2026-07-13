@@ -51,18 +51,36 @@ R7. Bilingual UI (en/zh-CN); backend tests for spec validation, deploy params,
 
 ## Acceptance criteria
 
-- [ ] Create flow: pick Strands zip → SERVICE PROTOCOL = A2A → configure skills
+- [x] Create flow: pick Strands zip → SERVICE PROTOCOL = A2A → configure skills
       → LAUNCH completes; agent row shows protocol; republish keeps A2A.
-- [ ] `curl` (SigV4) of `…/runtimes/{arn}/invocations/.well-known/agent-card.json`
+- [x] `curl` (SigV4) of `…/runtimes/{arn}/invocations/.well-known/agent-card.json`
       returns the card with the configured skills (live proof).
-- [ ] Chat playground round-trip against the A2A agent returns a clean text
+- [x] Chat playground round-trip against the A2A agent returns a clean text
       answer (no raw JSON-RPC visible to the user).
-- [ ] An eval run against the A2A agent completes with scores.
-- [ ] Experiment picker shows the A2A agent disabled with a bilingual reason.
-- [ ] HTTP-protocol creates are byte-identical to before (regression guard).
+- [x] An eval run against the A2A agent completes with scores.
+- [x] Experiment picker shows the A2A agent disabled with a bilingual reason.
+- [x] HTTP-protocol creates are byte-identical to before (regression guard).
 
 ## Depends on / coordinates with
 
 - `07-13-a2a-registry-cards` owns `build_a2a_card` enrichment; this task feeds
   it `protocol` + `skills` from the spec. If this task lands first, it may stub
   the card fields and let the sibling generalize.
+
+## Acceptance evidence (2026-07-13, live)
+
+- Agent `aurora-faq-a2a` (42e78f6dea234f0294588c0baa20d6d4, runtime
+  aurora_faq_a2a_c32c7d-50oUQlABYB) created through the 5175 UI: protocol
+  selector + skills editor → GENERATE showed "strands A2A template" → active.
+- Card fetch 200: skills [aurora-product-faq, current-time] as configured.
+- Chat: `17*23` → "391" (10.7s), clean text via JSON-RPC branch.
+- Eval run bf0b2935ed5e COMPLETED: GoalSuccessRate 0.67, Helpfulness 0.5,
+  Correctness (first attempt 8c449866dbe9 FAILED with JSON-RPC -32600 —
+  exposed the eval-runner bypass, fixed in 5b2c416 + regression test).
+- Registry record PENDING_APPROVAL, card url=data-plane invocations URL,
+  transport=a2a-jsonrpc.
+- Experiment picker: "aurora-faq-a2a · a2a — A2A protocol — no config-bundle
+  A/B" disabled option; agents list shows "zip_runtime · a2a".
+- Republish protocol retention: probe D live proof + update-echo unit test
+  (full UI republish cycle not repeated — same API path).
+- NOTE: agent KEPT as the demo specialist for 07-13-a2a-frontdesk-demo.
