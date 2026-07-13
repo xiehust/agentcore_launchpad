@@ -891,3 +891,37 @@ Refactored ?view=evaluators and ?view=datasets to the Experiment interaction: to
 ### Next Steps
 
 - None - task complete
+
+
+## Session 11: Dataset editor: user simulation scenario type
+
+**Date**: 2026-07-13
+**Task**: Dataset editor: user simulation scenario type
+**Package**: lab4-interactive
+**Branch**: `main`
+
+### Summary
+
+Added the devguide user-simulation scenario type to the dataset editor (frontend-only; backend already validated/inferred/synced simulated items). Create form gains MULTI-TURN | USER SIMULATION selchips; sim cards author scenario_id/description/actor context/goal/traits rows/first message/max_turns/assertions per devguide schema (verified via AWS docs MCP: no turns/expected_response/expected_trajectory). toSimDrafts/toSimItems round-trip byte-identical (max_turns omitted when =10 default); fixed broken editing of simulated datasets (previously empty hydration + kind_immutable 400 on save); mixed imported datasets collapse to a warning note (no save) instead of silent data loss. Live-verified: prefill create -> KIND=simulated, New Run ACTOR MODEL linkage, edit save round-trip across row switches, real sync -> AGENTCORE_EVALUATION_SIMULATED_V1 ACTIVE, mixed guard via manual PUT; probe dataset + cloud copy deleted after. Spec section added to launchpad/evaluation-subpage-interaction.md; 4 new screenshots.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `eb28cc4` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
