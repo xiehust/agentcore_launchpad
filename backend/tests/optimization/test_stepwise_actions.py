@@ -100,6 +100,25 @@ def test_accept_with_nothing_to_accept_is_400(client):
     assert res.json()["code"] == "experiment.accept_invalid"
 
 
+def test_accept_falls_back_to_current_prompt_for_tool_only_rec(client):
+    """A tool-description-only recommendation is acceptable — the treatment
+    keeps the production prompt and changes only the descriptions."""
+    exp = _mk_exp(artifacts={
+        "agent_meta": {"system_prompt": "cur"},
+        "recommend": {"tool_status": "COMPLETED",
+                      "tool_descriptions": {"shell": "better"}},
+    })
+    res = client.post(
+        f"/api/experiments/{exp.id}/action",
+        json={"action": "accept",
+              "accepted_tool_descriptions": {"shell": "better"}},
+    )
+    assert res.status_code == 200
+    rec = res.json()["experiment"]["artifacts"]["recommend"]
+    assert rec["accepted_prompt"] == "cur"
+    assert rec["accepted_tool_descriptions"] == {"shell": "better"}
+
+
 def test_recommend_rerun_preserves_prior_accept(monkeypatch):
     """Re-running recommend (retry path) must not drop an earlier accept."""
     exp = _mk_exp(artifacts={
@@ -110,13 +129,148 @@ def test_recommend_rerun_preserves_prior_accept(monkeypatch):
     })
     monkeypatch.setattr(
         svc, "stage_recommend",
-        lambda exp_id, agent, progress=svc._noop: {"recommended_prompt": "new-rec"},
+        lambda exp_id, agent, progress=svc._noop, **kw: {
+            "recommended_prompt": "new-rec"},
     )
     svc.act_recommend(exp.id, svc._noop)
     rec = _reload(exp.id).artifacts["recommend"]
     assert rec["recommended_prompt"] == "new-rec"      # refreshed
     assert rec["accepted_prompt"] == "kept"            # earlier accept retained
     assert rec["accepted_tool_descriptions"] == {"calculator": "d2"}
+
+
+def test_recommend_partial_rerun_keeps_other_type(monkeypatch):
+    """Generating only tool descriptions must not wipe the prompt output —
+    and must clear its own stale error keys."""
+    exp = _mk_exp(artifacts={
+        "agent_meta": {"system_prompt": "cur", "tools": {"shell": "d"}},
+        "recommend": {"recommended_prompt": "sp-old", "explanation": "e",
+                      "system_prompt_status": "COMPLETED",
+                      "tool_status": "error", "tool_error": "Boom",
+                      "tool_descriptions": {}},
+    })
+    monkeypatch.setattr(
+        svc, "stage_recommend",
+        lambda exp_id, agent, progress=svc._noop, **kw: {
+            "tool_status": "COMPLETED",
+            "tool_descriptions": {"shell": "better"},
+            "analyzed_tools": {"shell": "d"}},
+    )
+    svc.act_recommend(exp.id, svc._noop, types=["tool_descriptions"])
+    rec = _reload(exp.id).artifacts["recommend"]
+    assert rec["recommended_prompt"] == "sp-old"       # untouched
+    assert rec["tool_descriptions"] == {"shell": "better"}
+    assert "tool_error" not in rec                     # stale error cleared
+
+
+def test_recommend_action_passes_types_and_tools(client, monkeypatch):
+    _inline(monkeypatch)
+    captured: dict = {}
+
+    def fake_stage(exp_id, agent, progress=svc._noop, types=svc.REC_TYPES,
+                   tools=None):
+        captured.update(types=types, tools=tools)
+        return {"tool_status": "COMPLETED",
+                "tool_descriptions": {"shell": "better"},
+                "analyzed_tools": {"shell": "run bash"}}
+
+    monkeypatch.setattr(svc, "stage_recommend", fake_stage)
+    exp = _mk_exp(artifacts={"agent_meta": {"system_prompt": "cur",
+                                            "tools": {}}})
+    res = client.post(
+        f"/api/experiments/{exp.id}/action",
+        json={"action": "recommend",
+              "recommend_types": ["tool_descriptions"],
+              "recommend_tools": {"shell": "run bash"}},
+    )
+    assert res.status_code == 202
+    assert captured["types"] == ("tool_descriptions",)
+    assert captured["tools"] == {"shell": "run bash"}
+    rec = _reload(exp.id).artifacts["recommend"]
+    assert rec["tool_descriptions"] == {"shell": "better"}
+    assert "recommended_prompt" not in rec
+
+
+def test_recommend_rejects_unknown_or_empty_types(client):
+    exp = _mk_exp(artifacts={"agent_meta": {"system_prompt": "cur"}})
+    for bad in (["prompt"], []):
+        res = client.post(f"/api/experiments/{exp.id}/action",
+                          json={"action": "recommend", "recommend_types": bad})
+        assert res.status_code == 422, bad
+
+
+def _rec_agent(tools):
+    return {"resource_id": "rid", "runtime_name": "rt", "system_prompt": "cur",
+            "tools": tools}
+
+
+def test_stage_recommend_runs_only_selected_types(monkeypatch):
+    monkeypatch.setattr(svc, "data_client", lambda: MagicMock())
+    calls: list[str] = []
+    monkeypatch.setattr(
+        svc.ac, "start_system_prompt_recommendation",
+        lambda *a, **k: calls.append("sp") or {"recommendationId": "r1"})
+    monkeypatch.setattr(
+        svc.ac, "start_tool_description_recommendation",
+        lambda *a, **k: calls.append("td") or {"recommendationId": "r2"})
+    monkeypatch.setattr(svc.ac, "poll_recommendation", lambda *a, **k: {
+        "status": "COMPLETED",
+        "recommendationResult": {
+            "systemPromptRecommendationResult": {
+                "recommendedSystemPrompt": "better", "explanation": "x"},
+            "toolDescriptionRecommendationResult": {"tools": [
+                {"toolName": "shell", "recommendedToolDescription": "improved"},
+                {"toolName": "noop", "recommendedToolDescription": ""}]},
+        }})
+
+    out = svc.stage_recommend("e1", _rec_agent({"shell": "old"}),
+                              types=("system_prompt",))
+    assert calls == ["sp"]
+    assert out["recommended_prompt"] == "better"
+    assert "tool_status" not in out and "tool_descriptions" not in out
+
+    calls.clear()
+    out = svc.stage_recommend("e1", _rec_agent({"shell": "old"}),
+                              types=("tool_descriptions",))
+    assert calls == ["td"]
+    assert out["tool_descriptions"] == {"shell": "improved"}  # empty rec dropped
+    assert out["analyzed_tools"] == {"shell": "old"}
+    assert out["tool_status"] == "COMPLETED"
+    assert "recommended_prompt" not in out
+
+
+def test_stage_recommend_without_tools_short_circuits(monkeypatch):
+    monkeypatch.setattr(svc, "data_client", lambda: MagicMock())
+
+    def boom(*a, **k):
+        raise AssertionError("no tools → the TD API must not be called")
+
+    monkeypatch.setattr(svc.ac, "start_tool_description_recommendation", boom)
+    out = svc.stage_recommend("e1", _rec_agent({}), types=("tool_descriptions",))
+    assert out == {"analyzed_tools": {}, "tool_status": "no-tools",
+                   "tool_descriptions": {}}
+
+
+def test_discover_agent_tools_from_spec_and_code():
+    spec = {
+        "tools": [{"name": "search", "description": "Search the registry"}],
+        "code": ('@tool\ndef calculator(expression: str) -> str:\n'
+                 '    """Evaluate a basic arithmetic expression.\n\n'
+                 '    Args:\n        expression: the math\n    """\n'
+                 '    return ""\n'),
+        "code_bundle": {
+            "main.py": ('@tool\ndef shell(command: str, timeout: int = 300):\n'
+                        '    """Execute a bash command and return the results.\n'
+                        '    Args:\n        command: The bash command\n    """\n'),
+            "notes.md": "no tools here",
+        },
+    }
+    assert svc.discover_agent_tools(spec) == {
+        "search": "Search the registry",
+        "calculator": "Evaluate a basic arithmetic expression.",
+        "shell": "Execute a bash command and return the results.",
+    }
+    assert svc.discover_agent_tools({}) == {}
 
 
 # ─── bundles ─────────────────────────────────────────────────────────────────

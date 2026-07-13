@@ -29,10 +29,16 @@ export interface ExperimentInfo {
   error: string | null;
   created_at: string | null;
   artifacts: {
-    agent_meta?: { system_prompt?: string; name?: string };
+    agent_meta?: { system_prompt?: string; name?: string;
+      tools?: Record<string, string> };
     recommend?: {
-      recommended_prompt: string;
+      // each generator writes only its own keys — either side may be absent
+      recommended_prompt?: string;
       explanation?: string;
+      system_prompt_status?: string;
+      tool_status?: string;
+      tool_error?: string;
+      analyzed_tools?: Record<string, string>;
       tool_descriptions?: Record<string, string>;
       accepted_prompt?: string;
       accepted_tool_descriptions?: Record<string, string>;
@@ -179,6 +185,11 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
   const [trafficDatasetId, setTrafficDatasetId] = useState("");
   const [editedPrompt, setEditedPrompt] = useState<string | null>(null);
   const [editedToolJson, setEditedToolJson] = useState<string | null>(null);
+  // recommend generators are separately selectable — prompt & tool
+  // descriptions come from two different AgentCore recommendation jobs
+  const [genSp, setGenSp] = useState(true);
+  const [genTd, setGenTd] = useState(true);
+  const [toolInputsJson, setToolInputsJson] = useState<string | null>(null);
   const [confirmCleanup, setConfirmCleanup] = useState(false);
   const [confirmPromote, setConfirmPromote] = useState(false);
 
@@ -237,6 +248,9 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
     setTrafficDatasetId("");
     setEditedPrompt(null);
     setEditedToolJson(null);
+    setGenSp(true);
+    setGenTd(true);
+    setToolInputsJson(null);
     setConfirmCleanup(false);
     setConfirmPromote(false);
   }, [exp?.id]);
@@ -434,7 +448,45 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
   const rec = a.recommend;
   const recToolDescs = Object.fromEntries(
     Object.entries(rec?.tool_descriptions ?? {}).filter(([k]) => k !== "_error"));
+  // each generator ran iff its own keys exist — old rows wrote both at once
+  const spDone = rec?.recommended_prompt != null;
+  const tdRan = rec != null
+    && (rec.tool_status != null || rec.tool_descriptions != null);
   const treatmentPrompt = acceptedPrompt ?? rec?.recommended_prompt ?? "";
+
+  // toolName → current description handed to the tool-description optimizer;
+  // discovery covers spec/code tools only, so the set stays user-editable
+  // (gateway/MCP tools exist only at runtime)
+  const knownTools = rec?.analyzed_tools && Object.keys(rec.analyzed_tools).length
+    ? rec.analyzed_tools : (a.agent_meta?.tools ?? {});
+  const toolInputsValue = toolInputsJson
+    ?? (Object.keys(knownTools).length ? JSON.stringify(knownTools, null, 2) : "");
+  const parseToolJson = (raw: string): Record<string, string> | null => {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        return null;
+      }
+      return Object.fromEntries(
+        Object.entries(parsed as Record<string, unknown>)
+          .map(([k, v]) => [k, String(v)]));
+    } catch {
+      return null;
+    }
+  };
+  const toolInputs = toolInputsValue.trim()
+    ? parseToolJson(toolInputsValue) : undefined;
+  const toolInputsBad = toolInputsValue.trim() !== "" && toolInputs === null;
+
+  const onGenerate = (types: string[], withTools: boolean) => {
+    if (!exp) return;
+    const extra: Record<string, unknown> = { recommend_types: types };
+    if (withTools && toolInputs) extra.recommend_tools = toolInputs;
+    void onAction(exp.id, "recommend", extra);
+  };
+
+  const recRunning = exp?.running_action === "recommend";
+  const recError = !recRunning && !!exp?.error?.startsWith("recommend: ");
 
   const onAccept = () => {
     if (!exp) return;
@@ -443,24 +495,79 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
       ?? (Object.keys(recToolDescs).length
         ? JSON.stringify(recToolDescs, null, 2) : "");
     if (raw.trim()) {
-      try {
-        const parsed: unknown = JSON.parse(raw);
-        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-          throw new Error("not an object");
-        }
-        toolDescs = Object.fromEntries(
-          Object.entries(parsed as Record<string, unknown>)
-            .map(([k, v]) => [k, String(v)]));
-      } catch {
+      const parsed = parseToolJson(raw);
+      if (parsed === null) {
         toast(t("expPage.invalidToolJson"));
         return;
       }
+      toolDescs = parsed;
     }
     void onAction(exp.id, "accept", {
-      accepted_prompt: editedPrompt ?? rec?.recommended_prompt ?? "",
+      accepted_prompt: editedPrompt ?? rec?.recommended_prompt ?? currentPrompt,
       accepted_tool_descriptions: toolDescs,
     });
   };
+
+  // tools-to-analyze editor — shared by the initial generator form and the
+  // regenerate path after an empty/failed tool run
+  const toolInputsEditor = (
+    <>
+      <div className="mono dim" style={{ fontSize: 10, margin: "6px 0 4px" }}>
+        {t("expPage.toolsToAnalyze")}
+      </div>
+      <textarea
+        className="input"
+        rows={4}
+        spellCheck={false}
+        data-testid="rec-tools-input"
+        placeholder={'{"tool_name": "current description"}'}
+        value={toolInputsValue}
+        onChange={(e) => setToolInputsJson(e.target.value)}
+        style={{ width: "100%", fontFamily: "inherit", fontSize: 11 }}
+      />
+      {Object.keys(knownTools).length === 0 && !toolInputsValue.trim() && (
+        <div className="mono dim" style={{ fontSize: 10, marginTop: 2 }}>
+          {t("expPage.noDiscoveredTools")}
+        </div>
+      )}
+      {toolInputsBad && (
+        <div className="mono" style={{ fontSize: 10, marginTop: 2,
+                                       color: "var(--crit)" }}>
+          {t("expPage.invalidToolJson")}
+        </div>
+      )}
+    </>
+  );
+
+  const recTypeCheckbox = (
+    label: string, checked: boolean, set: (v: boolean) => void, testid: string,
+  ) => (
+    <label className="mono" style={{ fontSize: 10.5, display: "inline-flex",
+                                     alignItems: "center", gap: 5,
+                                     cursor: "pointer" }}>
+      <input
+        type="checkbox"
+        checked={checked}
+        data-testid={testid}
+        onChange={(e) => set(e.target.checked)}
+      />
+      {label}
+    </label>
+  );
+
+  // failure/empty reasons stay visible — a silently missing section reads
+  // as "the feature doesn't exist" (the old behavior this replaces)
+  const tdStatusNote = tdRan && Object.keys(recToolDescs).length === 0 && (
+    <div className="note" style={{ marginTop: 6 }} data-testid="td-status-note">
+      <span className="i">[i]</span>
+      <span>
+        {rec?.tool_status === "no-tools" ? t("expPage.toolRecNoTools")
+          : rec?.tool_status === "error"
+            ? t("expPage.toolRecFailed", { msg: rec?.tool_error ?? "" })
+            : t("expPage.toolRecEmpty")}
+      </span>
+    </div>
+  );
 
   const recommendCard = exp && (
     <StageCard
@@ -468,23 +575,105 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
       active={activeCard === "recommend"} done={recommendDone}
     >
       {!rec && (
-        <div className="note" style={{ marginBottom: 8 }}>
-          <span className="i">[i]</span>
-          <span>{t("expPage.recommendHint")}</span>
-        </div>
+        <>
+          <div className="note" style={{ marginBottom: 8 }}>
+            <span className="i">[i]</span>
+            <span>{t("expPage.recommendHint")}</span>
+          </div>
+          <div style={{ display: "flex", gap: 18, marginBottom: 8 }}>
+            {recTypeCheckbox(t("expPage.recTypePrompt"), genSp, setGenSp,
+                             "rec-type-sp")}
+            {recTypeCheckbox(t("expPage.recTypeTools"), genTd, setGenTd,
+                             "rec-type-td")}
+          </div>
+          {genTd && <div style={{ marginBottom: 8 }}>{toolInputsEditor}</div>}
+          {actionBtn("recommend", t("expPage.generateRec"), {
+            primary: true,
+            disabled: (!genSp && !genTd) || (genTd && toolInputsBad),
+            extra: {
+              recommend_types: [
+                ...(genSp ? ["system_prompt"] : []),
+                ...(genTd ? ["tool_descriptions"] : []),
+              ],
+              ...(genTd && toolInputs ? { recommend_tools: toolInputs } : {}),
+            },
+          })}
+        </>
       )}
-      {!rec && actionBtn("recommend", t("expPage.generateRec"), { primary: true })}
       {rec && (
         <>
-          <DiffPanes
-            before={currentPrompt}
-            after={rec.recommended_prompt}
-            beforeLabel={t("expPage.currentLabel")}
-            afterLabel={t("expPage.recommendedLabel")}
-          />
-          {rec.explanation && (
-            <div className="dim" style={{ fontSize: 10.5, marginTop: 6 }}>
-              {rec.explanation}
+          {spDone && (
+            <>
+              <DiffPanes
+                before={currentPrompt}
+                after={rec.recommended_prompt ?? ""}
+                beforeLabel={t("expPage.currentLabel")}
+                afterLabel={t("expPage.recommendedLabel")}
+              />
+              {rec.explanation && (
+                <div className="dim" style={{ fontSize: 10.5, marginTop: 6 }}>
+                  {rec.explanation}
+                </div>
+              )}
+            </>
+          )}
+          {Object.keys(recToolDescs).length > 0 && (
+            <div style={{ marginTop: spDone ? 10 : 0 }}>
+              <div className="mono dim" style={{ fontSize: 10, marginBottom: 4 }}>
+                {t("expPage.toolRecLabel")}
+              </div>
+              <DiffPanes
+                before={JSON.stringify(rec.analyzed_tools ?? {}, null, 2)}
+                after={JSON.stringify(recToolDescs, null, 2)}
+                beforeLabel={t("expPage.currentLabel")}
+                afterLabel={t("expPage.recommendedLabel")}
+              />
+            </div>
+          )}
+          {tdStatusNote}
+          {!recommendDone && (!spDone || !tdRan
+            || Object.keys(recToolDescs).length === 0) && (
+            <div style={{ marginTop: 8 }}>
+              {!spDone && (
+                <Btn
+                  disabled={busy || !!exp.running_action}
+                  data-testid="action-recommend-sp"
+                  onClick={() => onGenerate(["system_prompt"], false)}
+                >
+                  ▸ {t("expPage.genSp")}
+                </Btn>
+              )}
+              {(!tdRan || (tdRan && Object.keys(recToolDescs).length === 0)) && (
+                <div style={{ marginTop: !spDone ? 8 : 0 }}>
+                  {toolInputsEditor}
+                  <div style={{ marginTop: 6 }}>
+                    <Btn
+                      disabled={busy || !!exp.running_action || toolInputsBad
+                        || !toolInputsValue.trim()}
+                      data-testid="action-recommend-td"
+                      onClick={() => onGenerate(["tool_descriptions"], true)}
+                    >
+                      ▸ {t("expPage.genTd")}
+                    </Btn>
+                  </div>
+                </div>
+              )}
+              {recRunning && (
+                <div className="mono dim" data-testid="progress-line"
+                     style={{ fontSize: 10, marginTop: 4 }}>
+                  {exp.progress ?? "…"}
+                </div>
+              )}
+              {recError && (
+                <div className="note" style={{ borderColor: "var(--crit)",
+                                               marginTop: 6 }}
+                     data-testid="action-error-recommend">
+                  <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
+                  <span className="mono" style={{ fontSize: 10.5 }}>
+                    {exp.error}
+                  </span>
+                </div>
+              )}
             </div>
           )}
           {!acceptedPrompt && !a.bundles && (
@@ -496,7 +685,7 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
                 className="input"
                 rows={5}
                 data-testid="accept-prompt-input"
-                value={editedPrompt ?? rec.recommended_prompt}
+                value={editedPrompt ?? rec.recommended_prompt ?? currentPrompt}
                 onChange={(e) => setEditedPrompt(e.target.value)}
                 style={{ width: "100%", fontFamily: "inherit", fontSize: 11 }}
               />
@@ -531,7 +720,7 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
           {acceptedPrompt && (
             <div className="mono dim" style={{ fontSize: 10, marginTop: 6 }}>
               ✓ {t("expPage.accepted")}
-              {acceptedPrompt.trim() !== rec.recommended_prompt.trim() &&
+              {acceptedPrompt.trim() !== (rec.recommended_prompt ?? currentPrompt).trim() &&
                 " (edited)"}
             </div>
           )}

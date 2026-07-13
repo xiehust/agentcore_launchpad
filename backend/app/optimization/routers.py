@@ -1,6 +1,6 @@
 """Experiments API — create, inspect, and drive one stage action at a time."""
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel, Field
@@ -82,6 +82,13 @@ class ActionRequest(BaseModel):
         pattern="^(recommend|accept|bundles|gateway|abtest|traffic|verdict"
                 "|promote|canary|ramp|cleanup)$"
     )
+    # recommend — which generators to run (default: both) and, for the
+    # tool-description one, the toolName → current-description set to analyze
+    # (default: tools discovered from the agent's spec)
+    recommend_types: list[Literal["system_prompt", "tool_descriptions"]] | None = (
+        Field(default=None, min_length=1)
+    )
+    recommend_tools: dict[str, str] | None = None
     accepted_prompt: str | None = None                        # accept
     accepted_tool_descriptions: dict[str, str] | None = None  # accept
     dataset_id: str | None = None                             # traffic
@@ -110,7 +117,11 @@ def experiment_action(
     # the client watches running_action/progress on the experiment itself
     if req.action == "accept":
         rec = exp.artifacts.get("recommend") or {}
-        prompt = (req.accepted_prompt or rec.get("recommended_prompt") or "").strip()
+        # tool-description-only recommendations have no recommended_prompt —
+        # the treatment keeps the current production prompt
+        meta = exp.artifacts.get("agent_meta") or {}
+        prompt = (req.accepted_prompt or rec.get("recommended_prompt")
+                  or meta.get("system_prompt") or "").strip()
         if not prompt:
             raise AppError("experiment.accept_invalid",
                            "accepted prompt is empty", status_code=400)
@@ -153,9 +164,15 @@ def experiment_action(
             exp.id, "canary",
             lambda progress: service.act_canary(exp_id, snapshot, progress),
         )
-    else:  # recommend | gateway | abtest | verdict | cleanup
+    elif req.action == "recommend":
+        service.run_action(
+            exp.id, "recommend",
+            lambda progress: service.act_recommend(
+                exp_id, progress,
+                types=req.recommend_types, tools=req.recommend_tools),
+        )
+    else:  # gateway | abtest | verdict | cleanup
         fn = {
-            "recommend": service.act_recommend,
             "gateway": service.act_gateway,
             "abtest": service.act_abtest,
             "verdict": service.act_verdict,

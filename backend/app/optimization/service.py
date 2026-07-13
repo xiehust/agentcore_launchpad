@@ -14,10 +14,11 @@ at {gatewayUrl}/{target}/invocations.
 """
 
 import json
+import re
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import boto3
@@ -129,10 +130,44 @@ def clear_stale_running_actions() -> list[str]:
         db.close()
 
 
+# strands `@tool def name(...):` followed by a docstring — the summary line is
+# the tool description the model sees, so it is what a recommendation improves.
+_TOOL_DEF_RE = re.compile(
+    r"@tool\s*\ndef\s+(\w+)\s*\([^)]*\)[^:]*:\s*\n\s+(?:\"\"\"|''')([\s\S]*?)(?:\"\"\"|''')"
+)
+
+
+def discover_agent_tools(spec: dict[str, Any]) -> dict[str, str]:
+    """toolName → current description, from the agent's own spec.
+
+    Sources: registry tool attachments (spec.tools) and `@tool` docstrings in
+    the agent's code / code bundle. Gateway-served tools (KB targets, MCP)
+    only exist at runtime and can't be discovered here — the recommend UI
+    lets the user add those by hand.
+    """
+    tools: dict[str, str] = {}
+    for entry in spec.get("tools") or []:
+        if isinstance(entry, dict) and entry.get("name"):
+            tools[str(entry["name"])] = str(
+                entry.get("description") or entry.get("desc") or ""
+            )
+    sources = [spec.get("code")] if isinstance(spec.get("code"), str) else []
+    bundle = spec.get("code_bundle")
+    if isinstance(bundle, dict):
+        sources += [s for s in bundle.values() if isinstance(s, str)]
+    for src in sources:
+        for name, doc in _TOOL_DEF_RE.findall(src or ""):
+            # docstring summary only — Args/Returns sections are signature
+            # docs, not part of the description contract
+            summary = re.split(r"\n\s*\n|\n\s*(?:Args|Returns|Raises):", doc)[0]
+            tools.setdefault(name, " ".join(summary.split())[:500])
+    return tools
+
+
 def _agent_meta(exp: Experiment) -> dict[str, Any]:
     """Runtime facts captured at create time; rebuilt lazily for old rows."""
     meta = exp.artifacts.get("agent_meta")
-    if meta:
+    if meta and "tools" in meta:
         return meta
     from app.models.ledger import Agent  # local import — avoids cycle at module load
 
@@ -141,6 +176,11 @@ def _agent_meta(exp: Experiment) -> dict[str, Any]:
         agent_row = db.get(Agent, exp.agent_id)
     finally:
         db.close()
+    if meta:  # pre-tools row — backfill discovery, keep captured facts
+        if agent_row is not None:
+            meta = {**meta, "tools": discover_agent_tools(agent_row.spec or {})}
+            _update(exp.id, artifact={"agent_meta": meta})
+        return meta
     if agent_row is None:
         raise RuntimeError("agent behind this experiment no longer exists")
     control = control_client()
@@ -151,6 +191,7 @@ def _agent_meta(exp: Experiment) -> dict[str, Any]:
         "resource_id": agent_row.resource_id,
         "runtime_name": rt_name(control, agent_row.resource_id),
         "system_prompt": (agent_row.spec or {}).get("system_prompt", ""),
+        "tools": discover_agent_tools(agent_row.spec or {}),
     }
     _update(exp.id, artifact={"agent_meta": meta})
     return meta
@@ -161,8 +202,23 @@ def _noop(_msg: str) -> None:
 
 
 # ─── stage implementations ───────────────────────────────────────────────────
+REC_TYPES = ("system_prompt", "tool_descriptions")
+
+# artifact keys owned by each recommendation type — a re-generation of one
+# type replaces exactly these and leaves the other type's output in place
+_REC_KEYS: dict[str, tuple[str, ...]] = {
+    "system_prompt": ("system_prompt_status", "recommended_prompt", "explanation"),
+    "tool_descriptions": ("tool_status", "tool_error", "tool_descriptions",
+                          "analyzed_tools"),
+}
+
+
 def stage_recommend(
-    exp_id: str, agent: dict[str, Any], progress: Progress = _noop
+    exp_id: str,
+    agent: dict[str, Any],
+    progress: Progress = _noop,
+    types: tuple[str, ...] = REC_TYPES,
+    tools: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     settings = get_settings()
     data = data_client()
@@ -173,66 +229,80 @@ def stage_recommend(
     ]
     service_names = [f"{agent['runtime_name']}.DEFAULT"]
     current_prompt = agent["system_prompt"]
+    out: dict[str, Any] = {}
 
-    progress("generating system-prompt recommendation from recent traces…")
-    sp = ac.start_system_prompt_recommendation(
-        data,
-        name=f"exp_{exp_id[:8]}_sp",
-        system_prompt=current_prompt,
-        log_group_arns=log_group_arns,
-        service_names=service_names,
-    )
-    sp_result = ac.poll_recommendation(
-        data, recommendation_id=sp["recommendationId"], max_polls=45
-    )
-    sp_payload = sp_result.get("recommendationResult", {}).get(
-        "systemPromptRecommendationResult", {}
-    )
-    sp_out = sp_payload.get("recommendedSystemPrompt", "") or _fallback_treatment_prompt(
-        current_prompt
-    )
-    sp_explanation = sp_payload.get("explanation", "")[:600]
-
-    tool_suggestion = {}
-    try:
-        progress("generating tool-description recommendation…")
-        td = ac.start_tool_description_recommendation(
+    if "system_prompt" in types:
+        progress("generating system-prompt recommendation from recent traces…")
+        sp = ac.start_system_prompt_recommendation(
             data,
-            name=f"exp_{exp_id[:8]}_td",
-            tools=[{
-                "toolName": "calculator",
-                "description": "Evaluate a basic arithmetic expression",
-            }],
+            name=f"exp_{exp_id[:8]}_sp",
+            system_prompt=current_prompt,
             log_group_arns=log_group_arns,
             service_names=service_names,
         )
-        td_result = ac.poll_recommendation(
-            data, recommendation_id=td["recommendationId"], max_polls=30
+        sp_result = ac.poll_recommendation(
+            data, recommendation_id=sp["recommendationId"], max_polls=45
         )
-        for tool in (
-            td_result.get("recommendationResult", {})
-            .get("toolDescriptionRecommendationResult", {})
-            .get("tools", [])
-        ):
-            tool_suggestion[tool.get("toolName", "calculator")] = tool.get(
-                "recommendedToolDescription", ""
-            )
-    except Exception as exc:
-        tool_suggestion = {"_error": f"{type(exc).__name__}: {exc}"[:200]}
+        sp_payload = sp_result.get("recommendationResult", {}).get(
+            "systemPromptRecommendationResult", {}
+        )
+        sp_out = sp_payload.get(
+            "recommendedSystemPrompt", ""
+        ) or _fallback_treatment_prompt(current_prompt)
+        out.update(
+            system_prompt_status=sp_result.get("status"),
+            recommended_prompt=sp_out[:4000],
+            explanation=sp_payload.get("explanation", "")[:600],
+        )
 
-    return {
-        "system_prompt_status": sp_result.get("status"),
-        "recommended_prompt": sp_out[:4000],
-        "explanation": sp_explanation,
-        "tool_descriptions": tool_suggestion,
-    }
+    if "tool_descriptions" in types:
+        # the optimizer improves descriptions for the tools it is handed —
+        # they must be the agent's real tools, or it has nothing to match
+        # against in the traces
+        analyzed = tools or agent.get("tools") or {}
+        out["analyzed_tools"] = analyzed
+        if not analyzed:
+            out["tool_status"] = "no-tools"
+            out["tool_descriptions"] = {}
+        else:
+            try:
+                progress("generating tool-description recommendation…")
+                td = ac.start_tool_description_recommendation(
+                    data,
+                    name=f"exp_{exp_id[:8]}_td",
+                    tools=[{"toolName": k, "description": v}
+                           for k, v in analyzed.items()],
+                    log_group_arns=log_group_arns,
+                    service_names=service_names,
+                )
+                td_result = ac.poll_recommendation(
+                    data, recommendation_id=td["recommendationId"], max_polls=30
+                )
+                suggestions: dict[str, str] = {}
+                for tool in (
+                    td_result.get("recommendationResult", {})
+                    .get("toolDescriptionRecommendationResult", {})
+                    .get("tools", [])
+                ):
+                    name = tool.get("toolName", "")
+                    desc = tool.get("recommendedToolDescription", "")
+                    if name and desc:
+                        suggestions[name] = desc
+                out["tool_status"] = td_result.get("status") or "COMPLETED"
+                out["tool_descriptions"] = suggestions
+            except Exception as exc:
+                out["tool_status"] = "error"
+                out["tool_error"] = f"{type(exc).__name__}: {exc}"[:200]
+                out["tool_descriptions"] = {}
+
+    return out
 
 
 def _fallback_treatment_prompt(current: str) -> str:
     return (
         current
-        + "\nAlways use the calculator tool for any arithmetic before answering; "
-        "verify the result and reply with ONLY the final number, no punctuation."
+        + "\nUse the available tools before answering when they apply; verify "
+        "tool results, and reply in exactly the format the user requested."
     )
 
 
@@ -271,12 +341,15 @@ def stage_bundles(
 ) -> dict:
     control = control_client()
     current_prompt = agent["system_prompt"]
+    # control mirrors production: the agent's own tool descriptions; treatment
+    # overlays the accepted edits on that same base
+    current_descs = agent.get("tools") or DEFAULT_TOOL_DESCS
     control_bundle = create_bundle_idempotent(
         control,
         agent_arn=agent["arn"],
         bundle_name=f"exp_{exp_id[:8]}_control",
         system_prompt=current_prompt,
-        tool_descriptions=DEFAULT_TOOL_DESCS,
+        tool_descriptions=current_descs,
         commit_message="control — current production config",
     )
     treatment_bundle = create_bundle_idempotent(
@@ -284,7 +357,7 @@ def stage_bundles(
         agent_arn=agent["arn"],
         bundle_name=f"exp_{exp_id[:8]}_treatment",
         system_prompt=treatment_prompt,
-        tool_descriptions=treatment_tool_descs or DEFAULT_TOOL_DESCS,
+        tool_descriptions={**current_descs, **(treatment_tool_descs or {})},
         commit_message="treatment — accepted recommendation",
     )
     return {
@@ -552,14 +625,24 @@ def stage_not_ready_reason(exp: Experiment, action: str) -> str | None:
     return None
 
 
-def act_recommend(exp_id: str, progress: Progress) -> None:
+def act_recommend(
+    exp_id: str,
+    progress: Progress,
+    types: Sequence[str] | None = None,
+    tools: dict[str, str] | None = None,
+) -> None:
     exp = _get(exp_id)
-    rec = stage_recommend(exp_id, _agent_meta(exp), progress)
-    prior = exp.artifacts.get("recommend") or {}
-    for key in ("accepted_prompt", "accepted_tool_descriptions"):
-        if key in prior:  # a re-run must not drop an earlier accept
-            rec.setdefault(key, prior[key])
-    _update(exp_id, stage="recommend", artifact={"recommend": rec})
+    sel = tuple(t for t in REC_TYPES if t in (types or REC_TYPES))
+    rec = stage_recommend(exp_id, _agent_meta(exp), progress,
+                          types=sel, tools=tools)
+    # merge over the prior artifact: the type(s) just generated replace their
+    # own keys; the other type's output and any earlier accept survive
+    merged = dict(exp.artifacts.get("recommend") or {})
+    for t in sel:
+        for key in _REC_KEYS[t]:
+            merged.pop(key, None)
+    merged.update(rec)
+    _update(exp_id, stage="recommend", artifact={"recommend": merged})
 
 
 def action_accept(
@@ -669,6 +752,7 @@ def start_experiment(agent_row: Any) -> Experiment:
         "resource_id": agent_row.resource_id,
         "runtime_name": rt_name(control, agent_row.resource_id),
         "system_prompt": (agent_row.spec or {}).get("system_prompt", ""),
+        "tools": discover_agent_tools(agent_row.spec or {}),
     }
     db = SessionLocal()
     try:
