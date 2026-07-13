@@ -833,20 +833,6 @@
         "note": "Experiments create real AWS resources (config bundles, a gateway, A/B tests, online evaluators). Traffic stages before the verdict can take ~15 minutes."
       },
       "startNew": "START NEW EXPERIMENT",
-      "metricsPending": "per-arm metrics pending — online evaluation lags live traffic by minutes",
-      "stageHint": {
-        "recommend": "AI is drafting an improved system prompt (~1 min)",
-        "bundles": "creating control & treatment configuration bundles (~1 min)",
-        "gateway": "provisioning the experiment gateway and runtime target (~1–2 min)",
-        "abtest": "registering the 50/50 A/B test (<1 min)",
-        "traffic": "sending sample traffic through both arms (~2 min)",
-        "verdict": "waiting for online-eval scores per arm — up to ~15 min before the verdict lands",
-        "ready": "verdict is in — PROMOTE the winner or CLEANUP to abandon",
-        "promote": "traffic shifted to the winner — optionally start a challenger canary",
-        "canary": "challenger running at 90/10 — RAMP when confident",
-        "ramp": "stepping challenger traffic 10 → 50 → 100",
-        "cleanup": "deleting the experiment's AWS resources"
-      },
       "summary": {
         "agent": "AGENT",
         "verdict": "VERDICT",
