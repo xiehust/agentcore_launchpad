@@ -44,6 +44,25 @@ on the selection object (or `rows`), every refresh would rehydrate the editor an
 edits mid-typing. Same key ⇒ no rehydrate; key change (row switch) ⇒ full reset — both AC-tested
 (no draft leak across rows, no wipe on sync).
 
+## Dataset editor scenario types (2026-07-13)
+
+The create form's SCENARIO EDITOR mode has a dataset-level type selector (create only —
+kind is inferred server-side from the items and immutable after): MULTI-TURN (`turns`
+scenarios, predefined/legacy) vs USER SIMULATION (devguide user-simulation.html personas).
+
+- Simulated item shape (verified against the devguide): `{scenario_id, scenario_description?,
+  actor_profile: {context, goal, traits?}, input, max_turns? (number, default 10, min 1),
+  assertions?}` — NO turns / expected_response / expected_trajectory. `toSimItems` omits
+  optional fields when empty and omits `max_turns` when it equals the default 10 (backend
+  `simulation.py` applies `or 10`, so semantics are identical).
+- Editing pins the editor to the row's kind (`activeType`); the sim drafts hydrate in the
+  same `[selKey]` effect as everything else.
+- **Mixed guard**: `kind === "simulated"` with any item lacking `actor_profile` (only
+  reachable via JSON import) collapses the form to a warning note with no Save — the form
+  editor can't represent those items and saving would silently drop them. Sync/Delete stay.
+- Prefill is type-aware (`support-personas-sample` for simulated). Testids
+  `type-predefined` / `type-simulated`.
+
 ## Read-only variants
 
 - Builtin evaluators: detail panel is read-only (GET works on `Builtin.*`; PUT returns 400

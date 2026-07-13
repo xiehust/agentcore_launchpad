@@ -46,6 +46,24 @@ interface ScenarioDraft {
   expected_trajectory: string; // comma-separated tool names
 }
 
+interface TraitDraft {
+  key: string;
+  value: string;
+}
+
+// Devguide user-simulation scenario (actor_profile persona). max_turns stays
+// a string in the draft for friction-free number-input editing; parsed on emit.
+interface SimScenarioDraft {
+  scenario_id: string;
+  scenario_description: string;
+  context: string;
+  goal: string;
+  traits: TraitDraft[];
+  input: string;
+  max_turns: string;
+  assertions: string[];
+}
+
 // Same "cloud:" id encoding as the New Run scope dropdown / runs-list rows.
 const CLOUD_PREFIX = "cloud:";
 
@@ -60,6 +78,56 @@ const emptyScenario = (index: number): ScenarioDraft => ({
   assertions: [],
   expected_trajectory: "",
 });
+
+const emptySimScenario = (index: number): SimScenarioDraft => ({
+  scenario_id: `persona_${index}`,
+  scenario_description: "",
+  context: "",
+  goal: "",
+  traits: [],
+  input: "",
+  max_turns: "10",
+  assertions: [],
+});
+
+// 2-persona support sample adapted from the devguide user-simulation examples
+// (双语注释:LLM actor 扮演用户,goal 达成或到 max_turns 即停;assertions 是
+// simulated 数据集唯一的真值)。
+const SIM_SAMPLE_SCENARIOS = (): SimScenarioDraft[] => [
+  {
+    scenario_id: "frustrated_laptop_customer",
+    scenario_description: "Customer with a cracked laptop screen wants a warranty fix",
+    context:
+      "You bought a laptop 3 weeks ago and the screen cracked on its own. " +
+      "You already restarted it twice and searched the FAQ without luck.",
+    goal: "Get a repair or replacement arranged under warranty",
+    traits: [
+      { key: "expertise", value: "non-technical" },
+      { key: "tone", value: "frustrated but polite" },
+    ],
+    input: "My brand new laptop screen cracked on its own and I need this fixed.",
+    max_turns: "8",
+    assertions: [
+      "The agent acknowledges the customer's frustration",
+      "The agent offers a warranty repair or replacement path",
+    ],
+  },
+  {
+    scenario_id: "billing_duplicate_charge",
+    scenario_description: "Calm customer asking about a duplicate subscription charge",
+    context:
+      "The same subscription charge appears twice on this month's statement. " +
+      "You want an explanation and a refund of the extra charge.",
+    goal: "Confirm the duplicate charge and get a refund initiated",
+    traits: [
+      { key: "expertise", value: "intermediate" },
+      { key: "tone", value: "calm" },
+    ],
+    input: "Hi, I think I was charged twice this month — can you check my invoice?",
+    max_turns: "6",
+    assertions: ["The agent verifies the charge before promising a refund"],
+  },
+];
 
 // 3-scenario math sample with ground truth (expected_trajectory names the
 // zip template's real `calculator` tool) — sync-ready for dataset runs.
@@ -158,6 +226,57 @@ function toItems(scenarios: ScenarioDraft[], kind: string): Record<string, unkno
   });
 }
 
+// Stored simulated items (devguide actor_profile shape) → editor drafts.
+function toSimDrafts(items: Record<string, unknown>[]): SimScenarioDraft[] {
+  return items
+    .filter((item) => "actor_profile" in item)
+    .map((item, i) => {
+      const profile = (item.actor_profile ?? {}) as Record<string, unknown>;
+      const traits = (profile.traits ?? {}) as Record<string, unknown>;
+      return {
+        scenario_id: String(item.scenario_id ?? `persona_${i + 1}`),
+        scenario_description: String(item.scenario_description ?? ""),
+        context: String(profile.context ?? ""),
+        goal: String(profile.goal ?? ""),
+        traits: Object.entries(traits).map(([key, value]) => ({
+          key: String(key),
+          value: String(value),
+        })),
+        input: String(item.input ?? ""),
+        max_turns: String(item.max_turns ?? 10),
+        assertions: ((item.assertions as string[] | undefined) ?? []).map(String),
+      };
+    });
+}
+
+// Sim drafts → devguide user-simulation items. Optional fields only when
+// non-empty; max_turns only when it differs from the schema default 10.
+function toSimItems(drafts: SimScenarioDraft[]): Record<string, unknown>[] {
+  return drafts.map((s) => {
+    const traits = Object.fromEntries(
+      s.traits.filter((tr) => tr.key.trim()).map((tr) => [tr.key.trim(), tr.value]),
+    );
+    const assertions = s.assertions.map((a) => a.trim()).filter(Boolean);
+    const maxTurns = Number.parseInt(s.max_turns, 10);
+    return {
+      scenario_id: s.scenario_id.trim(),
+      ...(s.scenario_description.trim()
+        ? { scenario_description: s.scenario_description.trim() }
+        : {}),
+      actor_profile: {
+        context: s.context,
+        goal: s.goal,
+        ...(Object.keys(traits).length ? { traits } : {}),
+      },
+      input: s.input,
+      ...(Number.isFinite(maxTurns) && maxTurns >= 1 && maxTurns !== 10
+        ? { max_turns: maxTurns }
+        : {}),
+      ...(assertions.length ? { assertions } : {}),
+    };
+  });
+}
+
 export function DatasetsView({ onBack }: { onBack: () => void }) {
   const { t } = useTranslation();
   const toast = useToast();
@@ -176,6 +295,8 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [scenarios, setScenarios] = useState<ScenarioDraft[]>([emptyScenario(1)]);
+  const [scenarioType, setScenarioType] = useState<"predefined" | "simulated">("predefined");
+  const [simScenarios, setSimScenarios] = useState<SimScenarioDraft[]>([emptySimScenario(1)]);
   const [importText, setImportText] = useState("");
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -238,6 +359,17 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
   const cloud = selection?.kind === "cloud" ? selection.row : null;
   const editingId = local?.id ?? null;
 
+  // kind=simulated with non-actor items can only come from import — the form
+  // editor cannot represent those rows, so degrade to a warning (no save).
+  const mixedSimulated =
+    local?.kind === "simulated" && local.items.some((item) => !("actor_profile" in item));
+  // Editing pins the type to the row's immutable kind; creating follows the chips.
+  const activeType = local
+    ? local.kind === "simulated"
+      ? "simulated"
+      : "predefined"
+    : scenarioType;
+
   // Editor hydration keys off the selected KEY, not the row object: sync()
   // and save() both re-load(), which replaces row identities — re-hydrating
   // then would wipe unsaved edits. The ref carries the current row into the
@@ -259,12 +391,22 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
       setEditingKind(sel.row.kind);
       setName(sel.row.name);
       setDescription(sel.row.description ?? "");
-      setScenarios(toDrafts(sel.row.items));
+      if (sel.row.kind === "simulated") {
+        setScenarioType("simulated");
+        setSimScenarios(toSimDrafts(sel.row.items));
+        setScenarios([emptyScenario(1)]);
+      } else {
+        setScenarioType("predefined");
+        setScenarios(toDrafts(sel.row.items));
+        setSimScenarios([emptySimScenario(1)]);
+      }
     } else {
       setEditingKind("predefined");
+      setScenarioType("predefined");
       setName("");
       setDescription("");
       setScenarios([emptyScenario(1)]);
+      setSimScenarios([emptySimScenario(1)]);
       setImportText("");
     }
   }, [selKey]);
@@ -307,6 +449,10 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
     setScenarios((prev) => prev.map((s, i) => (i === index ? { ...s, ...patch } : s)));
   };
 
+  const patchSim = (index: number, patch: Partial<SimScenarioDraft>) => {
+    setSimScenarios((prev) => prev.map((s, i) => (i === index ? { ...s, ...patch } : s)));
+  };
+
   const save = async () => {
     setFormError(null);
     if (!name.trim()) {
@@ -314,7 +460,11 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
       return;
     }
     const items =
-      editorMode === "import" ? importPreview.items : toItems(scenarios, editingId ? editingKind : "predefined");
+      editorMode === "import"
+        ? importPreview.items
+        : activeType === "simulated"
+          ? toSimItems(simScenarios)
+          : toItems(scenarios, editingId ? editingKind : "predefined");
     if (editorMode === "import" && (importPreview.error || items.length === 0)) {
       setFormError(importPreview.error ?? t("evalPage.datasets.importEmpty"));
       return;
@@ -541,6 +691,180 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
     </>
   );
 
+  const simScenarioEditor = (
+    <>
+      {simScenarios.map((scenario, si) => (
+        <div
+          key={si}
+          style={{
+            border: "1px solid rgba(255,255,255,.08)",
+            borderRadius: 4,
+            padding: "10px 12px",
+            marginBottom: 10,
+          }}
+        >
+          <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 8 }}>
+            <input
+              className="input mono"
+              value={scenario.scenario_id}
+              aria-label={t("evalPage.datasets.scenarioId")}
+              style={{ maxWidth: 220 }}
+              onChange={(e) => patchSim(si, { scenario_id: e.target.value })}
+            />
+            <Btn
+              disabled={simScenarios.length <= 1}
+              style={{ marginLeft: "auto" }}
+              title={t("evalPage.datasets.removeScenario")}
+              onClick={() => setSimScenarios((prev) => prev.filter((_, i) => i !== si))}
+            >
+              ✕
+            </Btn>
+          </div>
+          <div className="field">
+            <label>{t("evalPage.datasets.simDescription")}</label>
+            <input
+              className="input"
+              value={scenario.scenario_description}
+              style={{ fontSize: 11.5 }}
+              onChange={(e) => patchSim(si, { scenario_description: e.target.value })}
+            />
+          </div>
+          <div className="field">
+            <label>{t("evalPage.datasets.simContext")}</label>
+            <textarea
+              className="input"
+              rows={2}
+              value={scenario.context}
+              style={{ resize: "vertical", fontSize: 11.5 }}
+              onChange={(e) => patchSim(si, { context: e.target.value })}
+            />
+          </div>
+          <div className="field">
+            <label>{t("evalPage.datasets.simGoal")}</label>
+            <textarea
+              className="input"
+              rows={2}
+              value={scenario.goal}
+              style={{ resize: "vertical", fontSize: 11.5 }}
+              onChange={(e) => patchSim(si, { goal: e.target.value })}
+            />
+          </div>
+          <div className="field">
+            <label>{t("evalPage.datasets.simTraits")}</label>
+            {scenario.traits.map((trait, ti) => (
+              <div key={ti} style={{ display: "flex", gap: 6, marginBottom: 4 }}>
+                <input
+                  className="input mono"
+                  placeholder={t("evalPage.datasets.simTraitKey")}
+                  value={trait.key}
+                  style={{ width: 130, fontSize: 11 }}
+                  onChange={(e) =>
+                    patchSim(si, {
+                      traits: scenario.traits.map((x, i) =>
+                        i === ti ? { ...x, key: e.target.value } : x,
+                      ),
+                    })
+                  }
+                />
+                <input
+                  className="input"
+                  placeholder={t("evalPage.datasets.simTraitValue")}
+                  value={trait.value}
+                  style={{ flex: 1, fontSize: 11.5 }}
+                  onChange={(e) =>
+                    patchSim(si, {
+                      traits: scenario.traits.map((x, i) =>
+                        i === ti ? { ...x, value: e.target.value } : x,
+                      ),
+                    })
+                  }
+                />
+                <Btn
+                  title={t("evalPage.datasets.removeTrait")}
+                  onClick={() =>
+                    patchSim(si, { traits: scenario.traits.filter((_, i) => i !== ti) })
+                  }
+                >
+                  ✕
+                </Btn>
+              </div>
+            ))}
+            <Btn
+              onClick={() =>
+                patchSim(si, { traits: [...scenario.traits, { key: "", value: "" }] })
+              }
+            >
+              + {t("evalPage.datasets.addTrait")}
+            </Btn>
+          </div>
+          <div className="field">
+            <label>{t("evalPage.datasets.simInput")}</label>
+            <textarea
+              className="input"
+              rows={2}
+              value={scenario.input}
+              style={{ resize: "vertical", fontSize: 11.5 }}
+              onChange={(e) => patchSim(si, { input: e.target.value })}
+            />
+          </div>
+          <div className="field">
+            <label>{t("evalPage.datasets.simMaxTurns")}</label>
+            <input
+              className="input mono"
+              type="number"
+              min={1}
+              aria-label={t("evalPage.datasets.simMaxTurns")}
+              value={scenario.max_turns}
+              style={{ width: 92 }}
+              onChange={(e) => patchSim(si, { max_turns: e.target.value })}
+            />
+          </div>
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label>{t("evalPage.datasets.assertions")}</label>
+            {scenario.assertions.map((assertion, ai) => (
+              <div key={ai} style={{ display: "flex", gap: 6, marginBottom: 4 }}>
+                <input
+                  className="input"
+                  value={assertion}
+                  style={{ fontSize: 11.5 }}
+                  onChange={(e) =>
+                    patchSim(si, {
+                      assertions: scenario.assertions.map((x, i) =>
+                        i === ai ? e.target.value : x,
+                      ),
+                    })
+                  }
+                />
+                <Btn
+                  title={t("evalPage.datasets.removeAssertion")}
+                  onClick={() =>
+                    patchSim(si, {
+                      assertions: scenario.assertions.filter((_, i) => i !== ai),
+                    })
+                  }
+                >
+                  ✕
+                </Btn>
+              </div>
+            ))}
+            <Btn onClick={() => patchSim(si, { assertions: [...scenario.assertions, ""] })}>
+              + {t("evalPage.datasets.addAssertion")}
+            </Btn>
+          </div>
+        </div>
+      ))}
+      <Btn
+        onClick={() => setSimScenarios((prev) => [...prev, emptySimScenario(prev.length + 1)])}
+      >
+        + {t("evalPage.datasets.addScenario")}
+      </Btn>
+      <div className="note" style={{ marginTop: 10 }}>
+        <span className="i">[i]</span>
+        <span>{t("evalPage.datasets.simHint")}</span>
+      </div>
+    </>
+  );
+
   return (
     <section>
       <ViewHead
@@ -687,9 +1011,15 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
               <Btn
                 onClick={() => {
                   setEditorMode("form");
-                  setName("math-gt-sample");
-                  setDescription("3 scenarios with ground truth (calculator trajectory)");
-                  setScenarios(SAMPLE_SCENARIOS());
+                  if (scenarioType === "simulated") {
+                    setName("support-personas-sample");
+                    setDescription("2 simulated personas (support + billing)");
+                    setSimScenarios(SIM_SAMPLE_SCENARIOS());
+                  } else {
+                    setName("math-gt-sample");
+                    setDescription("3 scenarios with ground truth (calculator trajectory)");
+                    setScenarios(SAMPLE_SCENARIOS());
+                  }
                 }}
               >
                 {t("evalPage.datasets.prefill")}
@@ -754,43 +1084,79 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
                   </div>
                 </div>
               )}
-              <div className="field">
-                <label>{t("evalPage.datasets.name")}</label>
-                <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
-              </div>
-              <div className="field">
-                <label>{t("evalPage.datasets.description")}</label>
-                <input
-                  className="input"
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                />
-              </div>
-
-              {editorMode === "import" && !local ? (
+              {/* type is only choosable at creation — kind is immutable server-side */}
+              {!local && editorMode === "form" && (
                 <div className="field">
-                  <label>{t("evalPage.datasets.importLabel")}</label>
-                  <textarea
-                    className="input mono"
-                    rows={9}
-                    style={{ fontSize: 10.5, lineHeight: 1.5, resize: "vertical" }}
-                    placeholder={'{"scenarios": [...]}  |  {"prompt": "...", "expected": "..."} per line'}
-                    value={importText}
-                    onChange={(e) => setImportText(e.target.value)}
-                  />
-                  {importPreview.error ? (
-                    <div className="note" style={{ borderColor: "var(--crit)", marginTop: 6 }}>
-                      <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
-                      <span className="mono" style={{ fontSize: 10.5 }}>{importPreview.error}</span>
-                    </div>
-                  ) : (
-                    <div className="mono dim" style={{ fontSize: 10, marginTop: 6 }}>
-                      {t("evalPage.datasets.importPreview", { count: importPreview.items.length })}
-                    </div>
-                  )}
+                  <div className="selchips">
+                    <button
+                      type="button"
+                      className={`selchip${scenarioType === "predefined" ? " on" : ""}`}
+                      style={{ cursor: "pointer" }}
+                      data-testid="type-predefined"
+                      onClick={() => setScenarioType("predefined")}
+                    >
+                      {t("evalPage.datasets.typePredefined")}
+                    </button>
+                    <button
+                      type="button"
+                      className={`selchip${scenarioType === "simulated" ? " on" : ""}`}
+                      style={{ cursor: "pointer" }}
+                      data-testid="type-simulated"
+                      onClick={() => setScenarioType("simulated")}
+                    >
+                      {t("evalPage.datasets.typeSimulated")}
+                    </button>
+                  </div>
+                </div>
+              )}
+              {mixedSimulated ? (
+                <div className="note" style={{ borderColor: "var(--warn)" }}>
+                  <span className="i" style={{ color: "var(--warn)" }}>[!]</span>
+                  <span>{t("evalPage.datasets.simMixedGuard")}</span>
                 </div>
               ) : (
-                scenarioEditor
+                <>
+                  <div className="field">
+                    <label>{t("evalPage.datasets.name")}</label>
+                    <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
+                  </div>
+                  <div className="field">
+                    <label>{t("evalPage.datasets.description")}</label>
+                    <input
+                      className="input"
+                      value={description}
+                      onChange={(e) => setDescription(e.target.value)}
+                    />
+                  </div>
+
+                  {editorMode === "import" && !local ? (
+                    <div className="field">
+                      <label>{t("evalPage.datasets.importLabel")}</label>
+                      <textarea
+                        className="input mono"
+                        rows={9}
+                        style={{ fontSize: 10.5, lineHeight: 1.5, resize: "vertical" }}
+                        placeholder={'{"scenarios": [...]}  |  {"prompt": "...", "expected": "..."} per line'}
+                        value={importText}
+                        onChange={(e) => setImportText(e.target.value)}
+                      />
+                      {importPreview.error ? (
+                        <div className="note" style={{ borderColor: "var(--crit)", marginTop: 6 }}>
+                          <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
+                          <span className="mono" style={{ fontSize: 10.5 }}>{importPreview.error}</span>
+                        </div>
+                      ) : (
+                        <div className="mono dim" style={{ fontSize: 10, marginTop: 6 }}>
+                          {t("evalPage.datasets.importPreview", { count: importPreview.items.length })}
+                        </div>
+                      )}
+                    </div>
+                  ) : activeType === "simulated" ? (
+                    simScenarioEditor
+                  ) : (
+                    scenarioEditor
+                  )}
+                </>
               )}
 
               {local?.cloud?.failure_reason && (
@@ -813,11 +1179,13 @@ export function DatasetsView({ onBack }: { onBack: () => void }) {
                   <span>{formError}</span>
                 </div>
               )}
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 10 }}>
-                <Btn primary disabled={busy || !name.trim()} onClick={() => void save()}>
-                  ▸ {local ? t("evalPage.datasets.save") : t("evalPage.datasets.create")}
-                </Btn>
-              </div>
+              {!mixedSimulated && (
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 10 }}>
+                  <Btn primary disabled={busy || !name.trim()} onClick={() => void save()}>
+                    ▸ {local ? t("evalPage.datasets.save") : t("evalPage.datasets.create")}
+                  </Btn>
+                </div>
+              )}
             </>
           )}
         </Panel>
