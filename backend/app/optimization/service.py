@@ -231,11 +231,15 @@ def stage_recommend(
     current_prompt = agent["system_prompt"]
     out: dict[str, Any] = {}
 
+    # regeneration is now a first-class flow — job names get a per-run suffix
+    # so a re-run never collides with the job an earlier run created
+    run_tag = uuid.uuid4().hex[:6]
+
     if "system_prompt" in types:
         progress("generating system-prompt recommendation from recent traces…")
         sp = ac.start_system_prompt_recommendation(
             data,
-            name=f"exp_{exp_id[:8]}_sp",
+            name=f"exp_{exp_id[:8]}_sp_{run_tag}",
             system_prompt=current_prompt,
             log_group_arns=log_group_arns,
             service_names=service_names,
@@ -269,7 +273,7 @@ def stage_recommend(
                 progress("generating tool-description recommendation…")
                 td = ac.start_tool_description_recommendation(
                     data,
-                    name=f"exp_{exp_id[:8]}_td",
+                    name=f"exp_{exp_id[:8]}_td_{run_tag}",
                     tools=[{"toolName": k, "description": v}
                            for k, v in analyzed.items()],
                     log_group_arns=log_group_arns,
