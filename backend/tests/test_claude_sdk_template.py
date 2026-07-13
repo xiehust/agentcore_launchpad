@@ -63,7 +63,8 @@ def test_render_merges_registry_mcp_over_free_text():
     )
     code = render_main_py(spec)
     assert "'deepwiki': {'type': 'http', 'url': 'https://mcp.deepwiki.com/mcp'}" in code
-    assert "'docs': {'type': 'http', 'url': 'https://registry.example/mcp'}" in code  # registry wins
+    # registry wins
+    assert "'docs': {'type': 'http', 'url': 'https://registry.example/mcp'}" in code
     assert "'mcp__deepwiki'" in code and "'mcp__docs'" in code
     assert "'uvx'" not in code  # the shadowed free-text entry is gone
 
