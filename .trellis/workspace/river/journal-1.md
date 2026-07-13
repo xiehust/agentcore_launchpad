@@ -751,3 +751,37 @@ textarea+ACCEPT,actionBtn 模式(按钮→进度行→工件回显→失败 `act
 ### Status
 
 [OK] Blocks 1–2 complete; Block 3 e2e running
+
+
+## Session 8: Experiment stepwise rework: user-driven stage actions (agentxray Live parity)
+
+**Date**: 2026-07-13
+**Task**: Experiment stepwise rework: user-driven stage actions (agentxray Live parity)
+**Package**: lab4-interactive
+**Branch**: `main`
+
+### Summary
+
+Refactored the experiments module from a single auto-pipeline thread into 11 user-triggered stage actions (async 202 + daemon runner w/ row-level running_action/progress, sync 200 inline; prereq guard matrix; editable accept; dataset traffic replay; bundle conflict-adopt; stale-action startup sweep). Frontend rebuilt as artifact-driven progressive stage cards with per-action progress and retry pinning; +24 i18n keys en/zh-CN. Backend 508 tests green; 13 fetch-stub evidence states + live A2 reload-resume; e2e_experiment.py rewritten (per-action, resume-by-artifact) and PASSED end-to-end on real AWS incl. two mid-flow backend restarts. Spec: launchpad/experiment-stepwise.md.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a4a3efb` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
