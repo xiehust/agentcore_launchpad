@@ -45,6 +45,11 @@ Validation command baseline (run before starting, after each step group):
 - [x] CreateAgent UI: protocol radio, skills editor, note card; agent
       list/detail protocol chip + card URL copy; experiment picker disabled
       state; i18n en/zh-CN.
+      DEVIATION (check pass 2026-07-13): the "card URL copy" surface was NOT
+      built — no card-URL/copy UI exists in the frontend. The resolvable card
+      URL lives in the Registry record; surfacing it belongs to the sibling
+      task's Registry drawer AGENT CARD panel (07-13-a2a-registry-cards).
+      List chip ("zip_runtime · a2a") shipped as described.
 
 ## Step 5 — live proof + wrap
 

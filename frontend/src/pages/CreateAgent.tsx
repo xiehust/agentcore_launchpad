@@ -62,8 +62,26 @@ const A2A_SKILL_SEEDS: A2aSkillRow[] = [
   { name: "current time", description: "Report the current UTC date and time", tags: "time" },
 ];
 
+// backend A2ASkill.id pattern is ^[a-z][a-z0-9_-]{0,63}$ — leading letter required
 const skillSlug = (name: string) =>
-  name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64) || "skill";
+  name
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^[^a-z]+/, "")
+    .replace(/-+$/, "")
+    .slice(0, 64) || "skill";
+
+// rows edit by name; ids must be unique in the spec → suffix repeats (faq, faq-2, …)
+const skillIds = (rows: A2aSkillRow[]): string[] => {
+  const used = new Set<string>();
+  return rows.map((row) => {
+    const base = skillSlug(row.name);
+    let id = base;
+    for (let n = 2; used.has(id); n += 1) id = `${base.slice(0, 60)}-${n}`;
+    used.add(id);
+    return id;
+  });
+};
 
 // APPROVED registry records the wizard offers for mounting.
 interface AttachableMcp {
@@ -310,14 +328,16 @@ export function CreateAgent() {
           protocol,
           ...(protocol === "a2a"
             ? {
-                a2a_skills: a2aSkills
-                  .filter((s) => s.name.trim())
-                  .map((s) => ({
-                    id: skillSlug(s.name),
+                a2a_skills: (() => {
+                  const rows = a2aSkills.filter((s) => s.name.trim());
+                  const ids = skillIds(rows);
+                  return rows.map((s, i) => ({
+                    id: ids[i],
                     name: s.name.trim(),
                     description: s.description.trim(),
                     tags: s.tags.split(",").map((x) => x.trim()).filter(Boolean),
-                  })),
+                  }));
+                })(),
               }
             : {}),
         }

@@ -132,8 +132,12 @@ class _DataStub:
 def test_invoke_a2a_text_sends_message_send_and_parses_task():
     stub = _DataStub({"jsonrpc": "2.0", "id": "1", "result": {
         "artifacts": [{"parts": [{"kind": "text", "text": "A2A OK"}]}],
-        # history carries streaming fragments (probed live) — must be ignored
-        "history": [{"role": "agent", "parts": [{"kind": "text", "text": "A2"}]},
+        # history carries the user turn + agent streaming fragments (probed
+        # live) — must be ignored entirely. The user turn is load-bearing:
+        # fragments alone join to exactly "A2A OK", so a parser that wrongly
+        # read history instead of artifacts would still pass without it.
+        "history": [{"role": "user", "parts": [{"kind": "text", "text": "ping"}]},
+                    {"role": "agent", "parts": [{"kind": "text", "text": "A2"}]},
                     {"role": "agent", "parts": [{"kind": "text", "text": "A OK"}]}],
     }})
     out = rt.invoke_a2a_text(stub, "arn:rt-1", "ping")

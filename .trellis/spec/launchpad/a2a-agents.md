@@ -60,8 +60,14 @@ a2a_base_requirements() -> list[str]      # strands-agents[a2a,otel] + fastapi/u
 
 ### 4. Behavior contracts
 
-- Chat playground and eval runs use the same `invoke_agent_text` dispatch —
-  `spec.protocol == "a2a"` routes to `invoke_a2a_text`; users see plain text.
+- Chat playground and the public API dispatch through
+  `services/invoke.py::invoke_agent_text` (`spec.protocol == "a2a"` →
+  `invoke_a2a_text`). The eval runner and persona simulator BYPASS that entry
+  point (`evaluation/service.py::execute_run`, `evaluation/simulation.py`) and
+  carry their own protocol branch — any NEW direct `InvokeAgentRuntime` caller
+  must dispatch on protocol too, or A2A runtimes reject the `{prompt}` payload
+  with JSON-RPC -32600 (the live eval-run failure that forced this note).
+  Users see plain text either way.
 - The A2A template deliberately drops the config-bundle contract and the
   platform memory envelope (A2A server owns conversation state). Because of
   that, **experiments reject A2A agents** (400

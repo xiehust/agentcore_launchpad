@@ -46,8 +46,10 @@ resolve_telemetry(agent, logs_client=None) -> (service_name, log_group)
 # harness → _harness_telemetry: base = resource_id.rsplit("-", 1)[0];
 #   service = f"harness_{base}.DEFAULT"; log group by describe_log_groups prefix
 # runtime methods → f"{agentRuntimeName}.DEFAULT" + derived runtimes/{id}-DEFAULT group
-execute_run(..., method: str, ...)   # dataset invoking dispatches:
-# harness → hc.invoke_harness_text (InvokeHarness) · else rt.invoke_runtime_text
+execute_run(..., method: str, protocol: str = "http", ...)   # dataset invoking dispatches:
+# harness → hc.invoke_harness_text (InvokeHarness) · protocol=a2a →
+# rt.invoke_a2a_text (JSON-RPC) · else rt.invoke_runtime_text
+# (same triple in simulation.run_simulated_scenario — see a2a-agents.md)
 ```
 
 Frontend dropdown filter is `status === "active"` only. **Experiments still
