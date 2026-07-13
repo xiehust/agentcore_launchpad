@@ -200,6 +200,43 @@ def test_build_a2a_card_a2a_variant_carries_url_skills_transport():
     assert "JSON-RPC" in card["metadata"]["launchpad.invoke"]
 
 
+# ─── eval run dispatch ───────────────────────────────────────────────────────
+def test_execute_run_uses_a2a_invoke_for_a2a_protocol(monkeypatch):
+    """The eval runner bypasses invoke_agent_text — its own dispatch must
+    branch on protocol too (live run failed with JSON-RPC -32600 before)."""
+    from app.evaluation import service as svc
+    from app.evaluation.models import EvalRun
+    from tests.evaluation.test_runs_flow import stub_environment
+
+    stub_environment(monkeypatch)
+    a2a_calls: list[str] = []
+    http_calls: list[str] = []
+    monkeypatch.setattr(
+        svc.rt, "invoke_a2a_text",
+        lambda client, arn, prompt, session_id=None:
+        a2a_calls.append(prompt) or {"text": "ok", "session_id": "s" * 33})
+    monkeypatch.setattr(
+        svc.rt, "invoke_runtime_text",
+        lambda *a, **k: http_calls.append("x") or {"text": "ok", "session_id": "s" * 33})
+
+    db = SessionLocal()
+    run = EvalRun(agent_id="a2a-x", agent_name="a2a-x", mode="evaluators",
+                  evaluators=["Builtin.Correctness"], status="queued")
+    db.add(run)
+    db.commit()
+    rid = run.id
+    db.close()
+
+    svc.execute_run(
+        rid, agent_arn="arn:rt", method="zip_runtime", protocol="a2a",
+        service_name="svc.DEFAULT", log_group="/lg",
+        items=[{"prompt": "hello"}], evaluators=["Builtin.Correctness"],
+        mode="evaluators", wait_seconds=0,
+    )
+    assert a2a_calls == ["hello"]
+    assert http_calls == []
+
+
 # ─── experiment gating ───────────────────────────────────────────────────────
 def test_experiment_create_rejects_a2a_agents(client):
     db = SessionLocal()

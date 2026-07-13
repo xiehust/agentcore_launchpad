@@ -313,7 +313,8 @@ def test_run_on_simulated_cloud_dataset_with_actor_model(client, monkeypatch):
 
     sim_calls: list[dict] = []
 
-    def fake_sim(data_client, *, agent_arn, method, scenario, actor_model_id):
+    def fake_sim(data_client, *, agent_arn, method, scenario, actor_model_id,
+                 protocol="http"):
         sim_calls.append({"scenario": scenario, "model": actor_model_id,
                           "method": method})
         return f"sim-sess-{len(sim_calls):03d}" + "x" * 30

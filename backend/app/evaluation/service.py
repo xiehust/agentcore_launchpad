@@ -103,6 +103,7 @@ def execute_run(
     method: str,
     service_name: str,
     log_group: str,
+    protocol: str = "http",
     items: list[dict[str, Any]],
     evaluators: list[str],
     mode: str,
@@ -138,11 +139,14 @@ def execute_run(
                         method=method,
                         scenario=scenario,
                         actor_model_id=actor_model_id or "",
+                        protocol=protocol,
                     )
                 else:
                     for prompt in scenario_prompts(scenario):
                         if method == "harness":  # InvokeHarness, not the runtime data plane
                             result = hc.invoke_harness_text(data, agent_arn, prompt, session_id=sid)
+                        elif protocol == "a2a":  # JSON-RPC runtimes reject {prompt}
+                            result = rt.invoke_a2a_text(data, agent_arn, prompt, session_id=sid)
                         else:
                             result = rt.invoke_runtime_text(data, agent_arn, prompt, session_id=sid)
                         sid = result["session_id"]
@@ -288,6 +292,7 @@ def submit_run(
         run_id = run.id
         agent_arn = agent.arn
         agent_method = agent.method
+        agent_protocol = (agent.spec or {}).get("protocol") or "http"
     finally:
         db.close()
 
@@ -297,6 +302,7 @@ def submit_run(
             run_id,
             agent_arn=agent_arn,
             method=agent_method,
+            protocol=agent_protocol,
             service_name=service_name,
             log_group=log_group,
             items=dataset_items,
