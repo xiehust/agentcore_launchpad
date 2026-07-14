@@ -101,10 +101,32 @@ becomes the `UpdateAgentRuntime` spec at setup.
 ## Telemetry / online-eval
 
 Per-variant online-eval currently targets `{resource_id}-DEFAULT` log group and
-`{runtime_name}.DEFAULT` service name. Named endpoints have their own log
-group/service-name suffix. **Risk/verify**: confirm the log-group + service-name
-pattern for named endpoints (likely `{resource_id}-<ENDPOINT>` /
-`{runtime_name}.<ENDPOINT>`) so each variant's eval reads the right stream.
+`{runtime_name}.DEFAULT` service name. **Confirmed by spike (below):** a named
+endpoint gets its own log group `/aws/bedrock-agentcore/runtimes/{resource_id}-<ENDPOINT_NAME>`
+(created at endpoint-create time). So control-variant eval → `{resource_id}-<stable>`,
+treatment-variant eval → `{resource_id}-<treatment>`. service.name is assumed to
+mirror as `{runtime_name}.<ENDPOINT>` (validate on first real run).
+
+## Verified AWS shapes (live spike, 2026-07-14 — throwaway endpoint, cleaned up)
+
+- **Current version**: `get_agent_runtime(agentRuntimeId) → agentRuntimeVersion`
+  (int/str). `list_agent_runtime_versions` enumerates versions. After
+  `UpdateAgentRuntime`, read the new version the same way (safe; no need to trust
+  the update response shape).
+- **Create endpoint**: `create_agent_runtime_endpoint(agentRuntimeId, name,
+  agentRuntimeVersion="<v>")` → resp has `endpointName`, `targetVersion`, `status`
+  (CREATING). Reaches READY in a few seconds. (Phase 1 wrapper param names verified.)
+- **Get endpoint**: fields `name`, `status`, **`liveVersion`** (the serving
+  version — NOT `agentRuntimeVersion`), `agentRuntimeEndpointArn`. `wait_endpoint_ready`
+  polls `status`.
+- **Named-endpoint log group**: `/aws/bedrock-agentcore/runtimes/{resource_id}-<ENDPOINT_NAME>`
+  — appears at endpoint creation (verified: `…-canaryspike` alongside `…-DEFAULT`).
+- **Gateway http-runtime target → endpoint**: target config
+  `targetConfiguration.http.agentcoreRuntime = {arn, qualifier: "<endpoint name>"}`
+  (existing `create_runtime_target_idempotent` hardcodes `qualifier="DEFAULT"` at
+  service.py:554 — parameterize it).
+- **InvokeAgentRuntime**: `qualifier=<endpoint name>` selects the endpoint;
+  `runtimeSessionId` **min length 33** (use `new_session_id()`).
 
 ## Frontend
 
