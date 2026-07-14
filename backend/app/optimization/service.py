@@ -199,10 +199,12 @@ def experiment_capability(agent_row: Any) -> dict[str, Any]:
         "system_prompt": False,
         "tool_descriptions": False,
         "reason": None,
+        "reason_code": None,
     }
     if agent_row.method != "zip_runtime":
         return {
             **base,
+            "reason_code": "not-http-runtime",
             "reason": (
                 "Only Launchpad-managed HTTP runtime agents support "
                 "config-bundle experiments."
@@ -211,6 +213,7 @@ def experiment_capability(agent_row: Any) -> dict[str, Any]:
     if spec.get("protocol", "http") != "http":
         return {
             **base,
+            "reason_code": "a2a",
             "reason": "A2A protocol agents do not consume routed configuration bundles.",
         }
     if spec.get("source_harness"):
@@ -220,6 +223,7 @@ def experiment_capability(agent_row: Any) -> dict[str, Any]:
         if not has_config_bundle_graft(main_py):
             return {
                 **base,
+                "reason_code": "missing-graft",
                 "reason": "This converted runtime is missing the Launchpad config-bundle graft.",
             }
         return {
@@ -231,6 +235,7 @@ def experiment_capability(agent_row: Any) -> dict[str, Any]:
     if spec.get("code") or spec.get("code_bundle"):
         return {
             **base,
+            "reason_code": "custom-source-unverified",
             "reason": (
                 "Custom runtime source is not verified to consume "
                 "Launchpad configuration bundles."
@@ -246,22 +251,29 @@ def experiment_capability(agent_row: Any) -> dict[str, Any]:
 
 def canary_capability(agent_row: Any) -> dict[str, Any]:
     """Backend-owned target-canary challenger capability projection."""
-    base = {"eligible": False, "reason": None}
+    base = {"eligible": False, "reason": None, "reason_code": None}
     if agent_row.status != "active":
-        return {**base, "reason": "Canary challengers must be active."}
+        return {
+            **base,
+            "reason_code": "not-active",
+            "reason": "Canary challengers must be active.",
+        }
     if agent_row.method not in {"zip_runtime", "container", "studio"}:
         return {
             **base,
+            "reason_code": "not-runtime",
             "reason": "Target canaries require an AgentCore Runtime challenger.",
         }
     if (agent_row.spec or {}).get("protocol", "http") != "http":
         return {
             **base,
+            "reason_code": "a2a",
             "reason": "A2A agents are not compatible with HTTP target-canary traffic.",
         }
     if ":runtime/" not in str(agent_row.arn or ""):
         return {
             **base,
+            "reason_code": "no-runtime-arn",
             "reason": "The challenger has no deployed AgentCore Runtime ARN.",
         }
     return {**base, "eligible": True}

@@ -951,7 +951,7 @@
         "reason": "在当前样本量下,两组差异未达统计显著——表面上的胜者可能只是噪声。",
         "a1": "继续积累证据:给两个变体多打流量后重新启动实验(判定只计算一次)。",
         "a2": "PROMOTE 仍然可用,但这属于主观决策——仅凭当前数据不足以支持。",
-        "a3": "或 CLEANUP 保留现有冠军——不做变更也是合理的结论。",
+        "a3": "或 CLEANUP 保留现有 Champion——不做变更也是合理的结论。",
         "promotedContext": "已在未达统计显著时手动部署——上方判定早于本次生产部署",
         "confirmPromote": {
           "title": "在未达统计显著时放量",
@@ -974,6 +974,12 @@
     }
   },
   "expPage": {
+    "reason": {
+      "not-http-runtime": "只有 Launchpad 托管的 HTTP runtime Agent 支持 config-bundle 实验。",
+      "a2a": "A2A 协议 Agent 不消费路由的 config-bundle。",
+      "missing-graft": "该转换 runtime 缺少 Launchpad config-bundle 嫁接（graft）。",
+      "custom-source-unverified": "自定义 runtime 源码未验证能否消费 Launchpad config-bundle。"
+    },
     "sub": "config-bundle A/B · 经 gateway 路由",
     "startHint": "AI 建议 → 配置包 → A/B 50/50 → 判定",
     "start": "启动实验",
@@ -986,11 +992,11 @@
       "title": "完成生产推广",
       "body": "将停止历史 A/B 测试，把已接受的 Treatment 应用到生产 Agent，并部署新的 runtime 版本。"
     },
-    "canaryTitle": "目标金丝雀",
+    "canaryTitle": "TARGET CANARY",
     "ramp": "放量",
     "cleanup": "清理",
-    "pickChallenger": "选择挑战者 Agent……",
-    "startCanary": "启动金丝雀 90/10",
+    "pickChallenger": "选择 Challenger Agent……",
+    "startCanary": "启动 CANARY 90/10",
     "confirmCleanup": {
       "title": "清理实验",
       "body": "将删除配置实验拥有的 Bundle、临时 Target、A/B 测试和在线评估器；共享实验网关会保留。"
@@ -1047,10 +1053,16 @@
     }
   },
   "canaryPage": {
+    "reason": {
+      "not-active": "Canary challenger 必须处于 active 状态。",
+      "not-runtime": "Target Canary 的 challenger 必须是 AgentCore Runtime Agent。",
+      "a2a": "A2A Agent 不兼容 HTTP target-canary 流量。",
+      "no-runtime-arn": "该 challenger 尚无已部署的 AgentCore Runtime ARN。"
+    },
     "meta": "Runtime Target 流量 · 共享实验网关",
     "modeLabel": "实验流程",
     "mode": {
-      "configuration": "配置 A/B",
+      "configuration": "CONFIGURATION A/B",
       "canary": "RUNTIME CANARY"
     },
     "sub": "Champion 与 Challenger · 实验网关流量",
@@ -1088,7 +1100,7 @@
       "locked": "请先完成上一档的流量、判定和放量门禁。"
     },
     "list": {
-      "title": "RUNTIME CANARY",
+      "title": "RUNTIME CANARY 列表",
       "sub": "独立 Target 分流记录 · 最新在前",
       "new": "新建 CANARY",
       "name": "CANARY",

@@ -346,6 +346,7 @@ def test_experiment_capability_matrix():
         "system_prompt": True,
         "tool_descriptions": True,
         "reason": None,
+        "reason_code": None,
     }
     converted_v2 = SimpleNamespace(
         method="zip_runtime",
@@ -390,13 +391,15 @@ def test_canary_capability_is_independent_from_bundle_consumption():
         spec={"protocol": "http", "code": "custom runtime"},
     )
     assert svc.experiment_capability(custom_runtime)["eligible"] is False
-    assert svc.canary_capability(custom_runtime) == {"eligible": True, "reason": None}
+    assert svc.canary_capability(custom_runtime) == {
+        "eligible": True, "reason": None, "reason_code": None,
+    }
 
     for row in [
         SimpleNamespace(method="container", status="active", arn=runtime_arn, spec={}),
         SimpleNamespace(method="studio", status="active", arn=runtime_arn, spec={}),
     ]:
-        assert svc.canary_capability(row) == {"eligible": True, "reason": None}
+        assert svc.canary_capability(row) == {"eligible": True, "reason": None, "reason_code": None}
 
     incompatible = [
         SimpleNamespace(method="zip_runtime", status="deploying", arn=runtime_arn, spec={}),

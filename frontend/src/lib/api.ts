@@ -34,10 +34,12 @@ export interface AgentInfo {
     system_prompt: boolean;
     tool_descriptions: boolean;
     reason: string | null;
+    reason_code: string | null;
   };
   canary_capability: {
     eligible: boolean;
     reason: string | null;
+    reason_code: string | null;
   };
   created_at: string | null;
   updated_at: string | null;

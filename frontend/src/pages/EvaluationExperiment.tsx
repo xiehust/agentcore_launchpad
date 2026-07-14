@@ -515,7 +515,10 @@ function ConfigurationExperimentView() {
           ))}
           {unsupportedAgents.map((ag) => (
             <option key={ag.id} value="" disabled style={{ background: "#141816" }}>
-              {ag.name} · {ag.method} — {ag.experiment_capability.reason}
+              {ag.name} · {ag.method} —{" "}
+              {ag.experiment_capability.reason_code
+                ? t(`expPage.reason.${ag.experiment_capability.reason_code}`)
+                : ag.experiment_capability.reason}
             </option>
           ))}
         </select>

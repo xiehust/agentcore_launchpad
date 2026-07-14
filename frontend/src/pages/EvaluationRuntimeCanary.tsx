@@ -231,6 +231,8 @@ export function RuntimeCanaryView() {
 
   const eligibleAgents = agents.filter((agent) => agent.canary_capability.eligible);
   const unsupportedAgents = agents.filter((agent) => !agent.canary_capability.eligible);
+  const capReason = (cap: AgentInfo["canary_capability"]) =>
+    cap.reason_code ? t(`canaryPage.reason.${cap.reason_code}`) : cap.reason;
   const setup = canary?.artifacts.setup;
   const rounds = canary?.artifacts.rounds ?? [];
   const currentStage = setup?.ramp_stage ?? 0;
@@ -266,7 +268,7 @@ export function RuntimeCanaryView() {
           ))}
           {unsupportedAgents.map((agent) => (
             <option key={agent.id} value={agent.id} disabled>
-              {agent.name} · {agent.method} — {agent.canary_capability.reason}
+              {agent.name} · {agent.method} — {capReason(agent.canary_capability)}
             </option>
           ))}
         </select>
@@ -287,7 +289,7 @@ export function RuntimeCanaryView() {
           ))}
           {unsupportedAgents.map((agent) => (
             <option key={agent.id} value={agent.id} disabled>
-              {agent.name} · {agent.method} — {agent.canary_capability.reason}
+              {agent.name} · {agent.method} — {capReason(agent.canary_capability)}
             </option>
           ))}
         </select>

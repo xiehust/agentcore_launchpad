@@ -49,10 +49,12 @@ def test_agent_api_projects_experiment_and_canary_capabilities(client):
         "system_prompt": True,
         "tool_descriptions": True,
         "reason": None,
+        "reason_code": None,
     }
     assert body["canary_capability"] == {
         "eligible": False,
         "reason": "Canary challengers must be active.",
+        "reason_code": "not-active",
     }
 
     db = SessionLocal()
@@ -69,6 +71,7 @@ def test_agent_api_projects_experiment_and_canary_capabilities(client):
     assert detail["canary_capability"] == {
         "eligible": True,
         "reason": None,
+        "reason_code": None,
     }
 
 

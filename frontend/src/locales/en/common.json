@@ -974,6 +974,12 @@
     }
   },
   "expPage": {
+    "reason": {
+      "not-http-runtime": "Only Launchpad-managed HTTP runtime agents support config-bundle experiments.",
+      "a2a": "A2A protocol agents do not consume routed configuration bundles.",
+      "missing-graft": "This converted runtime is missing the Launchpad config-bundle graft.",
+      "custom-source-unverified": "Custom runtime source is not verified to consume Launchpad configuration bundles."
+    },
     "sub": "config-bundle A/B · gateway routed",
     "startHint": "AI recommendations → bundles → A/B 50/50 → verdict",
     "start": "START EXPERIMENT",
@@ -1047,6 +1053,12 @@
     }
   },
   "canaryPage": {
+    "reason": {
+      "not-active": "Canary challengers must be active.",
+      "not-runtime": "Target canaries require an AgentCore Runtime challenger.",
+      "a2a": "A2A agents are not compatible with HTTP target-canary traffic.",
+      "no-runtime-arn": "The challenger has no deployed AgentCore Runtime ARN."
+    },
     "meta": "Runtime target traffic · shared experiment gateway",
     "modeLabel": "Experiment workflow",
     "mode": {
