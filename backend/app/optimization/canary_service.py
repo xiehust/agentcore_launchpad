@@ -1,4 +1,5 @@
-"""Independent Runtime target-canary orchestration on the experiment Gateway."""
+"""Independent Runtime target-canary orchestration (Model 1: one agent, two
+immutable versions fronted by a dedicated per-canary Gateway)."""
 
 import copy
 from collections.abc import Callable
@@ -9,8 +10,11 @@ from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.errors import AppError
 from app.evaluation import agentcore_eval as ac
+from app.models.ledger import Agent
+from app.optimization import canary_infra
 from app.optimization import service as experiment_service
 from app.optimization.models import RuntimeCanary
+from app.schemas.agent import AgentSpec
 from app.services.agentcore.client import control_client, data_client
 
 Progress = Callable[[str], None]
@@ -115,24 +119,28 @@ def _agent_meta(agent: Any, control: Any) -> dict[str, Any]:
 
 
 def start_canary(
-    champion: Any,
-    challenger: Any,
+    agent: Any,
+    edited_spec: AgentSpec,
     source_experiment_id: str | None = None,
 ) -> RuntimeCanary:
-    """Create only the ledger row; setup remains an explicit action."""
+    """Create only the ledger row; setup mints the candidate version + gateway.
+
+    Model 1 collapses champion/challenger onto ONE agent: both columns carry the
+    single agent id/name so ``_out`` and existing consumers keep working. The
+    candidate is described by ``edited_spec`` (stored as a dump) and materialized
+    at setup, never here.
+    """
     control = control_client()
-    champion_meta = _agent_meta(champion, control)
-    challenger_meta = _agent_meta(challenger, control)
     row = RuntimeCanary(
-        name=f"CANARY-{champion.name[:18]}-{challenger.name[:18]}",
-        champion_agent_id=champion.id,
-        champion_agent_name=champion.name,
-        challenger_agent_id=challenger.id,
-        challenger_agent_name=challenger.name,
+        name=f"CANARY-{agent.name[:32]}",
+        champion_agent_id=agent.id,
+        champion_agent_name=agent.name,
+        challenger_agent_id=agent.id,
+        challenger_agent_name=agent.name,
         source_experiment_id=source_experiment_id,
         artifacts={
-            "champion_meta": champion_meta,
-            "challenger_meta": challenger_meta,
+            "agent_meta": _agent_meta(agent, control),
+            "edited_spec": edited_spec.model_dump(),
             "rounds": [],
         },
     )
@@ -151,10 +159,9 @@ def _test_name(canary_id: str) -> str:
 
 
 def assert_setup_available(canary_id: str) -> None:
-    """Read-only Gateway preflight for the setup API entry point."""
-    experiment_service.assert_shared_gateway_available(
-        own_test_name=_test_name(canary_id)
-    )
+    """No-op: each canary owns a dedicated Gateway, so there is no shared-gateway
+    mutex to preflight at the setup entry point."""
+    return None
 
 
 def _current_round(
@@ -254,96 +261,123 @@ def assert_verdict_allows(
         )
 
 
-def _create_target_and_eval(
+def _create_variant_eval(
     *,
     control: Any,
-    gateway_id: str,
-    target_name: str,
     eval_name: str,
-    agent: dict[str, Any],
+    resource_id: str,
+    runtime_name: str,
+    endpoint: str,
     progress: Progress,
     role: str,
 ) -> dict[str, Any]:
-    progress(f"creating {role} target + waiting READY…")
-    target_id = experiment_service.create_runtime_target_idempotent(
-        control, gateway_id, target_name, agent["arn"]
-    )
+    """Per-variant online eval scoped to the variant's named-endpoint telemetry."""
     progress(f"creating {role} online evaluation config…")
     online_eval = experiment_service.create_online_eval_idempotent(
         control,
         name=eval_name,
-        log_group=(
-            f"/aws/bedrock-agentcore/runtimes/{agent['resource_id']}-DEFAULT"
-        ),
-        service_name=f"{agent['runtime_name']}.DEFAULT",
+        log_group=canary_infra.endpoint_log_group(resource_id, endpoint),
+        service_name=canary_infra.endpoint_service_name(runtime_name, endpoint),
         role_arn=get_settings().resources["execution_role_arn"],
     )
     return {
-        "target_name": target_name,
-        "target_id": target_id,
         "online_eval_id": online_eval.get("onlineEvaluationConfigId"),
         "online_eval_arn": online_eval.get("onlineEvaluationConfigArn"),
     }
 
 
 def act_setup(canary_id: str, progress: Progress) -> dict[str, Any]:
+    """Mint the candidate version, stand up the dedicated Gateway + stable/
+    treatment endpoints, and start the 90/10 target-based A/B test."""
     row = _get(canary_id)
+    meta = row.artifacts["agent_meta"]
+    spec = AgentSpec(**row.artifacts["edited_spec"])
+    db = SessionLocal()
+    try:
+        agent = db.get(Agent, meta["id"])
+        if agent is None or agent.status == "deleted":
+            raise RuntimeError("the agent behind this canary no longer exists")
+    finally:
+        db.close()
+
     control = control_client()
     data = data_client()
-    gateway = experiment_service.ensure_experiment_gateway(progress, control)
-    test_name = _test_name(canary_id)
-    experiment_service.assert_gateway_available(
-        gateway["gateway_arn"], own_test_name=test_name, data=data
+    runtime_id = meta["resource_id"]
+    role_arn = get_settings().resources["execution_role_arn"]
+
+    progress("minting candidate runtime version…")
+    v_current, v_candidate = canary_infra.mint_candidate_version(
+        agent=agent, edited_spec=spec, control_client=control, log=progress
     )
 
-    champion = _create_target_and_eval(
+    gw = canary_infra.create_canary_gateway(
+        control_client=control, canary_id=canary_id, log=progress
+    )
+
+    stable = f"stable{canary_id[:6]}"
+    treatment = f"treat{canary_id[:6]}"
+    canary_infra.ensure_canary_endpoints(
+        control_client=control,
+        runtime_id=runtime_id,
+        v_current=v_current,
+        v_candidate=v_candidate,
+        stable_name=stable,
+        treatment_name=treatment,
+        log=progress,
+    )
+
+    control_target = f"can{canary_id[:6]}c"
+    treatment_target = f"can{canary_id[:6]}t"
+    progress("creating control/treatment gateway targets + waiting READY…")
+    control_target_id = experiment_service.create_runtime_target_idempotent(
+        control, gw["gateway_id"], control_target, meta["arn"], qualifier=stable
+    )
+    treatment_target_id = experiment_service.create_runtime_target_idempotent(
+        control, gw["gateway_id"], treatment_target, meta["arn"], qualifier=treatment
+    )
+
+    control_eval = _create_variant_eval(
         control=control,
-        gateway_id=gateway["gateway_id"],
-        target_name=f"can{canary_id[:6]}c",
         eval_name=f"can_{canary_id[:8]}_oec",
-        agent=row.artifacts["champion_meta"],
+        resource_id=meta["resource_id"],
+        runtime_name=meta["runtime_name"],
+        endpoint=stable,
         progress=progress,
-        role="champion",
+        role="control",
     )
-    challenger = _create_target_and_eval(
+    treatment_eval = _create_variant_eval(
         control=control,
-        gateway_id=gateway["gateway_id"],
-        target_name=f"can{canary_id[:6]}t",
         eval_name=f"can_{canary_id[:8]}_oet",
-        agent=row.artifacts["challenger_meta"],
+        resource_id=meta["resource_id"],
+        runtime_name=meta["runtime_name"],
+        endpoint=treatment,
         progress=progress,
-        role="challenger",
+        role="treatment",
     )
 
-    experiment_service.assert_gateway_available(
-        gateway["gateway_arn"], own_test_name=test_name, data=data
-    )
-    variants = ac.target_variants(
-        champion["target_name"], challenger["target_name"]
-    )
+    test_name = _test_name(canary_id)
+    variants = ac.target_variants(control_target, treatment_target)
     progress("creating target-routing A/B test at 90/10…")
     try:
         response = ac.create_ab_test(
             data,
             name=test_name,
-            gatewayArn=gateway["gateway_arn"],
-            roleArn=get_settings().resources["execution_role_arn"],
+            gatewayArn=gw["gateway_arn"],
+            roleArn=role_arn,
             enableOnCreate=True,
             evaluationConfig={
                 "perVariantOnlineEvaluationConfig": [
                     {
                         "name": "C",
-                        "onlineEvaluationConfigArn": champion["online_eval_arn"],
+                        "onlineEvaluationConfigArn": control_eval["online_eval_arn"],
                     },
                     {
                         "name": "T1",
-                        "onlineEvaluationConfigArn": challenger["online_eval_arn"],
+                        "onlineEvaluationConfigArn": treatment_eval["online_eval_arn"],
                     },
                 ]
             },
-            gatewayFilter={
-                "targetPaths": [f"/{champion['target_name']}/*"]
-            },
+            gatewayFilter={"targetPaths": [f"/{control_target}/*"]},
             variants=variants,
         )
     except Exception as exc:
@@ -358,19 +392,30 @@ def act_setup(canary_id: str, progress: Progress) -> dict[str, Any]:
             None,
         )
         if response is None:
-            experiment_service.assert_gateway_available(
-                gateway["gateway_arn"], own_test_name=test_name, data=data
-            )
             raise
 
     result = {
-        **gateway,
+        "gateway_id": gw["gateway_id"],
+        "gateway_arn": gw["gateway_arn"],
+        "gateway_url": gw["gateway_url"],
         "test_name": test_name,
         "ab_test_id": response.get("abTestId"),
-        "champion": champion,
-        "challenger": challenger,
+        # ``champion``/``challenger`` here mean control/treatment TARGETS — the key
+        # names are preserved so act_traffic/verdict/advance/_owned_resources read
+        # them unchanged.
+        "champion": {"target_name": control_target, "target_id": control_target_id, **control_eval},
+        "challenger": {
+            "target_name": treatment_target,
+            "target_id": treatment_target_id,
+            **treatment_eval,
+        },
         "ramp_stage": 0,
         "weights": {variant["name"]: variant["weight"] for variant in variants},
+        "v_current": v_current,
+        "v_candidate": v_candidate,
+        "stable_endpoint": stable,
+        "treatment_endpoint": treatment,
+        "runtime_id": runtime_id,
     }
     _update(canary_id, stage="setup", artifact={"setup": result, "rounds": []})
     return result
@@ -489,22 +534,39 @@ def act_complete(
     *,
     allow_non_significant: bool,
 ) -> dict[str, Any]:
+    """Promote: stop the test, then repoint the stable endpoint at the candidate
+    version so production (invoked via the stable endpoint) serves it."""
     row = _get(canary_id)
     assert_verdict_allows(
         row, allow_non_significant=allow_non_significant
     )
     setup = row.artifacts["setup"]
+    control = control_client()
     stopped = experiment_service._stop_ab_test(
         data_client(),
         setup["ab_test_id"],
         progress,
         label="Runtime canary A/B test",
     )
+    progress("promoting stable endpoint → candidate version…")
+    canary_infra.promote_stable_endpoint(
+        control_client=control,
+        runtime_id=setup["runtime_id"],
+        stable_name=setup["stable_endpoint"],
+        version=setup["v_candidate"],
+        log=progress,
+    )
+    canary_infra.delete_endpoint_quiet(
+        control,
+        runtime_id=setup["runtime_id"],
+        endpoint_name=setup["treatment_endpoint"],
+        log=progress,
+    )
     result = {
         "winner": "challenger",
+        "promoted_version": setup["v_candidate"],
         "ab_test_status": stopped.get("executionStatus"),
         "completed_at": _now(),
-        "experimental_only": True,
     }
     _update(
         canary_id,
@@ -516,6 +578,8 @@ def act_complete(
 
 
 def act_rollback(canary_id: str, progress: Progress) -> dict[str, Any]:
+    """Rollback: stop the test only — the stable endpoint never left v_current,
+    so production stays on the current version (safe-toward-control)."""
     row = _get(canary_id)
     setup = row.artifacts["setup"]
     stopped = experiment_service._stop_ab_test(
@@ -526,9 +590,9 @@ def act_rollback(canary_id: str, progress: Progress) -> dict[str, Any]:
     )
     result = {
         "winner": "champion",
+        "kept_version": setup.get("v_current"),
         "ab_test_status": stopped.get("executionStatus"),
         "rolled_back_at": _now(),
-        "experimental_only": True,
     }
     _update(
         canary_id,
@@ -545,10 +609,7 @@ def _owned_resources(
     data: Any,
 ) -> tuple[str | None, list[str], list[str], list[str]]:
     setup = row.artifacts.get("setup") or {}
-    gateway = experiment_service.find_experiment_gateway(control)
-    gateway_id = setup.get("gateway_id") or (
-        gateway.get("gatewayId") if gateway else None
-    )
+    gateway_id = setup.get("gateway_id")
 
     target_names = {f"can{row.id[:6]}c", f"can{row.id[:6]}t"}
     target_ids = {
@@ -595,7 +656,11 @@ def act_cleanup(
     canary_id: str,
     progress: Progress,
 ) -> list[dict[str, str]]:
+    """Tear down this canary's dedicated gateway, targets, treatment endpoint,
+    online-eval configs, and A/B test. The stable endpoint is KEPT — it is
+    production's invoke qualifier for the agent."""
     row = _get(canary_id)
+    setup = row.artifacts.get("setup") or {}
     control = control_client()
     data = data_client()
     gateway_id, target_ids, online_eval_ids, ab_test_ids = _owned_resources(
@@ -612,6 +677,9 @@ def act_cleanup(
             )
         except Exception:
             pass
+    # ac.cleanup_resources keeps delete_gateway=False (it must never delete a
+    # shared gateway); the dedicated per-canary gateway is deleted explicitly
+    # below after its targets drain.
     results = ac.cleanup_resources(
         control,
         data,
@@ -621,6 +689,36 @@ def act_cleanup(
         target_ids=target_ids,
         delete_gateway=False,
     )
+    treatment_endpoint = setup.get("treatment_endpoint")
+    runtime_id = setup.get("runtime_id")
+    if treatment_endpoint and runtime_id:
+        try:
+            canary_infra.delete_endpoint_quiet(
+                control,
+                runtime_id=runtime_id,
+                endpoint_name=treatment_endpoint,
+                log=progress,
+            )
+            results.append(
+                {"category": f"endpoint:{treatment_endpoint}", "status": "deleted", "detail": ""}
+            )
+        except Exception as exc:
+            results.append({
+                "category": f"endpoint:{treatment_endpoint}",
+                "status": "skipped",
+                "detail": f"{type(exc).__name__}: {exc}",
+            })
+    if gateway_id:
+        progress("deleting the dedicated canary gateway…")
+        try:
+            canary_infra.delete_canary_gateway(control, gateway_id)
+            results.append({"category": f"gateway:{gateway_id}", "status": "deleted", "detail": ""})
+        except Exception as exc:
+            results.append({
+                "category": f"gateway:{gateway_id}",
+                "status": "skipped",
+                "detail": f"{type(exc).__name__}: {exc}",
+            })
     _update(
         canary_id,
         status="cleaned",

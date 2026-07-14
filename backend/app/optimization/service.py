@@ -245,7 +245,13 @@ def experiment_capability(agent_row: Any) -> dict[str, Any]:
 
 
 def canary_capability(agent_row: Any) -> dict[str, Any]:
-    """Backend-owned target-canary challenger capability projection."""
+    """Backend-owned target-canary subject capability projection.
+
+    Model 1 canaries mint a candidate version of ONE agent, so the subject must
+    be a runtime whose candidate can be minted from an edited spec. Container
+    candidate minting needs a CodeBuild image push (a follow-up), so only
+    ``zip_runtime`` / ``studio`` are eligible today.
+    """
     base = {"eligible": False, "reason": None, "reason_code": None}
     if agent_row.status != "active":
         return {
@@ -258,6 +264,12 @@ def canary_capability(agent_row: Any) -> dict[str, Any]:
             **base,
             "reason_code": "not-runtime",
             "reason": "Target canaries require an AgentCore Runtime challenger.",
+        }
+    if agent_row.method == "container":
+        return {
+            **base,
+            "reason_code": "container-followup",
+            "reason": "Container canary candidate minting via CodeBuild is a follow-up.",
         }
     if (agent_row.spec or {}).get("protocol", "http") != "http":
         return {

@@ -1,4 +1,5 @@
-"""Independent Runtime Canary records, guards, actions, and resource ownership."""
+"""Runtime Canary records, guards, actions, and resource ownership (Model 1:
+one agent, two immutable versions, dedicated per-canary Gateway)."""
 
 from unittest.mock import MagicMock
 
@@ -10,6 +11,7 @@ from app.core.db import SessionLocal
 from app.core.errors import AppError
 from app.models.ledger import Agent
 from app.optimization.models import Experiment, RuntimeCanary
+from app.schemas.agent import AgentSpec
 
 RUNTIME_ARN = (
     "arn:aws:bedrock-agentcore:us-west-2:111122223333:"
@@ -31,7 +33,7 @@ def _agent(
         status=status,
         arn=arn,
         resource_id=f"{name}-abcdefghij",
-        spec=spec or {"protocol": "http"},
+        spec=spec or {"protocol": "http", "system_prompt": "orig"},
     )
 
 
@@ -49,21 +51,22 @@ def _mk_canary(
     *,
     status: str = "running",
     stage: str = "setup",
+    agent_id: str = "a1",
     artifacts: dict | None = None,
 ) -> RuntimeCanary:
     db = SessionLocal()
     try:
         row = RuntimeCanary(
-            name="CANARY-a-b",
-            champion_agent_id="a1",
-            champion_agent_name="a",
-            challenger_agent_id="a2",
-            challenger_agent_name="b",
+            name="CANARY-subject",
+            champion_agent_id=agent_id,
+            champion_agent_name="subject",
+            challenger_agent_id=agent_id,
+            challenger_agent_name="subject",
             status=status,
             stage=stage,
             artifacts=artifacts or {
-                "champion_meta": {},
-                "challenger_meta": {},
+                "agent_meta": {"id": agent_id},
+                "edited_spec": {},
                 "rounds": [],
             },
         )
@@ -91,6 +94,7 @@ def _setup_artifact(ramp_stage: int = 0) -> dict:
         "gateway_url": "https://gateway.example",
         "test_name": "can_test_target",
         "ab_test_id": "ab-1",
+        # champion/challenger here mean the control/treatment TARGETS.
         "champion": {
             "target_name": "cancontrol",
             "target_id": "target-c",
@@ -105,6 +109,11 @@ def _setup_artifact(ramp_stage: int = 0) -> dict:
         },
         "ramp_stage": ramp_stage,
         "weights": {"C": control_weight, "T1": treatment_weight},
+        "v_current": "1",
+        "v_candidate": "2",
+        "stable_endpoint": "stablecan",
+        "treatment_endpoint": "treatcan",
+        "runtime_id": "subject-abcdefghij",
     }
 
 
@@ -124,10 +133,9 @@ def _round(
     return result
 
 
-def test_create_runtime_canary_persists_separate_record(client, monkeypatch):
-    champion_id, challenger_id = _persist_agents(
-        _agent("champion"), _agent("challenger", method="container")
-    )
+# ─── create (single agent + candidate edit) ──────────────────────────────────
+def test_create_runtime_canary_persists_single_agent_record(client, monkeypatch):
+    (agent_id,) = _persist_agents(_agent("subject"))
     control = MagicMock()
     control.get_agent_runtime.side_effect = lambda agentRuntimeId: {
         "agentRuntimeName": f"runtime-{agentRuntimeId}"
@@ -136,18 +144,17 @@ def test_create_runtime_canary_persists_separate_record(client, monkeypatch):
 
     res = client.post(
         "/api/runtime-canaries",
-        json={
-            "champion_agent_id": champion_id,
-            "challenger_agent_id": challenger_id,
-        },
+        json={"agent_id": agent_id, "candidate": {"system_prompt": "new prompt"}},
     )
 
     assert res.status_code == 201
     body = res.json()
-    assert body["champion_agent_id"] == champion_id
-    assert body["challenger_agent_id"] == challenger_id
+    assert body["champion_agent_id"] == agent_id
+    assert body["challenger_agent_id"] == agent_id
     assert body["stage"] == "setup"
     assert body["artifacts"]["rounds"] == []
+    assert body["artifacts"]["agent_meta"]["id"] == agent_id
+    assert body["artifacts"]["edited_spec"]["system_prompt"] == "new prompt"
     assert client.get("/api/runtime-canaries").json()["canaries"][0]["id"] == body["id"]
     db = SessionLocal()
     try:
@@ -157,49 +164,65 @@ def test_create_runtime_canary_persists_separate_record(client, monkeypatch):
         db.close()
 
 
-@pytest.mark.parametrize(
-    ("champion", "challenger", "code"),
-    [
-        (_agent("inactive", status="failed"), _agent("good"), "canary.agent_not_active"),
-        (
-            _agent("harness", method="harness", arn="arn:harness/x"),
-            _agent("good"),
-            "canary.agent_unsupported",
-        ),
-        (
-            _agent("a2a", spec={"protocol": "a2a"}),
-            _agent("good"),
-            "canary.agent_unsupported",
-        ),
-    ],
-)
-def test_create_rejects_incompatible_agents(client, champion, challenger, code):
-    champion_id, challenger_id = _persist_agents(champion, challenger)
+def test_create_requires_a_candidate_edit(client):
+    (agent_id,) = _persist_agents(_agent("subject"))
     res = client.post(
         "/api/runtime-canaries",
-        json={
-            "champion_agent_id": champion_id,
-            "challenger_agent_id": challenger_id,
-        },
+        json={"agent_id": agent_id, "candidate": {}},
+    )
+    assert res.status_code == 400
+    assert res.json()["code"] == "canary.candidate_empty"
+
+
+@pytest.mark.parametrize(
+    ("agent", "code"),
+    [
+        (_agent("inactive", status="failed"), "canary.agent_not_active"),
+        (
+            _agent("harness", method="harness", arn="arn:harness/x"),
+            "canary.agent_unsupported",
+        ),
+        (
+            _agent("a2aagent", spec={"protocol": "a2a"}),
+            "canary.agent_unsupported",
+        ),
+        (_agent("cont", method="container"), "canary.agent_unsupported"),
+    ],
+)
+def test_create_rejects_incompatible_agents(client, agent, code):
+    (agent_id,) = _persist_agents(agent)
+    res = client.post(
+        "/api/runtime-canaries",
+        json={"agent_id": agent_id, "candidate": {"system_prompt": "p"}},
     )
     assert res.status_code == 400
     assert res.json()["code"] == code
 
 
-def test_create_rejects_same_agent(client):
-    (agent_id,) = _persist_agents(_agent("same"))
+def test_studio_agent_is_canary_eligible(client, monkeypatch):
+    (agent_id,) = _persist_agents(
+        _agent(
+            "studioagent",
+            method="studio",
+            spec={"protocol": "http", "system_prompt": "orig", "code": "x"},
+        )
+    )
+    control = MagicMock()
+    control.get_agent_runtime.side_effect = lambda agentRuntimeId: {
+        "agentRuntimeName": f"runtime-{agentRuntimeId}"
+    }
+    monkeypatch.setattr(canary_svc, "control_client", lambda: control)
+
     res = client.post(
         "/api/runtime-canaries",
-        json={"champion_agent_id": agent_id, "challenger_agent_id": agent_id},
+        json={"agent_id": agent_id, "candidate": {"code": "new studio code"}},
     )
-    assert res.status_code == 400
-    assert res.json()["code"] == "canary.same_agent"
+    assert res.status_code == 201
+    assert res.json()["artifacts"]["edited_spec"]["code"] == "new studio code"
 
 
-def test_source_experiment_must_match_promoted_champion(client, monkeypatch):
-    champion_id, challenger_id = _persist_agents(
-        _agent("champion"), _agent("challenger")
-    )
+def test_source_experiment_must_match_promoted_agent(client, monkeypatch):
+    (agent_id,) = _persist_agents(_agent("subject"))
     db = SessionLocal()
     try:
         source = Experiment(
@@ -208,12 +231,7 @@ def test_source_experiment_must_match_promoted_champion(client, monkeypatch):
             agent_name="other",
             status="promoted",
             stage="promote",
-            artifacts={
-                "promote": {
-                    "deployment_id": "d1",
-                    "ab_test_status": "STOPPED",
-                }
-            },
+            artifacts={"promote": {"deployment_id": "d1", "ab_test_status": "STOPPED"}},
         )
         db.add(source)
         db.commit()
@@ -225,8 +243,8 @@ def test_source_experiment_must_match_promoted_champion(client, monkeypatch):
     res = client.post(
         "/api/runtime-canaries",
         json={
-            "champion_agent_id": champion_id,
-            "challenger_agent_id": challenger_id,
+            "agent_id": agent_id,
+            "candidate": {"system_prompt": "p"},
             "source_experiment_id": source_id,
         },
     )
@@ -235,23 +253,16 @@ def test_source_experiment_must_match_promoted_champion(client, monkeypatch):
 
 
 def test_promoted_experiment_can_handoff_to_separate_canary(client, monkeypatch):
-    champion_id, challenger_id = _persist_agents(
-        _agent("champion"), _agent("challenger")
-    )
+    (agent_id,) = _persist_agents(_agent("subject"))
     db = SessionLocal()
     try:
         source = Experiment(
             name="EXP-source",
-            agent_id=champion_id,
-            agent_name="champion",
+            agent_id=agent_id,
+            agent_name="subject",
             status="promoted",
             stage="promote",
-            artifacts={
-                "promote": {
-                    "deployment_id": "d1",
-                    "ab_test_status": "STOPPED",
-                }
-            },
+            artifacts={"promote": {"deployment_id": "d1", "ab_test_status": "STOPPED"}},
         )
         db.add(source)
         db.commit()
@@ -267,8 +278,8 @@ def test_promoted_experiment_can_handoff_to_separate_canary(client, monkeypatch)
     res = client.post(
         "/api/runtime-canaries",
         json={
-            "champion_agent_id": champion_id,
-            "challenger_agent_id": challenger_id,
+            "agent_id": agent_id,
+            "candidate": {"system_prompt": "p"},
             "source_experiment_id": source_id,
         },
     )
@@ -276,56 +287,13 @@ def test_promoted_experiment_can_handoff_to_separate_canary(client, monkeypatch)
     assert res.status_code == 201
     body = res.json()
     assert body["source_experiment_id"] == source_id
-    assert body["champion_agent_id"] == champion_id
-    assert body["artifacts"]["champion_meta"]["id"] == champion_id
+    assert body["champion_agent_id"] == agent_id
+    assert body["artifacts"]["agent_meta"]["id"] == agent_id
 
 
-def test_setup_rejects_foreign_active_gateway_test_before_dispatch(
-    client, monkeypatch,
-):
+# ─── setup dispatch + orchestration ──────────────────────────────────────────
+def test_setup_action_dispatches(client, monkeypatch):
     row = _mk_canary()
-    control = MagicMock()
-    control.list_gateways.return_value = {
-        "items": [{"name": exp_svc.EXP_GATEWAY_NAME, "gatewayId": "gw-1"}]
-    }
-    control.get_gateway.return_value = {
-        "gatewayId": "gw-1",
-        "gatewayArn": "arn:gateway",
-        "gatewayUrl": "https://gateway.example",
-        "status": "READY",
-    }
-    data = MagicMock()
-    data.list_ab_tests.return_value = {
-        "abTests": [
-            {
-                "abTestId": "foreign",
-                "name": "other-test",
-                "gatewayArn": "arn:gateway",
-                "executionStatus": "RUNNING",
-            }
-        ]
-    }
-    monkeypatch.setattr(exp_svc, "control_client", lambda: control)
-    monkeypatch.setattr(exp_svc, "data_client", lambda: data)
-    dispatched: list[str] = []
-    monkeypatch.setattr(
-        canary_svc,
-        "run_action",
-        lambda canary_id, action, fn: dispatched.append(action),
-    )
-
-    res = client.post(
-        f"/api/runtime-canaries/{row.id}/action",
-        json={"action": "setup"},
-    )
-    assert res.status_code == 409
-    assert res.json()["code"] == "experiment.gateway_busy"
-    assert dispatched == []
-
-
-def test_setup_action_dispatches_after_read_only_preflight(client, monkeypatch):
-    row = _mk_canary()
-    monkeypatch.setattr(canary_svc, "assert_setup_available", lambda canary_id: None)
     dispatched: list[str] = []
     monkeypatch.setattr(
         canary_svc,
@@ -340,41 +308,51 @@ def test_setup_action_dispatches_after_read_only_preflight(client, monkeypatch):
     assert dispatched == ["setup"]
 
 
-def test_setup_creates_two_targets_evaluators_and_own_ab_test(monkeypatch):
+def test_setup_mints_candidate_targets_endpoints_and_own_ab_test(monkeypatch):
+    (agent_id,) = _persist_agents(_agent("subject"))
     row = _mk_canary(
+        agent_id=agent_id,
         artifacts={
-            "champion_meta": {
-                "arn": "arn:champion",
-                "resource_id": "champion-id",
-                "runtime_name": "ChampionRuntime",
+            "agent_meta": {
+                "id": agent_id,
+                "name": "subject",
+                "arn": "arn:agent",
+                "resource_id": "subject-res",
+                "runtime_name": "SubjectRuntime",
             },
-            "challenger_meta": {
-                "arn": "arn:challenger",
-                "resource_id": "challenger-id",
-                "runtime_name": "ChallengerRuntime",
-            },
+            "edited_spec": AgentSpec(
+                name="subject", method="zip_runtime", system_prompt="edited"
+            ).model_dump(),
             "rounds": [],
-        }
-    )
-    monkeypatch.setattr(
-        exp_svc,
-        "ensure_experiment_gateway",
-        lambda progress, control: {
-            "gateway_id": "gw-1",
-            "gateway_arn": "arn:gateway",
-            "gateway_url": "https://gateway.example",
         },
     )
-    checks: list[str] = []
+
     monkeypatch.setattr(
-        exp_svc,
-        "assert_gateway_available",
-        lambda gateway_arn, **kwargs: checks.append(gateway_arn),
+        canary_svc.canary_infra, "mint_candidate_version", lambda **kw: ("1", "2")
     )
+    monkeypatch.setattr(
+        canary_svc.canary_infra,
+        "create_canary_gateway",
+        lambda **kw: {
+            "gateway_id": "gw-can",
+            "gateway_arn": "arn:gw",
+            "gateway_url": "https://gw",
+        },
+    )
+    endpoints_seen: dict = {}
+    monkeypatch.setattr(
+        canary_svc.canary_infra,
+        "ensure_canary_endpoints",
+        lambda **kw: endpoints_seen.update(kw)
+        or {"stable": kw["stable_name"], "treatment": kw["treatment_name"]},
+    )
+    targets_seen: list[tuple[str, str]] = []
     monkeypatch.setattr(
         exp_svc,
         "create_runtime_target_idempotent",
-        lambda control, gateway_id, name, arn: f"id-{name}",
+        lambda control, gateway_id, name, arn, qualifier="DEFAULT": (
+            targets_seen.append((name, qualifier)) or f"id-{name}"
+        ),
     )
     monkeypatch.setattr(
         exp_svc,
@@ -393,47 +371,67 @@ def test_setup_creates_two_targets_evaluators_and_own_ab_test(monkeypatch):
 
     assert result["ab_test_id"] == "ab-canary"
     assert result["weights"] == {"C": 90, "T1": 10}
+    assert result["v_current"] == "1"
+    assert result["v_candidate"] == "2"
+    assert result["runtime_id"] == "subject-res"
+    assert result["stable_endpoint"].startswith("stable")
+    assert result["treatment_endpoint"].startswith("treat")
     assert result["champion"]["target_id"].startswith("id-can")
     assert result["challenger"]["target_id"].startswith("id-can")
-    assert checks == ["arn:gateway", "arn:gateway"]
+    # the two targets are pinned to the stable / treatment named endpoints
+    assert targets_seen[0][1] == result["stable_endpoint"]
+    assert targets_seen[1][1] == result["treatment_endpoint"]
+    # endpoints pinned control→v_current, treatment→v_candidate
+    assert endpoints_seen["v_current"] == "1"
+    assert endpoints_seen["v_candidate"] == "2"
+    # the A/B test is created on the dedicated per-canary gateway at 90/10
+    ab_kwargs = data.create_ab_test.call_args.kwargs
+    assert ab_kwargs["gatewayArn"] == "arn:gw"
+    assert [v["weight"] for v in ab_kwargs["variants"]] == [90, 10]
     stored = _reload(row.id)
     assert stored.artifacts["setup"]["ramp_stage"] == 0
+    assert stored.artifacts["setup"]["gateway_id"] == "gw-can"
 
 
 def test_setup_retry_adopts_its_own_ab_test_after_conflict(monkeypatch):
+    (agent_id,) = _persist_agents(_agent("subject"))
     row = _mk_canary(
+        agent_id=agent_id,
         artifacts={
-            "champion_meta": {
-                "arn": "arn:champion",
-                "resource_id": "champion-id",
-                "runtime_name": "ChampionRuntime",
+            "agent_meta": {
+                "id": agent_id,
+                "name": "subject",
+                "arn": "arn:agent",
+                "resource_id": "subject-res",
+                "runtime_name": "SubjectRuntime",
             },
-            "challenger_meta": {
-                "arn": "arn:challenger",
-                "resource_id": "challenger-id",
-                "runtime_name": "ChallengerRuntime",
-            },
+            "edited_spec": AgentSpec(
+                name="subject", method="zip_runtime", system_prompt="edited"
+            ).model_dump(),
             "rounds": [],
-        }
-    )
-    monkeypatch.setattr(
-        exp_svc,
-        "ensure_experiment_gateway",
-        lambda progress, control: {
-            "gateway_id": "gw-1",
-            "gateway_arn": "arn:gateway",
-            "gateway_url": "https://gateway.example",
         },
     )
     monkeypatch.setattr(
-        exp_svc,
-        "assert_gateway_available",
-        lambda gateway_arn, **kwargs: None,
+        canary_svc.canary_infra, "mint_candidate_version", lambda **kw: ("1", "2")
+    )
+    monkeypatch.setattr(
+        canary_svc.canary_infra,
+        "create_canary_gateway",
+        lambda **kw: {
+            "gateway_id": "gw-can",
+            "gateway_arn": "arn:gw",
+            "gateway_url": "https://gw",
+        },
+    )
+    monkeypatch.setattr(
+        canary_svc.canary_infra,
+        "ensure_canary_endpoints",
+        lambda **kw: {"stable": kw["stable_name"], "treatment": kw["treatment_name"]},
     )
     monkeypatch.setattr(
         exp_svc,
         "create_runtime_target_idempotent",
-        lambda control, gateway_id, name, arn: f"id-{name}",
+        lambda control, gateway_id, name, arn, qualifier="DEFAULT": f"id-{name}",
     )
     monkeypatch.setattr(
         exp_svc,
@@ -454,7 +452,7 @@ def test_setup_retry_adopts_its_own_ab_test_after_conflict(monkeypatch):
             {
                 "abTestId": "ab-adopted",
                 "name": f"can_{row.id[:8]}_target",
-                "gatewayArn": "arn:gateway",
+                "gatewayArn": "arn:gw",
                 "executionStatus": "RUNNING",
             }
         ]
@@ -470,6 +468,7 @@ def test_setup_retry_adopts_its_own_ab_test_after_conflict(monkeypatch):
     )
 
 
+# ─── verdict policy ──────────────────────────────────────────────────────────
 @pytest.mark.parametrize(
     ("verdict", "allow_override", "error_code"),
     [
@@ -600,6 +599,7 @@ def test_complete_requires_final_stage(client):
     assert res.json()["code"] == "canary.stage_not_ready"
 
 
+# ─── traffic / verdict / advance mechanics ───────────────────────────────────
 def test_traffic_records_metric_baseline_and_clears_prior_verdict(monkeypatch):
     row = _mk_canary(
         artifacts={
@@ -715,7 +715,8 @@ def test_advance_updates_only_canary_ab_weights(monkeypatch):
     assert [variant["weight"] for variant in captured["variants"]] == [50, 50]
 
 
-def test_complete_stops_canary_ab_test_and_records_experimental_result(monkeypatch):
+# ─── promote / rollback / cleanup ────────────────────────────────────────────
+def test_complete_promotes_stable_endpoint_to_candidate(monkeypatch):
     row = _mk_canary(
         artifacts={
             "setup": _setup_artifact(ramp_stage=2),
@@ -727,43 +728,63 @@ def test_complete_stops_canary_ab_test_and_records_experimental_result(monkeypat
             ],
         }
     )
-    captured: dict = {}
+    stopped: dict = {}
+    monkeypatch.setattr(canary_svc, "control_client", MagicMock)
     monkeypatch.setattr(canary_svc, "data_client", MagicMock)
     monkeypatch.setattr(
         exp_svc,
         "_stop_ab_test",
         lambda data, ab_test_id, progress, **kwargs: (
-            captured.update(ab_test_id=ab_test_id, **kwargs)
-            or {"executionStatus": "STOPPED"}
+            stopped.update(ab_test_id=ab_test_id) or {"executionStatus": "STOPPED"}
         ),
+    )
+    promoted: dict = {}
+    monkeypatch.setattr(
+        canary_svc.canary_infra,
+        "promote_stable_endpoint",
+        lambda **kw: promoted.update(kw) or {"status": "READY"},
+    )
+    deleted: dict = {}
+    monkeypatch.setattr(
+        canary_svc.canary_infra,
+        "delete_endpoint_quiet",
+        lambda control, **kw: deleted.update(kw),
     )
 
     result = canary_svc.act_complete(
         row.id, lambda message: None, allow_non_significant=False
     )
 
-    assert captured == {
-        "ab_test_id": "ab-1",
-        "label": "Runtime canary A/B test",
-    }
-    assert result["experimental_only"] is True
+    assert stopped["ab_test_id"] == "ab-1"
+    assert result["winner"] == "challenger"
+    assert result["promoted_version"] == "2"
+    assert result["ab_test_status"] == "STOPPED"
+    assert "experimental_only" not in result
+    # the stable endpoint is repointed at the candidate version
+    assert promoted["stable_name"] == "stablecan"
+    assert promoted["version"] == "2"
+    # the treatment endpoint is removed; the stable endpoint is kept
+    assert deleted["endpoint_name"] == "treatcan"
     stored = _reload(row.id)
     assert stored.status == "completed"
     assert stored.artifacts["complete"]["ab_test_status"] == "STOPPED"
 
 
-def test_rollback_stops_canary_ab_test_and_keeps_champion(monkeypatch):
-    row = _mk_canary(
-        artifacts={"setup": _setup_artifact(), "rounds": []}
-    )
+def test_rollback_stops_test_and_keeps_current_version(monkeypatch):
+    row = _mk_canary(artifacts={"setup": _setup_artifact(), "rounds": []})
     captured: dict = {}
     monkeypatch.setattr(canary_svc, "data_client", MagicMock)
+    promoted: list = []
+    monkeypatch.setattr(
+        canary_svc.canary_infra,
+        "promote_stable_endpoint",
+        lambda **kw: promoted.append(kw),
+    )
     monkeypatch.setattr(
         exp_svc,
         "_stop_ab_test",
         lambda data, ab_test_id, progress, **kwargs: (
-            captured.update(ab_test_id=ab_test_id, **kwargs)
-            or {"executionStatus": "STOPPED"}
+            captured.update(ab_test_id=ab_test_id) or {"executionStatus": "STOPPED"}
         ),
     )
 
@@ -771,11 +792,14 @@ def test_rollback_stops_canary_ab_test_and_keeps_champion(monkeypatch):
 
     assert captured["ab_test_id"] == "ab-1"
     assert result["winner"] == "champion"
-    assert result["experimental_only"] is True
+    assert result["kept_version"] == "1"
+    assert "experimental_only" not in result
+    # rollback never repoints the stable endpoint (production stays on v_current)
+    assert promoted == []
     assert _reload(row.id).status == "rolled_back"
 
 
-def test_cleanup_never_deletes_shared_gateway(monkeypatch):
+def test_cleanup_deletes_dedicated_gateway_and_treatment_endpoint(monkeypatch):
     row = _mk_canary(artifacts={"setup": _setup_artifact(), "rounds": []})
     monkeypatch.setattr(
         canary_svc,
@@ -795,13 +819,31 @@ def test_cleanup_never_deletes_shared_gateway(monkeypatch):
         return [{"category": "abtest:ab-1", "status": "deleted", "detail": ""}]
 
     monkeypatch.setattr(canary_svc.ac, "cleanup_resources", fake_cleanup)
+    deleted_gateways: list[str] = []
+    monkeypatch.setattr(
+        canary_svc.canary_infra,
+        "delete_canary_gateway",
+        lambda control, gateway_id: deleted_gateways.append(gateway_id),
+    )
+    deleted_endpoints: dict = {}
+    monkeypatch.setattr(
+        canary_svc.canary_infra,
+        "delete_endpoint_quiet",
+        lambda control, **kw: deleted_endpoints.update(kw),
+    )
     monkeypatch.setattr(canary_svc, "control_client", MagicMock)
     monkeypatch.setattr(canary_svc, "data_client", MagicMock)
 
     canary_svc.act_cleanup(row.id, lambda message: None)
 
+    # ac.cleanup_resources never deletes the gateway; the per-canary gateway is
+    # deleted explicitly instead.
     assert captured["delete_gateway"] is False
     assert captured["gateway_id"] == "gw-1"
+    assert deleted_gateways == ["gw-1"]
+    # the treatment endpoint is removed; the stable endpoint is KEPT (production).
+    assert deleted_endpoints["endpoint_name"] == "treatcan"
+    assert deleted_endpoints["endpoint_name"] != _setup_artifact()["stable_endpoint"]
     assert _reload(row.id).status == "cleaned"
 
 

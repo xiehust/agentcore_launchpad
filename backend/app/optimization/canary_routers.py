@@ -13,6 +13,8 @@ from app.evaluation.models import EvalDataset
 from app.models.ledger import Agent
 from app.optimization import canary_service, service
 from app.optimization.models import RUNTIME_CANARY_STAGES, Experiment, RuntimeCanary
+from app.schemas.agent import AgentSpec
+from app.services.harness_convert import graft_config_bundle
 
 router = APIRouter(prefix="/api/runtime-canaries", tags=["runtime-canaries"])
 
@@ -61,19 +63,27 @@ def get_runtime_canary(
     return _out(row)
 
 
+class CandidateEdit(BaseModel):
+    """The edit that mints the canary's candidate version of the one agent."""
+
+    system_prompt: str | None = None
+    tool_description_overrides: dict[str, str] = Field(default_factory=dict)
+    code: str | None = None  # studio only
+
+
 class RuntimeCanaryCreate(BaseModel):
-    champion_agent_id: str
-    challenger_agent_id: str
+    agent_id: str
+    candidate: CandidateEdit
     source_experiment_id: str | None = None
 
 
-def _eligible_agent(db: Session, agent_id: str, role: str) -> Agent:
+def _eligible_agent(db: Session, agent_id: str) -> Agent:
     agent = db.get(Agent, agent_id)
     if agent is None or agent.status != "active":
         raise AppError(
             "canary.agent_not_active",
-            f"{role} agent must be active",
-            {"role": role, "agent_id": agent_id},
+            "canary agent must be active",
+            {"agent_id": agent_id},
             status_code=400,
         )
     capability = service.canary_capability(agent)
@@ -81,14 +91,49 @@ def _eligible_agent(db: Session, agent_id: str, role: str) -> Agent:
         raise AppError(
             "canary.agent_unsupported",
             capability["reason"],
-            {
-                "role": role,
-                "agent_id": agent_id,
-                "canary_capability": capability,
-            },
+            {"agent_id": agent_id, "canary_capability": capability},
             status_code=400,
         )
     return agent
+
+
+def _resolve_edited_spec(agent: Agent, candidate: CandidateEdit) -> AgentSpec:
+    """Apply the candidate edit onto the agent's current spec (mirrors
+    ``service.act_promote``) and return the AgentSpec that setup will mint."""
+    spec_data = dict(agent.spec or {})
+    prompt = str(
+        candidate.system_prompt
+        if candidate.system_prompt is not None
+        else spec_data.get("system_prompt") or ""
+    ).strip()
+    overrides = dict(spec_data.get("tool_description_overrides") or {})
+    overrides.update(
+        {str(k): str(v) for k, v in (candidate.tool_description_overrides or {}).items()}
+    )
+    spec_data.update({
+        "name": agent.name,
+        "method": agent.method,
+        "system_prompt": prompt,
+        "tool_description_overrides": overrides,
+    })
+    if agent.method == "studio" and candidate.code is not None:
+        spec_data["code"] = candidate.code
+    spec = AgentSpec(**spec_data)
+    if spec.source_harness:
+        bundle = dict(spec.code_bundle or {})
+        if "main.py" not in bundle:
+            raise AppError(
+                "canary.candidate_invalid",
+                "converted runtime bundle has no main.py",
+                status_code=400,
+            )
+        bundle["main.py"] = graft_config_bundle(
+            bundle["main.py"],
+            default_system_prompt=prompt,
+            tool_description_overrides=overrides,
+        )
+        spec = spec.model_copy(update={"code_bundle": bundle})
+    return spec
 
 
 @router.post("", status_code=201)
@@ -96,14 +141,18 @@ def create_runtime_canary(
     req: RuntimeCanaryCreate,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    if req.champion_agent_id == req.challenger_agent_id:
+    agent = _eligible_agent(db, req.agent_id)
+    candidate = req.candidate
+    if not (
+        (candidate.system_prompt or "").strip()
+        or candidate.tool_description_overrides
+        or (candidate.code or "").strip()
+    ):
         raise AppError(
-            "canary.same_agent",
-            "champion and challenger must be different agents",
+            "canary.candidate_empty",
+            "candidate must change something",
             status_code=400,
         )
-    champion = _eligible_agent(db, req.champion_agent_id, "champion")
-    challenger = _eligible_agent(db, req.challenger_agent_id, "challenger")
     if req.source_experiment_id:
         source = db.get(Experiment, req.source_experiment_id)
         if source is None or not service.promotion_complete(source.artifacts):
@@ -113,16 +162,15 @@ def create_runtime_canary(
                 {"source_experiment_id": req.source_experiment_id},
                 status_code=400,
             )
-        if source.agent_id != champion.id:
+        if source.agent_id != agent.id:
             raise AppError(
                 "canary.source_champion_mismatch",
-                "source experiment agent must be the canary champion",
+                "source experiment agent must be the canary agent",
                 {"source_experiment_id": source.id},
                 status_code=400,
             )
-    row = canary_service.start_canary(
-        champion, challenger, req.source_experiment_id
-    )
+    edited_spec = _resolve_edited_spec(agent, candidate)
+    row = canary_service.start_canary(agent, edited_spec, req.source_experiment_id)
     return _out(row)
 
 

@@ -395,11 +395,16 @@ def test_canary_capability_is_independent_from_bundle_consumption():
         "eligible": True, "reason": None, "reason_code": None,
     }
 
-    for row in [
-        SimpleNamespace(method="container", status="active", arn=runtime_arn, spec={}),
-        SimpleNamespace(method="studio", status="active", arn=runtime_arn, spec={}),
-    ]:
-        assert svc.canary_capability(row) == {"eligible": True, "reason": None, "reason_code": None}
+    studio = SimpleNamespace(method="studio", status="active", arn=runtime_arn, spec={})
+    assert svc.canary_capability(studio) == {
+        "eligible": True, "reason": None, "reason_code": None,
+    }
+
+    # Container candidate minting via CodeBuild is a follow-up — ineligible today.
+    container = SimpleNamespace(method="container", status="active", arn=runtime_arn, spec={})
+    container_cap = svc.canary_capability(container)
+    assert container_cap["eligible"] is False
+    assert container_cap["reason_code"] == "container-followup"
 
     incompatible = [
         SimpleNamespace(method="zip_runtime", status="deploying", arn=runtime_arn, spec={}),
