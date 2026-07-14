@@ -993,3 +993,37 @@ Separated runtime canary eligibility from bundle experiment eligibility, enforce
 ### Next Steps
 
 - None - task complete
+
+
+## Session 14: Split configuration A/B from Runtime Canary
+
+**Date**: 2026-07-14
+**Task**: Split configuration A/B from Runtime Canary
+**Package**: lab4-interactive
+**Branch**: `main`
+
+### Summary
+
+Separated configuration-bundle experiments from Runtime Canary with independent records, APIs, UI workflows, shared-Gateway conflict guards, per-stage evidence gates, resource-safe cleanup, compatibility handling, tests, browser validation, and updated code-specs.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ff7756c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

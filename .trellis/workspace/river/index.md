@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 13
+- **Total Sessions**: 14
 - **Last Active**: 2026-07-14
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~995 | Active |
+| `journal-1.md` | ~1029 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 14 | 2026-07-14 | Split configuration A/B from Runtime Canary | `ff7756c` | `main` |
 | 13 | 2026-07-14 | Canary challenger eligibility | `4e59e72` | `main` |
 | 12 | 2026-07-14 | Align experiment promotion with AgentCore | `c73aead` | `main` |
 | 11 | 2026-07-13 | Dataset editor: user simulation scenario type | `eb28cc4` | `main` |
