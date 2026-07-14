@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 11
-- **Last Active**: 2026-07-13
+- **Total Sessions**: 12
+- **Last Active**: 2026-07-14
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~927 | Active |
+| `journal-1.md` | ~961 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 12 | 2026-07-14 | Align experiment promotion with AgentCore | `c73aead` | `main` |
 | 11 | 2026-07-13 | Dataset editor: user simulation scenario type | `eb28cc4` | `main` |
 | 10 | 2026-07-13 | Evaluators/Datasets sub-pages adopt Experiment-style interaction | `ef0d412` | `main` |
 | 9 | 2026-07-13 | Harness → runtime conversion: one-click experiment enablement | `e983613`, `e028413` | `main` |

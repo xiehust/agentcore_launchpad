@@ -925,3 +925,37 @@ Added the devguide user-simulation scenario type to the dataset editor (frontend
 ### Next Steps
 
 - None - task complete
+
+
+## Session 12: Align experiment promotion with AgentCore
+
+**Date**: 2026-07-14
+**Task**: Align experiment promotion with AgentCore
+**Package**: lab4-interactive
+**Branch**: `main`
+
+### Summary
+
+Replaced legacy 1/99 promotion with stop-and-deploy production promotion, added capability and bundle contracts, updated the experiment UI, and verified backend, frontend, and browser behavior.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c73aead` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
