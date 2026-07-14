@@ -914,7 +914,7 @@
     },
     "experiment": {
       "title": "实验",
-      "meta": "配置 A/B 与 Runtime Canary · 两个独立流程",
+      "meta": "配置 A/B 与运行时金丝雀 · 两个独立流程",
       "how": {
         "title": "配置 A/B 如何执行",
         "sub": "8 个阶段 · recommend → cleanup",
@@ -951,7 +951,7 @@
         "reason": "在当前样本量下,两组差异未达统计显著——表面上的胜者可能只是噪声。",
         "a1": "继续积累证据:给两个变体多打流量后重新启动实验(判定只计算一次)。",
         "a2": "PROMOTE 仍然可用,但这属于主观决策——仅凭当前数据不足以支持。",
-        "a3": "或 CLEANUP 保留现有 Champion——不做变更也是合理的结论。",
+        "a3": "或 CLEANUP 保留现有冠军——不做变更也是合理的结论。",
         "promotedContext": "已在未达统计显著时手动部署——上方判定早于本次生产部署",
         "confirmPromote": {
           "title": "在未达统计显著时放量",
@@ -992,11 +992,11 @@
       "title": "完成生产推广",
       "body": "将停止历史 A/B 测试，把已接受的 Treatment 应用到生产 Agent，并部署新的 runtime 版本。"
     },
-    "canaryTitle": "TARGET CANARY",
+    "canaryTitle": "目标金丝雀",
     "ramp": "放量",
     "cleanup": "清理",
-    "pickChallenger": "选择 Challenger Agent……",
-    "startCanary": "启动 CANARY 90/10",
+    "pickChallenger": "选择挑战者 Agent……",
+    "startCanary": "启动金丝雀 90/10",
     "confirmCleanup": {
       "title": "清理实验",
       "body": "将删除配置实验拥有的 Bundle、临时 Target、A/B 测试和在线评估器；共享实验网关会保留。"
@@ -1048,34 +1048,34 @@
     "a2aDisabled": "A2A 协议——不消费 config-bundle",
     "unsupportedHint": "只有活跃的 Launchpad 生成 HTTP runtime 和已验证的 harness 转换 runtime 可运行配置 Bundle 实验。",
     "legacyCanary": {
-      "title": "历史 RUNTIME CANARY 产物",
-      "body": "该只读结果来自旧版合并流程。仍可清理其资源；新的 Runtime Canary 使用独立记录。"
+      "title": "历史运行时金丝雀产物",
+      "body": "该只读结果来自旧版合并流程。仍可清理其资源；新的运行时金丝雀使用独立记录。"
     }
   },
   "canaryPage": {
     "reason": {
-      "not-active": "Canary challenger 必须处于 active 状态。",
-      "not-runtime": "Target Canary 的 challenger 必须是 AgentCore Runtime Agent。",
+      "not-active": "金丝雀挑战者必须处于 active 状态。",
+      "not-runtime": "目标金丝雀的挑战者必须是 AgentCore Runtime Agent。",
       "a2a": "A2A Agent 不兼容 HTTP target-canary 流量。",
-      "no-runtime-arn": "该 challenger 尚无已部署的 AgentCore Runtime ARN。"
+      "no-runtime-arn": "该挑战者尚无已部署的 AgentCore Runtime ARN。"
     },
     "meta": "Runtime Target 流量 · 共享实验网关",
     "modeLabel": "实验流程",
     "mode": {
-      "configuration": "CONFIGURATION A/B",
-      "canary": "RUNTIME CANARY"
+      "configuration": "配置 A/B",
+      "canary": "运行时金丝雀"
     },
-    "sub": "Champion 与 Challenger · 实验网关流量",
-    "create": "创建 RUNTIME CANARY",
+    "sub": "冠军与挑战者 · 实验网关流量",
+    "create": "创建运行时金丝雀",
     "createHint": "选择两个兼容的 Runtime Agent；只有手动触发 Setup 后才会创建 AWS 资源。",
-    "handoff": "启动 RUNTIME CANARY",
-    "handoffSource": "Champion 已从配置推广实验 {{id}} 预填。",
-    "champion": "CHAMPION",
-    "challenger": "CHALLENGER",
-    "pickChampion": "选择 Champion Agent……",
-    "pickChallenger": "选择 Challenger Agent……",
-    "eligibilityHint": "只有活跃的 HTTP AgentCore Runtime Agent 可加入 Runtime Canary；禁用原因由后端能力合同统一提供。",
-    "experimentalOnly": "下方权重仅作用于共享实验网关。完成 Canary 不会更新生产 Gateway 或 Target。",
+    "handoff": "启动运行时金丝雀",
+    "handoffSource": "冠军已从配置推广实验 {{id}} 预填。",
+    "champion": "冠军",
+    "challenger": "挑战者",
+    "pickChampion": "选择冠军 Agent……",
+    "pickChallenger": "选择挑战者 Agent……",
+    "eligibilityHint": "只有活跃的 HTTP AgentCore Runtime Agent 可加入运行时金丝雀；禁用原因由后端能力合同统一提供。",
+    "experimentalOnly": "下方权重仅作用于共享实验网关。完成金丝雀不会更新生产 Gateway 或 Target。",
     "setup": "设置 90/10",
     "running": "运行中…",
     "retry": "重试",
@@ -1084,45 +1084,45 @@
     "sendMoreTraffic": "追加流量",
     "recordVerdict": "记录判定",
     "advance": "进入下一档",
-    "complete": "完成 CANARY",
+    "complete": "完成金丝雀",
     "rollback": "回滚",
     "cleanup": "清理",
     "notSignificant": "未达统计显著",
-    "experimentalWeights": "实验网关 · Champion {{control}}% · Challenger {{treatment}}%",
+    "experimentalWeights": "实验网关 · 冠军 {{control}}% · 挑战者 {{treatment}}%",
     "trafficEvidence": "{{attempts}} 次流量 · 成功 {{sent}} · 失败 {{failed}} · 基线 n={{baseline}}",
     "blocked": "{{verdict}} 阻止继续放量。请追加流量或回滚。",
     "overrideHint": "平局或未达统计显著的结果需要操作员显式确认后才能继续。",
-    "completedSummary": "Challenger 赢得本次实验 Canary，A/B 测试已停止；未更改任何生产网关。",
-    "rollbackSummary": "Canary 已回滚到 Champion，A/B 测试已停止。",
+    "completedSummary": "挑战者赢得本次实验金丝雀，A/B 测试已停止；未更改任何生产网关。",
+    "rollbackSummary": "金丝雀已回滚到冠军，A/B 测试已停止。",
     "stage": {
       "setup": "实验网关设置",
       "ramp": "{{control}}/{{treatment}} 流量与判定",
       "locked": "请先完成上一档的流量、判定和放量门禁。"
     },
     "list": {
-      "title": "RUNTIME CANARY 列表",
+      "title": "运行时金丝雀列表",
       "sub": "独立 Target 分流记录 · 最新在前",
-      "new": "新建 CANARY",
-      "name": "CANARY",
+      "new": "新建金丝雀",
+      "name": "金丝雀",
       "weights": "权重",
       "created": "创建时间",
       "status": "状态",
-      "empty": "还没有 RUNTIME CANARY——创建一个 ▸"
+      "empty": "还没有运行时金丝雀——创建一个 ▸"
     },
     "confirmOverride": {
       "title": "覆盖非显著证据门禁",
       "body": "当前结果为平局或未达统计显著。是否仍进入下一档实验流量？"
     },
     "confirmRollback": {
-      "title": "回滚 RUNTIME CANARY",
-      "body": "将停止 Canary A/B 测试，并记录 Champion 获胜。临时资源会保留到执行清理。"
+      "title": "回滚运行时金丝雀",
+      "body": "将停止金丝雀 A/B 测试，并记录冠军获胜。临时资源会保留到执行清理。"
     },
     "confirmCleanup": {
-      "title": "清理 RUNTIME CANARY",
-      "body": "只删除本 Canary 的 A/B 测试、在线评估器和临时 Target；共享实验网关会保留。"
+      "title": "清理运行时金丝雀",
+      "body": "只删除本金丝雀的 A/B 测试、在线评估器和临时 Target；共享实验网关会保留。"
     },
     "how": {
-      "title": "RUNTIME CANARY 门禁",
+      "title": "运行时金丝雀门禁",
       "sub": "每一档流量都需要手动证据门禁",
       "setup": "SETUP——创建两个临时 Runtime Target，并从 90/10 开始",
       "ramp90": "90/10——发送流量，然后记录本档的新判定",
