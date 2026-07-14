@@ -86,6 +86,14 @@ def _reload(canary_id: str) -> RuntimeCanary:
         db.close()
 
 
+def _reload_agent(agent_id: str) -> Agent:
+    db = SessionLocal()
+    try:
+        return db.get(Agent, agent_id)
+    finally:
+        db.close()
+
+
 def _setup_artifact(ramp_stage: int = 0) -> dict:
     control_weight, treatment_weight = canary_svc.RAMP_WEIGHTS[ramp_stage]
     return {
@@ -715,10 +723,24 @@ def test_advance_updates_only_canary_ab_weights(monkeypatch):
     assert [variant["weight"] for variant in captured["variants"]] == [50, 50]
 
 
-# ─── promote / rollback / cleanup ────────────────────────────────────────────
-def test_complete_promotes_stable_endpoint_to_candidate(monkeypatch):
+# ─── promote / rollback / cleanup (Option B: DEFAULT is production truth) ─────
+def _boom_endpoint(*args, **kwargs):
+    raise AssertionError("promote must not touch named endpoints under Option B")
+
+
+def test_complete_records_candidate_as_production(monkeypatch):
+    full_spec = AgentSpec(
+        name="subject", method="zip_runtime", system_prompt="orig"
+    ).model_dump()
+    (agent_id,) = _persist_agents(_agent("subject", spec=full_spec))
+    edited = AgentSpec(
+        name="subject", method="zip_runtime", system_prompt="promoted prompt"
+    ).model_dump()
     row = _mk_canary(
+        agent_id=agent_id,
         artifacts={
+            "agent_meta": {"id": agent_id},
+            "edited_spec": edited,
             "setup": _setup_artifact(ramp_stage=2),
             "rounds": [
                 _round(
@@ -726,7 +748,7 @@ def test_complete_promotes_stable_endpoint_to_candidate(monkeypatch):
                     verdict={"verdict": "treatment-wins", "significant": True},
                 )
             ],
-        }
+        },
     )
     stopped: dict = {}
     monkeypatch.setattr(canary_svc, "control_client", MagicMock)
@@ -738,17 +760,12 @@ def test_complete_promotes_stable_endpoint_to_candidate(monkeypatch):
             stopped.update(ab_test_id=ab_test_id) or {"executionStatus": "STOPPED"}
         ),
     )
-    promoted: dict = {}
+    # Option B: promote does NOT repoint or delete named endpoints.
     monkeypatch.setattr(
-        canary_svc.canary_infra,
-        "promote_stable_endpoint",
-        lambda **kw: promoted.update(kw) or {"status": "READY"},
+        canary_svc.canary_infra, "promote_stable_endpoint", _boom_endpoint
     )
-    deleted: dict = {}
     monkeypatch.setattr(
-        canary_svc.canary_infra,
-        "delete_endpoint_quiet",
-        lambda control, **kw: deleted.update(kw),
+        canary_svc.canary_infra, "delete_endpoint_quiet", _boom_endpoint
     )
 
     result = canary_svc.act_complete(
@@ -760,26 +777,32 @@ def test_complete_promotes_stable_endpoint_to_candidate(monkeypatch):
     assert result["promoted_version"] == "2"
     assert result["ab_test_status"] == "STOPPED"
     assert "experimental_only" not in result
-    # the stable endpoint is repointed at the candidate version
-    assert promoted["stable_name"] == "stablecan"
-    assert promoted["version"] == "2"
-    # the treatment endpoint is removed; the stable endpoint is kept
-    assert deleted["endpoint_name"] == "treatcan"
+    # the ledger now reflects production = candidate (DEFAULT already serves it)
+    agent = _reload_agent(agent_id)
+    assert agent.version == "2"
+    assert agent.spec["system_prompt"] == "promoted prompt"
     stored = _reload(row.id)
     assert stored.status == "completed"
     assert stored.artifacts["complete"]["ab_test_status"] == "STOPPED"
 
 
-def test_rollback_stops_test_and_keeps_current_version(monkeypatch):
-    row = _mk_canary(artifacts={"setup": _setup_artifact(), "rounds": []})
-    captured: dict = {}
-    monkeypatch.setattr(canary_svc, "data_client", MagicMock)
-    promoted: list = []
-    monkeypatch.setattr(
-        canary_svc.canary_infra,
-        "promote_stable_endpoint",
-        lambda **kw: promoted.append(kw),
+def test_rollback_rolls_forward_current_spec(monkeypatch):
+    full_spec = AgentSpec(
+        name="subject", method="zip_runtime", system_prompt="orig"
+    ).model_dump()
+    (agent_id,) = _persist_agents(_agent("subject", spec=full_spec))
+    row = _mk_canary(
+        agent_id=agent_id,
+        artifacts={
+            "agent_meta": {"id": agent_id},
+            "edited_spec": {},
+            "setup": _setup_artifact(),
+            "rounds": [],
+        },
     )
+    captured: dict = {}
+    monkeypatch.setattr(canary_svc, "control_client", MagicMock)
+    monkeypatch.setattr(canary_svc, "data_client", MagicMock)
     monkeypatch.setattr(
         exp_svc,
         "_stop_ab_test",
@@ -787,19 +810,31 @@ def test_rollback_stops_test_and_keeps_current_version(monkeypatch):
             captured.update(ab_test_id=ab_test_id) or {"executionStatus": "STOPPED"}
         ),
     )
+    minted: dict = {}
+
+    def fake_mint(*, agent, edited_spec, control_client, log):
+        minted["agent_id"] = agent.id
+        minted["spec"] = edited_spec
+        return ("1", "9")
+
+    monkeypatch.setattr(canary_svc.canary_infra, "mint_candidate_version", fake_mint)
 
     result = canary_svc.act_rollback(row.id, lambda message: None)
 
     assert captured["ab_test_id"] == "ab-1"
     assert result["winner"] == "champion"
-    assert result["kept_version"] == "1"
+    assert result["restored_version"] == "9"
+    assert result["ab_test_status"] == "STOPPED"
     assert "experimental_only" not in result
-    # rollback never repoints the stable endpoint (production stays on v_current)
-    assert promoted == []
+    # roll-forward re-publishes the agent's CURRENT (unchanged) spec
+    assert minted["agent_id"] == agent_id
+    assert minted["spec"].system_prompt == "orig"
     assert _reload(row.id).status == "rolled_back"
+    # DEFAULT (production truth) now serves the restored version
+    assert _reload_agent(agent_id).version == "9"
 
 
-def test_cleanup_deletes_dedicated_gateway_and_treatment_endpoint(monkeypatch):
+def test_cleanup_deletes_dedicated_gateway_and_both_endpoints(monkeypatch):
     row = _mk_canary(artifacts={"setup": _setup_artifact(), "rounds": []})
     monkeypatch.setattr(
         canary_svc,
@@ -825,11 +860,11 @@ def test_cleanup_deletes_dedicated_gateway_and_treatment_endpoint(monkeypatch):
         "delete_canary_gateway",
         lambda control, gateway_id: deleted_gateways.append(gateway_id),
     )
-    deleted_endpoints: dict = {}
+    deleted_endpoints: list[str] = []
     monkeypatch.setattr(
         canary_svc.canary_infra,
         "delete_endpoint_quiet",
-        lambda control, **kw: deleted_endpoints.update(kw),
+        lambda control, **kw: deleted_endpoints.append(kw["endpoint_name"]),
     )
     monkeypatch.setattr(canary_svc, "control_client", MagicMock)
     monkeypatch.setattr(canary_svc, "data_client", MagicMock)
@@ -841,9 +876,8 @@ def test_cleanup_deletes_dedicated_gateway_and_treatment_endpoint(monkeypatch):
     assert captured["delete_gateway"] is False
     assert captured["gateway_id"] == "gw-1"
     assert deleted_gateways == ["gw-1"]
-    # the treatment endpoint is removed; the stable endpoint is KEPT (production).
-    assert deleted_endpoints["endpoint_name"] == "treatcan"
-    assert deleted_endpoints["endpoint_name"] != _setup_artifact()["stable_endpoint"]
+    # BOTH named endpoints are deleted (production uses DEFAULT post-canary).
+    assert set(deleted_endpoints) == {"stablecan", "treatcan"}
     assert _reload(row.id).status == "cleaned"
 
 

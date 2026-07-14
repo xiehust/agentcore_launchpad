@@ -83,6 +83,42 @@ def run_action(
     experiment_service._spawn(runner)
 
 
+def active_canary_route(agent_id: str) -> dict[str, Any] | None:
+    """Cheap invoke-hot-path lookup: is there an active canary fronting this agent?
+
+    Returns the gateway route (control target + control-safe stable-endpoint
+    fallback) when a RuntimeCanary for ``agent_id`` is ``running`` with a
+    completed ``setup`` artifact, else ``None``. ``RuntimeCanary.champion_agent_id``
+    is indexed, so this is one indexed SELECT and no AWS call — safe to call on
+    every invocation with no cache.
+    """
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(RuntimeCanary)
+            .filter(
+                RuntimeCanary.champion_agent_id == agent_id,
+                RuntimeCanary.status == "running",
+            )
+            .order_by(RuntimeCanary.created_at.desc())
+            .first()
+        )
+        if row is None:
+            return None
+        artifacts = row.artifacts or {}
+        setup = artifacts.get("setup")
+        if not setup:
+            return None
+        return {
+            "gateway_url": setup["gateway_url"],
+            "control_target": setup["champion"]["target_name"],
+            "stable_endpoint": setup["stable_endpoint"],
+            "arn": (artifacts.get("agent_meta") or {}).get("arn"),
+        }
+    finally:
+        db.close()
+
+
 def clear_stale_running_actions() -> list[str]:
     """Clear daemon-thread flags left by a backend restart."""
     db = SessionLocal()
@@ -534,34 +570,38 @@ def act_complete(
     *,
     allow_non_significant: bool,
 ) -> dict[str, Any]:
-    """Promote: stop the test, then repoint the stable endpoint at the candidate
-    version so production (invoked via the stable endpoint) serves it."""
+    """Promote (Option B — DEFAULT is production truth): stop the test and record
+    production = candidate in the ledger.
+
+    Setup's mint already auto-rolled the runtime's DEFAULT endpoint to the
+    candidate version, so production (invoked direct-ARN via DEFAULT) already
+    serves the candidate. Promotion only needs to (1) stop the A/B test and (2)
+    make the ledger reflect that the candidate is now production — no stable
+    endpoint repoint. Endpoint teardown happens in cleanup.
+    """
     row = _get(canary_id)
     assert_verdict_allows(
         row, allow_non_significant=allow_non_significant
     )
     setup = row.artifacts["setup"]
-    control = control_client()
+    meta = row.artifacts["agent_meta"]
     stopped = experiment_service._stop_ab_test(
         data_client(),
         setup["ab_test_id"],
         progress,
         label="Runtime canary A/B test",
     )
-    progress("promoting stable endpoint → candidate version…")
-    canary_infra.promote_stable_endpoint(
-        control_client=control,
-        runtime_id=setup["runtime_id"],
-        stable_name=setup["stable_endpoint"],
-        version=setup["v_candidate"],
-        log=progress,
-    )
-    canary_infra.delete_endpoint_quiet(
-        control,
-        runtime_id=setup["runtime_id"],
-        endpoint_name=setup["treatment_endpoint"],
-        log=progress,
-    )
+    progress("recording promotion in the ledger (production = candidate)…")
+    db = SessionLocal()
+    try:
+        agent = db.get(Agent, meta["id"])
+        if agent is None or agent.status == "deleted":
+            raise RuntimeError("the agent behind this canary no longer exists")
+        agent.spec = copy.deepcopy(row.artifacts["edited_spec"])
+        agent.version = setup["v_candidate"]
+        db.commit()
+    finally:
+        db.close()
     result = {
         "winner": "challenger",
         "promoted_version": setup["v_candidate"],
@@ -578,19 +618,53 @@ def act_complete(
 
 
 def act_rollback(canary_id: str, progress: Progress) -> dict[str, Any]:
-    """Rollback: stop the test only — the stable endpoint never left v_current,
-    so production stays on the current version (safe-toward-control)."""
+    """Rollback (roll-forward — Option B): stop the test, then re-publish the
+    agent's CURRENT (unchanged) spec so DEFAULT rolls forward off the rejected
+    candidate back to v_current behavior.
+
+    Setup's mint auto-rolled DEFAULT to the rejected candidate, so a rollback
+    that only stopped the test would leave DEFAULT (production truth) serving the
+    untested candidate. Re-publishing the unchanged ledger spec mints a new
+    version whose behavior == v_current, so DEFAULT — and ``current_version`` —
+    is production truth again.
+    """
     row = _get(canary_id)
     setup = row.artifacts["setup"]
+    meta = row.artifacts["agent_meta"]
+    control = control_client()
     stopped = experiment_service._stop_ab_test(
         data_client(),
         setup["ab_test_id"],
         progress,
         label="Runtime canary A/B test",
     )
+    db = SessionLocal()
+    try:
+        agent = db.get(Agent, meta["id"])
+        if agent is None or agent.status == "deleted":
+            raise RuntimeError("the agent behind this canary no longer exists")
+        current_spec = AgentSpec(**agent.spec)
+    finally:
+        db.close()
+
+    # mint_candidate_version doubles as a generic "build this spec into a new
+    # runtime version" helper — re-publishing v_current's unchanged spec rolls
+    # DEFAULT off the rejected candidate back to current behavior.
+    progress("rolling production forward off the rejected candidate…")
+    _, v_restored = canary_infra.mint_candidate_version(
+        agent=agent, edited_spec=current_spec, control_client=control, log=progress
+    )
+    db = SessionLocal()
+    try:
+        fresh = db.get(Agent, meta["id"])
+        if fresh is not None:
+            fresh.version = v_restored
+            db.commit()
+    finally:
+        db.close()
     result = {
         "winner": "champion",
-        "kept_version": setup.get("v_current"),
+        "restored_version": v_restored,
         "ab_test_status": stopped.get("executionStatus"),
         "rolled_back_at": _now(),
     }
@@ -656,9 +730,10 @@ def act_cleanup(
     canary_id: str,
     progress: Progress,
 ) -> list[dict[str, str]]:
-    """Tear down this canary's dedicated gateway, targets, treatment endpoint,
-    online-eval configs, and A/B test. The stable endpoint is KEPT — it is
-    production's invoke qualifier for the agent."""
+    """Tear down this canary's dedicated gateway, targets, BOTH named endpoints,
+    online-eval configs, and A/B test. Under Option B production is invoked via
+    the runtime's DEFAULT endpoint, so neither the stable nor the treatment
+    endpoint is needed post-canary — both are deleted."""
     row = _get(canary_id)
     setup = row.artifacts.get("setup") or {}
     control = control_client()
@@ -689,22 +764,23 @@ def act_cleanup(
         target_ids=target_ids,
         delete_gateway=False,
     )
-    treatment_endpoint = setup.get("treatment_endpoint")
     runtime_id = setup.get("runtime_id")
-    if treatment_endpoint and runtime_id:
+    for endpoint_name in (setup.get("stable_endpoint"), setup.get("treatment_endpoint")):
+        if not (endpoint_name and runtime_id):
+            continue
         try:
             canary_infra.delete_endpoint_quiet(
                 control,
                 runtime_id=runtime_id,
-                endpoint_name=treatment_endpoint,
+                endpoint_name=endpoint_name,
                 log=progress,
             )
             results.append(
-                {"category": f"endpoint:{treatment_endpoint}", "status": "deleted", "detail": ""}
+                {"category": f"endpoint:{endpoint_name}", "status": "deleted", "detail": ""}
             )
         except Exception as exc:
             results.append({
-                "category": f"endpoint:{treatment_endpoint}",
+                "category": f"endpoint:{endpoint_name}",
                 "status": "skipped",
                 "detail": f"{type(exc).__name__}: {exc}",
             })

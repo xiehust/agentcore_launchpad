@@ -1,5 +1,39 @@
 # Design — Production-grade target-based A/B canary
 
+## REVISION — rollback via roll-forward (Option B, chosen 2026-07-14)
+
+Supersedes the "pinned stable endpoint for post-canary invoke" mechanism below.
+Rationale: `UpdateAgentRuntime` auto-rolls DEFAULT to the minted candidate, so
+after a **rollback** DEFAULT points at the rejected candidate — any reader of
+DEFAULT (invoke, `current_version`) would be wrong. Rather than route invoke
+through a pinned per-agent endpoint (extra hot-path logic + ledger marker +
+`current_version` reading the endpoint), we keep **DEFAULT as the single source
+of production truth**:
+
+- **invoke hot path stays trivial**: non-canary invocation is **unchanged**
+  (direct ARN, DEFAULT). Phase 3 only ADDS one branch: an active canary → route
+  through the canary gateway. No stable-endpoint qualifier in invoke, no ledger
+  endpoint marker.
+- **promote**: DEFAULT already = candidate (from setup's mint) → just stop the
+  test and update the ledger (`agent.spec = edited_spec`, `agent.version =
+  v_candidate`). No endpoint repoint needed for invoke.
+- **rollback (roll-forward)**: stop the test, then re-`UpdateAgentRuntime` the
+  agent's CURRENT spec (unchanged in the ledger = v_current) so DEFAULT rolls
+  forward to a new version with v_current behavior. `current_version` (reads
+  DEFAULT) is then always production truth. Cost: one extra build+deploy on the
+  (cold, user-triggered) rollback path.
+- **stable endpoint** is now ONLY the gateway **control target** during the
+  canary (routes control traffic to v_current); it is deleted on cleanup along
+  with the treatment endpoint and the dedicated gateway. It is NOT production's
+  invoke qualifier.
+- `current_version` keeps reading `get_agent_runtime.agentRuntimeVersion`
+  (DEFAULT) — correct after promote (=candidate) and after roll-forward rollback
+  (=v_current content).
+
+Everything else below (per-canary gateway, candidate mint, target-based A/B,
+online-eval on named-endpoint log groups, ramp/verdict) stands. The sections
+below that describe stable-endpoint-based invoke/promote are historical.
+
 ## Architecture overview
 
 A canary operates on **one agent runtime** and two of its **immutable versions**,
