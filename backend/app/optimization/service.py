@@ -243,6 +243,29 @@ def experiment_capability(agent_row: Any) -> dict[str, Any]:
     }
 
 
+def canary_capability(agent_row: Any) -> dict[str, Any]:
+    """Backend-owned target-canary challenger capability projection."""
+    base = {"eligible": False, "reason": None}
+    if agent_row.status != "active":
+        return {**base, "reason": "Canary challengers must be active."}
+    if agent_row.method not in {"zip_runtime", "container", "studio"}:
+        return {
+            **base,
+            "reason": "Target canaries require an AgentCore Runtime challenger.",
+        }
+    if (agent_row.spec or {}).get("protocol", "http") != "http":
+        return {
+            **base,
+            "reason": "A2A agents are not compatible with HTTP target-canary traffic.",
+        }
+    if ":runtime/" not in str(agent_row.arn or ""):
+        return {
+            **base,
+            "reason": "The challenger has no deployed AgentCore Runtime ARN.",
+        }
+    return {**base, "eligible": True}
+
+
 def _agent_meta(exp: Experiment) -> dict[str, Any]:
     """Runtime facts captured at create time; rebuilt lazily for old rows."""
     meta = exp.artifacts.get("agent_meta")

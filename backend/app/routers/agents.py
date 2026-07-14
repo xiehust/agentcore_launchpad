@@ -25,7 +25,7 @@ SUPPORTED_METHODS = {"harness", "zip_runtime", "container", "studio"}
 
 
 def _agent_out(agent: Agent, deployment: Deployment | None = None) -> dict[str, Any]:
-    from app.optimization.service import experiment_capability
+    from app.optimization.service import canary_capability, experiment_capability
 
     out = {
         "id": agent.id,
@@ -40,6 +40,7 @@ def _agent_out(agent: Agent, deployment: Deployment | None = None) -> dict[str, 
         "error": agent.error,
         "spec": agent.spec,
         "experiment_capability": experiment_capability(agent),
+        "canary_capability": canary_capability(agent),
         "created_at": agent.created_at.isoformat() if agent.created_at else None,
         "updated_at": agent.updated_at.isoformat() if agent.updated_at else None,
     }

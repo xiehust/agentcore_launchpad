@@ -200,8 +200,7 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
   const { t } = useTranslation();
   const toast = useToast();
   const [experiments, setExperiments] = useState<ExperimentInfo[]>([]);
-  const [agents, setAgents] = useState<AgentInfo[]>([]);
-  const [unsupportedAgents, setUnsupportedAgents] = useState<AgentInfo[]>([]);
+  const [activeAgents, setActiveAgents] = useState<AgentInfo[]>([]);
   const [datasets, setDatasets] = useState<DatasetInfo[]>([]);
   const [busy, setBusy] = useState(false);
   const [startAgentId, setStartAgentId] = useState("");
@@ -235,10 +234,7 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
       .then((res) => {
         const active = res.agents.filter((a) => a.status === "active");
         const eligible = active.filter((a) => a.experiment_capability.eligible);
-        setAgents(eligible);
-        setUnsupportedAgents(
-          active.filter((a) => !a.experiment_capability.eligible),
-        );
+        setActiveAgents(active);
         setStartAgentId((prev) => prev || (eligible[0]?.id ?? ""));
       })
       .catch(() => {});
@@ -253,6 +249,11 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
     const timer = setInterval(() => void refresh(), 8000);
     return () => clearInterval(timer);
   }, [refresh]);
+
+  const agents = activeAgents.filter((a) => a.experiment_capability.eligible);
+  const unsupportedAgents = activeAgents.filter(
+    (a) => !a.experiment_capability.eligible,
+  );
 
   // "?exp=<id>" selects a row from the list (linkable, back-button friendly);
   // "?exp=new" opens the start form even while other experiments exist.
@@ -1119,9 +1120,15 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
     </StageCard>
   );
 
-  const eligibleChallengers = exp
-    ? agents.filter((ag) => ag.id !== exp.agent_id)
+  const challengerCandidates = exp
+    ? activeAgents.filter((ag) => ag.id !== exp.agent_id)
     : [];
+  const eligibleChallengers = challengerCandidates.filter(
+    (ag) => ag.canary_capability.eligible,
+  );
+  const unsupportedChallengers = challengerCandidates.filter(
+    (ag) => !ag.canary_capability.eligible,
+  );
 
   const canaryCard = exp && promotionComplete && (
     <StageCard
@@ -1171,7 +1178,17 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
               <option value="">{t("expPage.pickChallenger")}</option>
               {eligibleChallengers.map((ag) => (
                 <option key={ag.id} value={ag.id} style={{ background: "#141816" }}>
-                  {ag.name}
+                  {ag.name} · {ag.method}
+                </option>
+              ))}
+              {unsupportedChallengers.map((ag) => (
+                <option
+                  key={ag.id}
+                  value={ag.id}
+                  disabled
+                  style={{ background: "#141816" }}
+                >
+                  {ag.name} · {ag.method} — {ag.canary_capability.reason}
                 </option>
               ))}
             </select>

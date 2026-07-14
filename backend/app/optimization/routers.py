@@ -170,6 +170,14 @@ def experiment_action(
         if challenger.id == exp.agent_id:
             raise AppError("experiment.challenger_required",
                            "the champion cannot challenge itself", status_code=400)
+        capability = service.canary_capability(challenger)
+        if not capability["eligible"]:
+            raise AppError(
+                "experiment.challenger_unsupported",
+                capability["reason"],
+                {"canary_capability": capability},
+                status_code=400,
+            )
         snapshot = {"name": challenger.name, "arn": challenger.arn,
                     "resource_id": challenger.resource_id}
         service.run_action(

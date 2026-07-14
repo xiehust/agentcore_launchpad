@@ -35,6 +35,10 @@ export interface AgentInfo {
     tool_descriptions: boolean;
     reason: string | null;
   };
+  canary_capability: {
+    eligible: boolean;
+    reason: string | null;
+  };
   created_at: string | null;
   updated_at: string | null;
   deployment?: DeploymentInfo;

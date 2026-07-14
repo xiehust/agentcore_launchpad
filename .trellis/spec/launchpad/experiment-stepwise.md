@@ -48,6 +48,10 @@ stage_not_ready_reason(exp, action) -> str | None
 resolve_traffic_prompts(dataset) -> list[str]
 create_bundle_idempotent(control, **kwargs)    # conflict-adopt via ListConfigurationBundles
 clear_stale_running_actions() -> list[str]     # startup sweep (main.py resume block)
+canary_capability(agent) -> {
+    "eligible": bool,
+    "reason": str | None,
+}
 ```
 
 ### 3. Contracts
@@ -74,6 +78,15 @@ clear_stale_running_actions() -> list[str]     # startup sweep (main.py resume b
     replayed instead of the built-in `TRAFFIC_PROMPTS*2`.
 - `POST /api/experiments` performs **no AWS-mutating work** (A1) — only the
   row + `agent_meta` (one `get_agent_runtime` read).
+- `GET /api/agents` exposes `canary_capability` separately from
+  `experiment_capability`. Target-canary challengers must be active HTTP
+  AgentCore Runtime resources deployed by `zip_runtime`, `container`, or
+  `studio`; they do not need to consume Launchpad configuration bundles.
+  Harness and A2A agents remain visible in the challenger selector as disabled
+  options with the backend-provided reason.
+- The current experiment champion is omitted from the challenger selector.
+  The action endpoint repeats the active/self/capability checks before calling
+  `run_action`; frontend filtering is explanatory UX, not authorization.
 - Failure: the runner stores `error = "<action>: <Type>: <msg>"` (action
   prefix is a UI contract — the page pins the retry button by
   `error.startsWith(action + ": ")`), clears `running_action`, KEEPS the
@@ -97,6 +110,7 @@ clear_stale_running_actions() -> list[str]     # startup sweep (main.py resume b
 | traffic dataset not found | 404 `dataset.not_found` |
 | traffic dataset kind `simulated` / no usable prompts | 422 `experiment.dataset_unsupported` |
 | canary challenger missing/inactive/self | 400 `experiment.challenger_required` |
+| canary challenger is Harness, A2A, lacks a Runtime ARN, or uses an unsupported method | 400 `experiment.challenger_unsupported` with `detail.canary_capability` |
 | second concurrent experiment (create) | 409 `experiment.already_running` |
 
 Prerequisites (`stage_not_ready_reason`): accept←recommend artifact;
@@ -113,7 +127,8 @@ promote/canary←verdict; ramp←canary; recommend/cleanup←none.
   columns) — GET serializes, all cards render read-only results,
   promote/canary/ramp/cleanup still work; re-running `bundles` is allowed.
 - **Bad**: POST `gateway` before `bundles` → 409 stage_not_ready; POST while
-  recommend runs → 409 action_in_flight; simulated dataset → 422.
+  recommend runs → 409 action_in_flight; simulated dataset → 422; Harness or
+  A2A challenger → 400 before asynchronous AWS work starts.
 
 ### 6. Tests Required
 
@@ -129,6 +144,10 @@ promote/canary←verdict; ramp←canary; recommend/cleanup←none.
   success clears error/progress (monkeypatch `svc._spawn` to run inline)
 - `clear_stale_running_actions` clears only stuck rows, writes retryable error
 - create defers all stage work (`artifacts == {agent_meta}`)
+- canary capability matrix: custom HTTP zip runtime, container, and Studio are
+  eligible; inactive, Harness, A2A, and missing-Runtime-ARN agents are not
+- canary action rejects inactive/self/incompatible challengers before
+  `run_action`, while a compatible custom HTTP runtime dispatches successfully
 
 Frontend has NO test runner — verify via the fetch-stub browser evidence
 flow (stub `window.fetch` with synthetic experiment states; screenshots in
@@ -142,11 +161,16 @@ the task's `evidence/`).
 threading.Thread(target=run_experiment_loop, ...).start()   # removed
 # Pass the ORM row into the action thread
 run_action(exp.id, "canary", lambda p: act_canary(exp, ...))  # detached-row risk
+# Reuse bundle-consumption eligibility for target routing
+challengers = [a for a in agents if experiment_capability(a)["eligible"]]
 ```
 
 #### Correct
 ```python
 # Router validates inline, thread gets plain snapshots + exp_id only
+capability = canary_capability(challenger)
+if not capability["eligible"]:
+    raise AppError("experiment.challenger_unsupported", ...)
 snapshot = {"name": challenger.name, "arn": challenger.arn,
             "resource_id": challenger.resource_id}
 service.run_action(exp.id, "canary",

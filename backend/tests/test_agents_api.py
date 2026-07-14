@@ -37,7 +37,7 @@ def test_create_agent_returns_job_and_stages(client, no_real_deploy):
     assert body["agent"]["experiment_capability"]["eligible"] is False
 
 
-def test_agent_api_projects_experiment_capability(client):
+def test_agent_api_projects_experiment_and_canary_capabilities(client):
     spec = {
         "name": "bundle-agent",
         "method": "zip_runtime",
@@ -48,6 +48,26 @@ def test_agent_api_projects_experiment_capability(client):
         "eligible": True,
         "system_prompt": True,
         "tool_descriptions": True,
+        "reason": None,
+    }
+    assert body["canary_capability"] == {
+        "eligible": False,
+        "reason": "Canary challengers must be active.",
+    }
+
+    db = SessionLocal()
+    agent = db.get(Agent, body["id"])
+    agent.status = "active"
+    agent.arn = (
+        "arn:aws:bedrock-agentcore:us-west-2:111122223333:"
+        "runtime/bundle_agent-abcdefghij"
+    )
+    db.commit()
+    db.close()
+
+    detail = client.get(f"/api/agents/{body['id']}").json()
+    assert detail["canary_capability"] == {
+        "eligible": True,
         "reason": None,
     }
 

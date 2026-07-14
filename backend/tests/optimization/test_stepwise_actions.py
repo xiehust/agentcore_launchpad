@@ -380,6 +380,37 @@ def test_experiment_capability_matrix():
         assert svc.experiment_capability(row)["eligible"] is False
 
 
+def test_canary_capability_is_independent_from_bundle_consumption():
+    runtime_arn = (
+        "arn:aws:bedrock-agentcore:us-west-2:111122223333:"
+        "runtime/challenger-abcdefghij"
+    )
+    custom_runtime = SimpleNamespace(
+        method="zip_runtime", status="active", arn=runtime_arn,
+        spec={"protocol": "http", "code": "custom runtime"},
+    )
+    assert svc.experiment_capability(custom_runtime)["eligible"] is False
+    assert svc.canary_capability(custom_runtime) == {"eligible": True, "reason": None}
+
+    for row in [
+        SimpleNamespace(method="container", status="active", arn=runtime_arn, spec={}),
+        SimpleNamespace(method="studio", status="active", arn=runtime_arn, spec={}),
+    ]:
+        assert svc.canary_capability(row) == {"eligible": True, "reason": None}
+
+    incompatible = [
+        SimpleNamespace(method="zip_runtime", status="deploying", arn=runtime_arn, spec={}),
+        SimpleNamespace(method="harness", status="active", arn="arn:harness/x", spec={}),
+        SimpleNamespace(
+            method="zip_runtime", status="active", arn=runtime_arn,
+            spec={"protocol": "a2a"},
+        ),
+        SimpleNamespace(method="zip_runtime", status="active", arn=None, spec={}),
+    ]
+    for row in incompatible:
+        assert svc.canary_capability(row)["eligible"] is False
+
+
 # ─── bundles ─────────────────────────────────────────────────────────────────
 def test_bundles_consume_accepted_config(client, monkeypatch):
     captured: dict = {}
@@ -838,6 +869,159 @@ def test_canary_requires_completed_promotion():
         "promote": {"ab_test_status": "STOPPED", "deployment_id": "d1"},
     }
     assert svc.stage_not_ready_reason(exp, "canary") is None
+
+
+@pytest.mark.parametrize(
+    ("method", "spec", "arn"),
+    [
+        ("harness", {}, "arn:aws:bedrock-agentcore:us-west-2:111122223333:harness/x"),
+        (
+            "zip_runtime",
+            {"protocol": "a2a"},
+            "arn:aws:bedrock-agentcore:us-west-2:111122223333:"
+            "runtime/a2a_challenger-abcdefghij",
+        ),
+    ],
+)
+def test_canary_rejects_incompatible_challenger_before_dispatch(
+    client, monkeypatch, method, spec, arn,
+):
+    exp = _mk_exp(artifacts={
+        "verdict": {"verdict": "treatment-wins"},
+        "promote": {"ab_test_status": "STOPPED", "deployment_id": "d1"},
+    })
+    db = SessionLocal()
+    challenger = Agent(
+        name=f"bad-{method}",
+        method=method,
+        status="active",
+        arn=arn,
+        resource_id="challenger-1",
+        spec=spec,
+    )
+    db.add(challenger)
+    db.commit()
+    challenger_id = challenger.id
+    db.close()
+    dispatched: list[str] = []
+    monkeypatch.setattr(
+        svc, "run_action",
+        lambda exp_id, action, fn: dispatched.append(action),
+    )
+
+    res = client.post(
+        f"/api/experiments/{exp.id}/action",
+        json={"action": "canary", "challenger_agent_id": challenger_id},
+    )
+
+    assert res.status_code == 400
+    assert res.json()["code"] == "experiment.challenger_unsupported"
+    assert res.json()["detail"]["canary_capability"]["eligible"] is False
+    assert dispatched == []
+
+
+def test_canary_dispatches_compatible_custom_http_runtime(client, monkeypatch):
+    exp = _mk_exp(artifacts={
+        "verdict": {"verdict": "treatment-wins"},
+        "promote": {"ab_test_status": "STOPPED", "deployment_id": "d1"},
+    })
+    db = SessionLocal()
+    challenger = Agent(
+        name="custom-http-runtime",
+        method="zip_runtime",
+        status="active",
+        arn=(
+            "arn:aws:bedrock-agentcore:us-west-2:111122223333:"
+            "runtime/custom_http-abcdefghij"
+        ),
+        resource_id="custom-http-abcdefghij",
+        spec={"protocol": "http", "code": "custom runtime"},
+    )
+    db.add(challenger)
+    db.commit()
+    challenger_id = challenger.id
+    db.close()
+    captured: dict = {}
+    monkeypatch.setattr(
+        svc,
+        "act_canary",
+        lambda exp_id, snapshot, progress: captured.update(
+            exp_id=exp_id, snapshot=snapshot,
+        ),
+    )
+    monkeypatch.setattr(
+        svc,
+        "run_action",
+        lambda exp_id, action, fn: fn(svc._noop),
+    )
+
+    res = client.post(
+        f"/api/experiments/{exp.id}/action",
+        json={"action": "canary", "challenger_agent_id": challenger_id},
+    )
+
+    assert res.status_code == 202
+    assert captured == {
+        "exp_id": exp.id,
+        "snapshot": {
+            "name": "custom-http-runtime",
+            "arn": (
+                "arn:aws:bedrock-agentcore:us-west-2:111122223333:"
+                "runtime/custom_http-abcdefghij"
+            ),
+            "resource_id": "custom-http-abcdefghij",
+        },
+    }
+
+
+def test_canary_rejects_inactive_and_self_challengers(client, monkeypatch):
+    artifacts = {
+        "verdict": {"verdict": "treatment-wins"},
+        "promote": {"ab_test_status": "STOPPED", "deployment_id": "d1"},
+    }
+    exp = _mk_exp(artifacts=artifacts)
+    db = SessionLocal()
+    challenger = Agent(
+        name="inactive-runtime",
+        method="zip_runtime",
+        status="failed",
+        arn=(
+            "arn:aws:bedrock-agentcore:us-west-2:111122223333:"
+            "runtime/inactive_runtime-abcdefghij"
+        ),
+        resource_id="inactive-runtime-abcdefghij",
+        spec={"protocol": "http"},
+    )
+    db.add(challenger)
+    db.commit()
+    challenger_id = challenger.id
+    db.close()
+    dispatched: list[str] = []
+    monkeypatch.setattr(
+        svc, "run_action",
+        lambda exp_id, action, fn: dispatched.append(action),
+    )
+
+    inactive = client.post(
+        f"/api/experiments/{exp.id}/action",
+        json={"action": "canary", "challenger_agent_id": challenger_id},
+    )
+    assert inactive.status_code == 400
+    assert inactive.json()["code"] == "experiment.challenger_required"
+
+    db = SessionLocal()
+    challenger = db.get(Agent, challenger_id)
+    challenger.status = "active"
+    db.commit()
+    db.close()
+    self_exp = _mk_exp(agent_id=challenger_id, artifacts=artifacts)
+    self_response = client.post(
+        f"/api/experiments/{self_exp.id}/action",
+        json={"action": "canary", "challenger_agent_id": challenger_id},
+    )
+    assert self_response.status_code == 400
+    assert self_response.json()["code"] == "experiment.challenger_required"
+    assert dispatched == []
 
 
 # ─── create defers all stage work ────────────────────────────────────────────
