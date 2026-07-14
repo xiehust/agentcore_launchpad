@@ -737,6 +737,7 @@
       "confirmRun": {
         "title": "Run insights on these sessions",
         "body": "This creates a new insights run over the {{count}} sessions of {{run}}. The account processes one batch at a time, so duplicate submissions just queue up behind it.",
+        "bodyRepeat": "These sessions already have completed insights — continuing repeats the same analysis one more time: a new insights run over the {{count}} sessions of {{run}}, re-invoking the evaluation service with additional usage.",
         "confirm": "RUN INSIGHTS"
       }
     },

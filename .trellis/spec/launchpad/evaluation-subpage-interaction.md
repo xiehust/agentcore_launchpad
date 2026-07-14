@@ -76,3 +76,15 @@ scenarios, predefined/legacy) vs USER SIMULATION (devguide user-simulation.html 
 Rows `evaluator-row-<id>` / `dataset-row-<id>` / `dataset-row-cloud-<datasetId>` (colon avoided
 in testids); create buttons `new-evaluator-btn` / `new-dataset-btn`; sync keeps `sync-<name>`.
 Dashboard entry buttons `datasets-btn` / `evaluators-btn` / `experiment-btn` unchanged.
+
+## Runs dashboard — insights re-run confirm (07-14)
+
+`Evaluation.tsx` insights Panel `end` button (`insights-on-sessions-btn`, "洞察 · 这些会话"):
+
+- Disabled while an insights run over the **same sorted session_ids set** is queued/running
+  (`insightsPending` — the account batch lock would just queue a duplicate).
+- Click → `ConfirmDialog`. Body is picked by `insightsAlreadyRan` (a **completed**
+  insights run over the same session set exists — an insights-mode selected run matches
+  itself): `evalPage.insights.confirmRun.bodyRepeat` warns the same analysis will run
+  **one more time** (new run row, evaluation service re-invoked, extra usage); otherwise
+  the original `confirmRun.body` (new run + queue note). Keys exist in zh-CN and en.

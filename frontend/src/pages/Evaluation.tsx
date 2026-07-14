@@ -387,6 +387,18 @@ export function Evaluation() {
     );
   };
 
+  // A completed insights run over this exact session set already exists —
+  // confirming would repeat the whole analysis (new run, new service usage).
+  const insightsAlreadyRan = (run: RunInfo): boolean => {
+    const key = [...(run.session_ids ?? [])].sort().join(",");
+    return runs.some(
+      (r) =>
+        r.mode === "insights" &&
+        r.status === "completed" &&
+        [...(r.session_ids ?? [])].sort().join(",") === key,
+    );
+  };
+
   const statusChip = (run: RunInfo) => {
     if (run.status === "completed")
       return <Chip tone="good" icon="●">{t("evalPage.status.completed")}</Chip>;
@@ -952,10 +964,15 @@ export function Evaluation() {
       <ConfirmDialog
         open={confirmInsights && !!selectedRun}
         title={t("evalPage.insights.confirmRun.title")}
-        body={t("evalPage.insights.confirmRun.body", {
-          run: selectedRun ? `run-${selectedRun.id.slice(0, 6)}` : "",
-          count: selectedRun?.session_ids?.length ?? 0,
-        })}
+        body={t(
+          selectedRun && insightsAlreadyRan(selectedRun)
+            ? "evalPage.insights.confirmRun.bodyRepeat"
+            : "evalPage.insights.confirmRun.body",
+          {
+            run: selectedRun ? `run-${selectedRun.id.slice(0, 6)}` : "",
+            count: selectedRun?.session_ids?.length ?? 0,
+          },
+        )}
         confirmLabel={t("evalPage.insights.confirmRun.confirm")}
         onConfirm={() => {
           setConfirmInsights(false);
