@@ -924,7 +924,7 @@
         "abtest": "ABTEST — A/B test splits traffic 50/50 between arms",
         "traffic": "TRAFFIC — sample invocations flow through both arms",
         "verdict": "VERDICT — online evaluators score and compare the arms",
-        "promote": "PROMOTE — shift traffic to the winning prompt",
+        "promote": "PROMOTE — stop the A/B test and deploy treatment to production",
         "canary": "CANARY — a challenger agent joins at 90/10",
         "ramp": "RAMP — challenger traffic steps 10 → 50 → 100",
         "cleanup": "CLEANUP — delete the experiment's AWS resources",
@@ -943,7 +943,7 @@
         "a1": "Send both variants more traffic (Chat Playground), then start a fresh experiment — the verdict is computed once.",
         "a2": "PROMOTE the treatment manually if you already trust it.",
         "a3": "CLEANUP to abandon the experiment and remove its resources.",
-        "promotedContext": "promoted manually despite insufficient data — the verdict above predates the promotion"
+        "promotedContext": "deployed manually despite insufficient data — the verdict above predates the production deployment"
       },
       "significant": "statistically significant",
       "notSignificant": "not statistically significant",
@@ -954,10 +954,10 @@
         "a1": "Keep gathering evidence: send both variants more traffic, then start a fresh experiment (the verdict is computed once).",
         "a2": "PROMOTE stays available, but treat it as a judgment call — the data alone doesn't support it.",
         "a3": "Or CLEANUP and keep the current champion — no change is also a valid outcome.",
-        "promotedContext": "promoted manually despite a non-significant result — the verdict above predates the promotion",
+        "promotedContext": "deployed manually despite a non-significant result — the verdict above predates the production deployment",
         "confirmPromote": {
           "title": "Promote without statistical significance",
-          "body": "This verdict is not statistically significant — the leader's edge may be noise. Promoting shifts production traffic to it anyway. Continue?"
+          "body": "This verdict is not statistically significant — the leader's edge may be noise. Promoting stops the A/B test and deploys the treatment as the production configuration. Continue?"
         }
       },
       "list": {
@@ -981,6 +981,13 @@
     "start": "START EXPERIMENT",
     "promote": "PROMOTE",
     "promoted": "PROMOTED",
+    "legacyShift": "LEGACY TRAFFIC SHIFT",
+    "legacyShiftHint": "This record only moved the active A/B test to 1/99. The treatment has not been deployed as the production configuration.",
+    "completePromotion": "COMPLETE PROMOTION",
+    "confirmCompletePromotion": {
+      "title": "Complete production promotion",
+      "body": "This stops the legacy A/B test, applies the accepted treatment to the production agent, and deploys a new runtime version."
+    },
     "canaryTitle": "TARGET CANARY",
     "ramp": "RAMP",
     "cleanup": "CLEANUP",
@@ -1009,6 +1016,7 @@
     "toolRecNoTools": "No tools were available to analyze — add tool names below and regenerate.",
     "toolRecFailed": "Tool-description recommendation failed: {{msg}}",
     "toolRecEmpty": "The optimizer suggested no changes for the analyzed tool descriptions.",
+    "toolBundleUnsupported": "This converted runtime supports system-prompt bundles only. Tool-description experiments require a newly converted runtime.",
     "genSp": "GENERATE PROMPT RECOMMENDATION",
     "genTd": "GENERATE TOOL RECOMMENDATION",
     "currentLabel": "CURRENT",
@@ -1033,7 +1041,8 @@
     "noChallenger": "No other active agent — publish a v2 candidate first.",
     "harnessDisabled": "convert to runtime first",
     "harnessHint": "Managed-harness agents can't run experiments (invoke-locked runtime, no config-bundle support). Convert one to a runtime agent in Agent Management (CONVERT ⇄ RT), then pick the converted agent here.",
-    "a2aDisabled": "A2A protocol — no config-bundle A/B"
+    "a2aDisabled": "A2A protocol — no config-bundle A/B",
+    "unsupportedHint": "Only active Launchpad-generated HTTP runtimes and verified harness conversions can run configuration-bundle experiments."
   },
   "obs": {
     "kicker": "// TELEMETRY LAYER",

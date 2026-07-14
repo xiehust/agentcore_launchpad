@@ -17,6 +17,10 @@ def render_main_py(spec: AgentSpec) -> str:
         source.replace("__LAUNCHPAD_AGENT_NAME__", spec.name)
         .replace("__LAUNCHPAD_MODEL_ID__", spec.model_id)
         .replace("__LAUNCHPAD_SYSTEM_PROMPT__", repr(spec.system_prompt))
+        .replace(
+            "__LAUNCHPAD_TOOL_DESCRIPTION_OVERRIDES__",
+            repr(spec.tool_description_overrides),
+        )
     )
 
 

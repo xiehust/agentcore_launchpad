@@ -20,7 +20,8 @@ def test_configuration_bundle_payload():
     assert kwargs["bundleName"] == "exp_x_control"
     config = kwargs["components"]["arn:rt-1"]["configuration"]
     assert config["system_prompt"] == "be terse"
-    assert config["tool_descriptions"] == {"calculator": "does math"}
+    assert config["tools"] == {"calculator": {"description": "does math"}}
+    assert "tool_descriptions" not in config
     assert len(kwargs["clientToken"]) >= 33
 
 

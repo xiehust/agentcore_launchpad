@@ -41,9 +41,9 @@ Service layer (`app/optimization/service.py`):
 
 ```python
 run_action(exp_id, action, fn: Callable[[Progress], Any])  # daemon thread runner
-act_recommend/act_gateway/act_abtest/act_traffic/act_verdict/act_canary/act_cleanup(exp_id, ..., progress)
+act_recommend/act_gateway/act_abtest/act_traffic/act_verdict/act_promote/act_canary/act_cleanup(exp_id, ..., progress)
 action_accept(exp, prompt, tool_descriptions)  # sync
-action_bundles(exp) / action_promote(exp) / action_ramp(exp)  # sync
+action_bundles(exp) / action_ramp(exp)  # sync
 stage_not_ready_reason(exp, action) -> str | None
 resolve_traffic_prompts(dataset) -> list[str]
 create_bundle_idempotent(control, **kwargs)    # conflict-adopt via ListConfigurationBundles
@@ -52,10 +52,10 @@ clear_stale_running_actions() -> list[str]     # startup sweep (main.py resume b
 
 ### 3. Contracts
 
-- **Async actions** `{recommend, gateway, abtest, traffic, verdict, canary,
-  cleanup}` → `202`, work runs on a daemon thread; the thread persists its
-  artifact + stage on success. **Sync actions** `{accept, bundles, promote,
-  ramp}` → `200` inline. Both response bodies are `{"experiment": <row>}`
+- **Async actions** `{recommend, gateway, abtest, traffic, verdict, promote,
+  canary, cleanup}` → `202`, work runs on a daemon thread; the thread persists
+  its artifact + stage on success. **Sync actions** `{accept, bundles, ramp}` →
+  `200` inline. Both response bodies are `{"experiment": <row>}`
   (NOT the pre-refactor `{"result": ...}`).
 - Experiment serialization adds `running_action: str|null` and
   `progress: str|null`. The UI polls `GET /api/experiments` every 8s, and
@@ -83,7 +83,7 @@ clear_stale_running_actions() -> list[str]     # startup sweep (main.py resume b
   failures keep `status="running"` with inline retry. A permanently stuck
   experiment therefore holds the single-running-experiment slot — the
   escape hatch is `cleanup` (→ `cleaned`). Sync-action failures
-  (accept/bundles/promote/ramp) surface as the HTTP error → UI toast; they
+  (accept/bundles/ramp) surface as the HTTP error → UI toast; they
   do NOT write `exp.error` (only the async runner does).
 
 ### 4. Validation & Error Matrix
@@ -181,3 +181,138 @@ they need an actor loop, not a fire-and-forget prompt replay.
 > **Warning**: only ONE A/B test can run per gateway — `act_canary` still
 > STOPs the bundle test before creating the canary test, and the
 > single-running-experiment guard on create remains load-bearing.
+
+## Scenario: official AgentCore production promotion
+
+### 1. Scope / Trigger
+
+- `promote` means completing the AgentCore experiment lifecycle, not changing
+  variant weights to `C=1/T1=99`.
+- This contract covers experiment eligibility, configuration-bundle payloads,
+  production defaults, A/B test shutdown, in-place runtime deployment, legacy
+  1/99 records, and the canary prerequisite.
+
+### 2. Signatures
+
+```python
+experiment_capability(agent: Agent) -> {
+    "eligible": bool,
+    "system_prompt": bool,
+    "tool_descriptions": bool,
+    "reason": str | None,
+}
+promotion_complete(artifacts: dict[str, Any]) -> bool
+legacy_promotion(artifacts: dict[str, Any]) -> bool
+act_promote(exp_id: str, progress: Progress) -> dict[str, Any]
+
+create_deployment(
+    db: Session,
+    agent: Agent,
+    mode: str = "create",
+    *,
+    skip_register: bool = False,
+) -> tuple[Deployment, Job]
+```
+
+```python
+class AgentSpec(BaseModel):
+    tool_description_overrides: dict[str, str]  # max 100 entries
+```
+
+`GET /api/agents` and agent create/read responses expose
+`experiment_capability`. `POST /api/experiments` enforces that same
+backend-owned projection and returns `400` when `eligible=false`.
+
+### 3. Contracts
+
+- Eligible agents are active Launchpad-generated HTTP `zip_runtime` agents and
+  converted harness runtimes with a recognized config-bundle graft. Harness,
+  container, Studio, A2A, and arbitrary custom source are not assumed to
+  consume bundles. A legacy converted graft supports system prompts but reports
+  `tool_descriptions=false`; the v2 graft supports both.
+- New AgentCore configuration bundles write tool descriptions as
+  `configuration.tools.<name>.description`. Generated and converted runtimes
+  continue reading legacy `configuration.tool_descriptions`, then let the
+  documented `tools` shape win. Without a routed bundle, promoted
+  `Agent.spec.system_prompt` and `tool_description_overrides` are defaults.
+- Promotion is asynchronous (`202`). It stops the bundle A/B test and waits
+  until `executionStatus == "STOPPED"`, writes `promotion_attempt`, applies the
+  accepted prompt and tool descriptions to `Agent.spec`, upgrades a managed
+  harness graft when needed, then creates an in-place deployment with
+  `mode="update", skip_register=True`.
+- `skip_register` skips only the `register` stage. Generate, package,
+  provision, and deploy still run, preserving runtime identity through the
+  normal update path.
+- A successful `artifacts.promote` contains `ab_test_id`,
+  `ab_test_status="STOPPED"`, `agent_id`, `deployment_id`, `job_id`,
+  `agent_version`, `applied_system_prompt`, `applied_tool_descriptions`, and
+  `completed_at`. Only after both deployment and job succeed may the service
+  set `status="promoted"` and `stage="promote"`.
+- A legacy artifact with `after_weights` but no completed deployment is
+  projected as `status="ready"` without mutating its stored row. The UI labels
+  it `LEGACY TRAFFIC SHIFT` and requires explicit `COMPLETE PROMOTION`.
+  Completion preserves its former weights as `promote.prior_shift`.
+- Canary requires `promote.deployment_id` and
+  `promote.ab_test_status == "STOPPED"`; a legacy 1/99 artifact is insufficient.
+
+### 4. Validation & Error Matrix
+
+| Condition | Behavior |
+|---|---|
+| capability `eligible=false` | `POST /api/experiments` returns `400` with capability details |
+| tool override name empty or over 200 chars | `AgentSpec` validation error |
+| tool override description over 4000 chars | `AgentSpec` validation error |
+| more than 100 tool overrides | `AgentSpec` validation error |
+| A/B stop API fails or never reaches `STOPPED` | no deployment and no success artifact; async error is retryable |
+| managed converted source lacks graft anchors | promotion fails before deployment |
+| production agent is missing/deleted | promotion fails before deployment |
+| deployment or job does not succeed | keep `status="ready"`; retain `promotion_attempt`; no success artifact |
+| canary requested after legacy 1/99 shift | `409 experiment.stage_not_ready` |
+
+### 5. Good/Base/Bad Cases
+
+- **Good**: treatment accepted → promote returns `202` → A/B test reaches
+  `STOPPED` → accepted defaults are persisted → update deployment succeeds →
+  `promote` records the deployed version and status becomes `promoted`.
+- **Base**: legacy `{"after_weights":{"C":1,"T1":99}}` row renders as ready;
+  explicit completion stops the existing test, deploys treatment, and retains
+  the old weights in `prior_shift`.
+- **Bad**: runtime update fails after the test stopped; the row stays ready,
+  `promotion_attempt` proves where it failed, and retry does not try to stop an
+  already-stopped test.
+
+### 6. Tests Required
+
+- Capability matrix: generated runtime, v2/legacy converted runtime, harness,
+  container, Studio, A2A, and arbitrary source; assert API projection and create
+  enforcement.
+- Bundle shape: assert new writes use `tools.<name>.description`; runtime tests
+  assert documented shape, legacy fallback, and promoted defaults.
+- Promotion: assert stop-before-deploy ordering, already-stopped retry,
+  stop failure, deployment failure, legacy completion, success artifact shape,
+  and success-only status transition.
+- Deployment pipeline: assert `skip_register=True` skips only registration and
+  preserves `mode="update"`.
+- Frontend/browser: assert legacy label and confirmation, running/failed/success
+  states, deployed version, disabled unsupported agents, and mobile layout.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+# A weight floor is an A/B test constraint, not production deployment.
+update_ab_test(variants={"C": 1, "T1": 99})
+_update(exp.id, status="promoted")
+```
+
+#### Correct
+
+```python
+stopped = _stop_ab_test(data, ab_test_id, progress)
+deployment, job = create_deployment(
+    db, agent, mode="update", skip_register=True
+)
+execute_deploy_job(job.id)
+# Write status="promoted" only after deployment and job are both succeeded.
+```

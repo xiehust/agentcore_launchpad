@@ -125,3 +125,31 @@ def test_resume_pending_jobs_picks_up_interrupted(monkeypatch):
     )
     resumed = resume_pending_jobs()
     assert job_id in resumed and job_id in launched
+
+
+def test_skip_register_only_skips_registry_stage():
+    calls: list[str] = []
+    register_method(
+        "fake_promotion",
+        {
+            s: (lambda ctx, agent, _s=s: (calls.append(_s), StageResult())[1])
+            for s in STAGE_ORDER
+        },
+    )
+    db = SessionLocal()
+    agent = make_agent(db, "fake_promotion", name="promotion-agent")
+    deployment, job = create_deployment(
+        db, agent, mode="update", skip_register=True
+    )
+    assert job.payload["mode"] == "update"
+    assert job.payload["skip_register"] is True
+    db.close()
+
+    execute_deploy_job(job.id)
+
+    assert calls == STAGE_ORDER[:-1]
+    db = SessionLocal()
+    stages = {s["name"]: s for s in db.get(Deployment, deployment.id).stages}
+    assert stages["register"]["status"] == "skipped"
+    assert db.get(Job, job.id).status == "succeeded"
+    db.close()

@@ -129,6 +129,11 @@ class AgentSpec(BaseModel):
     method: Method
     model_id: str = DEFAULT_MODEL_ID
     system_prompt: str = Field(min_length=1, max_length=20000)
+    # Durable production defaults applied by experiment promotion. Config
+    # bundles may override these per request while an A/B test is active.
+    tool_description_overrides: dict[str, str] = Field(
+        default_factory=dict, max_length=100
+    )
     tools: list[ToolRef] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
     # extra pip requirements for zip_runtime/studio agents (on top of the template base set)
@@ -214,6 +219,17 @@ class AgentSpec(BaseModel):
             total += len(content.encode("utf-8"))
         if total > 1_000_000:
             raise ValueError("code_bundle exceeds 1MB of source")
+        return self
+
+    @model_validator(mode="after")
+    def _tool_description_overrides_valid(self) -> "AgentSpec":
+        for name, description in self.tool_description_overrides.items():
+            if not name or len(name) > 200:
+                raise ValueError("tool description override names must be 1-200 characters")
+            if len(description) > 4000:
+                raise ValueError(
+                    f"tool description override for '{name}' exceeds 4000 characters"
+                )
         return self
 
 

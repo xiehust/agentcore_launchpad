@@ -924,7 +924,7 @@
         "abtest": "ABTEST——A/B 测试按 50/50 分流",
         "traffic": "TRAFFIC——采样调用同时流经两个分组",
         "verdict": "VERDICT——在线评估器为两组打分并对比",
-        "promote": "PROMOTE——将流量切换到胜出提示词",
+        "promote": "PROMOTE——停止 A/B 测试并将 Treatment 部署到生产",
         "canary": "CANARY——挑战者 Agent 以 90/10 加入",
         "ramp": "RAMP——挑战者流量按 10 → 50 → 100 递增",
         "cleanup": "CLEANUP——删除实验的 AWS 资源",
@@ -943,7 +943,7 @@
         "a1": "在 Chat Playground 给两个变体继续打流量后,重新启动一个实验——判定只计算一次。",
         "a2": "如已有把握,可直接手动 PROMOTE。",
         "a3": "或 CLEANUP 放弃实验并清除资源。",
-        "promotedContext": "已在样本不足时手动放量——上方判定早于该操作"
+        "promotedContext": "已在样本不足时手动部署——上方判定早于本次生产部署"
       },
       "significant": "统计显著",
       "notSignificant": "未达统计显著",
@@ -954,10 +954,10 @@
         "a1": "继续积累证据:给两个变体多打流量后重新启动实验(判定只计算一次)。",
         "a2": "PROMOTE 仍然可用,但这属于主观决策——仅凭当前数据不足以支持。",
         "a3": "或 CLEANUP 保留现有冠军——不做变更也是合理的结论。",
-        "promotedContext": "已在未达统计显著时手动放量——上方判定早于该操作",
+        "promotedContext": "已在未达统计显著时手动部署——上方判定早于本次生产部署",
         "confirmPromote": {
           "title": "在未达统计显著时放量",
-          "body": "该判定未达统计显著——领先可能只是噪声。继续放量会把生产流量切给它。确定继续?"
+          "body": "该判定未达统计显著——领先可能只是噪声。继续推广会停止 A/B 测试，并将 Treatment 作为生产配置部署。确定继续?"
         }
       },
       "list": {
@@ -981,6 +981,13 @@
     "start": "启动实验",
     "promote": "晋级",
     "promoted": "已晋级",
+    "legacyShift": "历史流量切换",
+    "legacyShiftHint": "该历史记录只把活跃 A/B 测试调整为 1/99，Treatment 尚未作为生产配置部署。",
+    "completePromotion": "完成生产推广",
+    "confirmCompletePromotion": {
+      "title": "完成生产推广",
+      "body": "将停止历史 A/B 测试，把已接受的 Treatment 应用到生产 Agent，并部署新的 runtime 版本。"
+    },
     "canaryTitle": "目标金丝雀",
     "ramp": "放量",
     "cleanup": "清理",
@@ -1009,6 +1016,7 @@
     "toolRecNoTools": "没有可分析的工具——请在下方填入工具后重新生成。",
     "toolRecFailed": "工具描述推荐失败：{{msg}}",
     "toolRecEmpty": "优化器未对所分析的工具描述给出修改建议。",
+    "toolBundleUnsupported": "该转换 runtime 只支持系统提示词 Bundle。工具描述实验需要重新转换生成新版 runtime。",
     "genSp": "生成提示词推荐",
     "genTd": "生成工具描述推荐",
     "currentLabel": "当前",
@@ -1033,7 +1041,8 @@
     "noChallenger": "没有其他可用 Agent——请先发布一个 v2 候选。",
     "harnessDisabled": "需先转换为 runtime",
     "harnessHint": "托管 harness agent 无法直接实验（backing runtime 锁定直调、不消费 config bundle）。请在 Agent 管理中将其转换为 runtime agent（转换 ⇄ RT），再在此选择转换后的 agent。",
-    "a2aDisabled": "A2A 协议——不消费 config-bundle"
+    "a2aDisabled": "A2A 协议——不消费 config-bundle",
+    "unsupportedHint": "只有活跃的 Launchpad 生成 HTTP runtime 和已验证的 harness 转换 runtime 可运行配置 Bundle 实验。"
   },
   "obs": {
     "kicker": "// 遥测层",

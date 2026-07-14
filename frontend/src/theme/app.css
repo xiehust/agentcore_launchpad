@@ -449,3 +449,33 @@ a:focus-visible,button:focus-visible,.btn:focus-visible,.selchip:focus-visible,.
 footer{margin-top:34px;display:flex;gap:14px;align-items:center;font-family:var(--mono);font-size:9.5px;color:var(--ink-3);letter-spacing:.1em}
 footer .sep{color:var(--line-2)}
 @media(max-width:1180px){.tiles,.tiles.five{grid-template-columns:repeat(2,1fr)}.grid-2,.reg-grid,.chat-grid,.eval-grid,.gov-grid,.cfg-grid,.obs-grid{grid-template-columns:1fr}.methods{grid-template-columns:1fr}}
+@media(max-width:720px){
+  .topbar{height:auto;min-height:52px;padding:8px 10px;gap:8px;flex-wrap:wrap}
+  .topbar .crumb,.topbar .syschip,.avatar span{display:none}
+  .topbar .right{gap:6px}
+  .brand{font-size:11px}
+  .layout{display:block;min-height:calc(100vh - 52px)}
+  .side{
+    position:static;height:auto;padding:5px 6px;flex-direction:row;overflow-x:auto;
+    border-right:0;border-bottom:1px solid var(--line);scrollbar-width:thin;
+  }
+  .side .label,.side .sys,.nav-item .idx{display:none}
+  .nav-item{
+    flex:0 0 auto;padding:7px 9px;border-left:0;border-bottom:2px solid transparent;
+    font-size:11px;
+  }
+  .nav-item.active{border-bottom-color:var(--amber)}
+  main{max-width:100%;min-width:0;padding:16px 10px 44px}
+  .eval-grid>*{min-width:0}
+  .vhead{gap:8px 12px;margin-bottom:14px}
+  .vhead h1{font-size:22px}
+  .vhead .meta{width:100%;margin-left:0}
+  .pbody{padding:12px}
+  .panel:has(> table){overflow-x:auto}
+  .panel > table{min-width:680px}
+  .verdict{align-items:flex-start;flex-wrap:wrap}
+  .toasts{left:10px;right:10px;max-width:none}
+  .confirm-backdrop{padding:12px}
+  .confirm-box{width:100%;max-width:440px}
+  footer{flex-wrap:wrap}
+}

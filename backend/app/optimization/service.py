@@ -19,6 +19,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
 from typing import Any
 
 import boto3
@@ -28,10 +29,14 @@ from botocore.awsrequest import AWSRequest
 
 from app.core.config import get_settings
 from app.core.db import SessionLocal
+from app.deployer.pipeline import create_deployment, execute_deploy_job
 from app.evaluation import agentcore_eval as ac
 from app.evaluation.scenarios import scenario_prompts
+from app.models.ledger import Agent, Deployment, Job
 from app.optimization.models import Experiment
+from app.schemas.agent import AgentSpec
 from app.services.agentcore.client import control_client, data_client
+from app.services.harness_convert import graft_config_bundle
 
 EXP_GATEWAY_NAME = "launchpad-exp-gw"
 TRAFFIC_PROMPTS = [
@@ -79,6 +84,23 @@ Progress = Callable[[str], None]
 
 def _spawn(target: Callable[[], None]) -> None:  # injectable for tests
     threading.Thread(target=target, daemon=True).start()
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def promotion_complete(artifacts: dict[str, Any]) -> bool:
+    promote = artifacts.get("promote") or {}
+    return bool(
+        promote.get("deployment_id")
+        and promote.get("ab_test_status") == "STOPPED"
+    )
+
+
+def legacy_promotion(artifacts: dict[str, Any]) -> bool:
+    promote = artifacts.get("promote") or {}
+    return bool(promote.get("after_weights") and not promotion_complete(artifacts))
 
 
 def run_action(exp_id: str, action: str, fn: Callable[[Progress], Any]) -> None:
@@ -161,13 +183,70 @@ def discover_agent_tools(spec: dict[str, Any]) -> dict[str, str]:
             # docs, not part of the description contract
             summary = re.split(r"\n\s*\n|\n\s*(?:Args|Returns|Raises):", doc)[0]
             tools.setdefault(name, " ".join(summary.split())[:500])
+    tools.update({
+        str(name): str(description)
+        for name, description in (spec.get("tool_description_overrides") or {}).items()
+    })
     return tools
+
+
+def experiment_capability(agent_row: Any) -> dict[str, Any]:
+    """Backend-owned config-bundle experiment capability projection."""
+    spec = agent_row.spec or {}
+    base = {
+        "eligible": False,
+        "system_prompt": False,
+        "tool_descriptions": False,
+        "reason": None,
+    }
+    if agent_row.method != "zip_runtime":
+        return {
+            **base,
+            "reason": (
+                "Only Launchpad-managed HTTP runtime agents support "
+                "config-bundle experiments."
+            ),
+        }
+    if spec.get("protocol", "http") != "http":
+        return {
+            **base,
+            "reason": "A2A protocol agents do not consume routed configuration bundles.",
+        }
+    if spec.get("source_harness"):
+        from app.services.harness_convert import GRAFT_START, has_config_bundle_graft
+
+        main_py = (spec.get("code_bundle") or {}).get("main.py", "")
+        if not has_config_bundle_graft(main_py):
+            return {
+                **base,
+                "reason": "This converted runtime is missing the Launchpad config-bundle graft.",
+            }
+        return {
+            **base,
+            "eligible": True,
+            "system_prompt": True,
+            "tool_descriptions": GRAFT_START in main_py,
+        }
+    if spec.get("code") or spec.get("code_bundle"):
+        return {
+            **base,
+            "reason": (
+                "Custom runtime source is not verified to consume "
+                "Launchpad configuration bundles."
+            ),
+        }
+    return {
+        **base,
+        "eligible": True,
+        "system_prompt": True,
+        "tool_descriptions": True,
+    }
 
 
 def _agent_meta(exp: Experiment) -> dict[str, Any]:
     """Runtime facts captured at create time; rebuilt lazily for old rows."""
     meta = exp.artifacts.get("agent_meta")
-    if meta and "tools" in meta:
+    if meta and "tools" in meta and "experiment_capability" in meta:
         return meta
     from app.models.ledger import Agent  # local import — avoids cycle at module load
 
@@ -176,9 +255,13 @@ def _agent_meta(exp: Experiment) -> dict[str, Any]:
         agent_row = db.get(Agent, exp.agent_id)
     finally:
         db.close()
-    if meta:  # pre-tools row — backfill discovery, keep captured facts
+    if meta:  # old row — backfill newer projections, keep captured facts
         if agent_row is not None:
-            meta = {**meta, "tools": discover_agent_tools(agent_row.spec or {})}
+            meta = {
+                **meta,
+                "tools": discover_agent_tools(agent_row.spec or {}),
+                "experiment_capability": experiment_capability(agent_row),
+            }
             _update(exp.id, artifact={"agent_meta": meta})
         return meta
     if agent_row is None:
@@ -192,6 +275,7 @@ def _agent_meta(exp: Experiment) -> dict[str, Any]:
         "runtime_name": rt_name(control, agent_row.resource_id),
         "system_prompt": (agent_row.spec or {}).get("system_prompt", ""),
         "tools": discover_agent_tools(agent_row.spec or {}),
+        "experiment_capability": experiment_capability(agent_row),
     }
     _update(exp.id, artifact={"agent_meta": meta})
     return meta
@@ -643,7 +727,10 @@ def compute_verdict(metrics: list[dict[str, Any]], min_n: int = 3) -> dict[str, 
 
 # ─── stepwise actions ────────────────────────────────────────────────────────
 ASYNC_ACTIONS = frozenset(
-    {"recommend", "gateway", "abtest", "traffic", "verdict", "canary", "cleanup"}
+    {
+        "recommend", "gateway", "abtest", "traffic", "verdict", "promote",
+        "canary", "cleanup",
+    }
 )
 
 _ACTION_PREREQS: dict[str, tuple[str, str]] = {
@@ -661,6 +748,10 @@ _ACTION_PREREQS: dict[str, tuple[str, str]] = {
 
 def stage_not_ready_reason(exp: Experiment, action: str) -> str | None:
     """None when the action's prerequisite artifact exists, else the reason."""
+    if action == "canary":
+        if not promotion_complete(exp.artifacts):
+            return "complete the production promotion first"
+        return None
     if action == "bundles":
         rec = exp.artifacts.get("recommend") or {}
         # old auto-pipeline rows never wrote accepted_* — an existing bundles
@@ -802,6 +893,7 @@ def start_experiment(agent_row: Any) -> Experiment:
         "runtime_name": rt_name(control, agent_row.resource_id),
         "system_prompt": (agent_row.spec or {}).get("system_prompt", ""),
         "tools": discover_agent_tools(agent_row.spec or {}),
+        "experiment_capability": experiment_capability(agent_row),
     }
     db = SessionLocal()
     try:
@@ -843,25 +935,136 @@ def update_weights_with_pause(data: Any, ab_test_id: str, variants: list[dict]) 
         data.update_ab_test(abTestId=ab_test_id, executionStatus="RUNNING")
 
 
-def action_promote(exp: Experiment) -> dict[str, Any]:
-    """Treatment becomes the default: route 100% of traffic to it."""
+def _stop_ab_test(
+    data: Any, ab_test_id: str, progress: Progress
+) -> dict[str, Any]:
+    current = ac.get_ab_test(data, ab_test_id=ab_test_id)
+    if current.get("executionStatus") != "STOPPED":
+        progress("stopping configuration-bundle A/B test…")
+        data.update_ab_test(abTestId=ab_test_id, executionStatus="STOPPED")
+    for _ in range(60):
+        current = ac.get_ab_test(data, ab_test_id=ab_test_id)
+        status = current.get("executionStatus")
+        if status == "STOPPED":
+            return current
+        progress(f"waiting for A/B test to stop · status {status or '?'}")
+        _sleep(3)
+    raise TimeoutError(f"A/B test {ab_test_id} did not reach STOPPED")
+
+
+def act_promote(exp_id: str, progress: Progress) -> dict[str, Any]:
+    """Stop the A/B test, apply treatment defaults, and deploy in place."""
+    _update(exp_id, status="ready")
+    exp = _get(exp_id)
     data = data_client()
     ab_test_id = exp.artifacts["abtest"]["ab_test_id"]
-    before = ac.get_ab_test(data, ab_test_id=ab_test_id)
-    bundles = exp.artifacts["bundles"]
-    # UpdateABTest weights have a floor of 1 — "promoted" = treatment at 99%.
-    variants = ac.config_bundle_variants(
-        bundles["control"]["arn"], bundles["control"]["version"],
-        bundles["treatment"]["arn"], bundles["treatment"]["version"],
-        control_weight=1, treatment_weight=99,
-    )
-    update_weights_with_pause(data, ab_test_id, variants)
-    after = ac.get_ab_test(data, ab_test_id=ab_test_id)
-    result = {
-        "before_weights": {v["name"]: v["weight"] for v in before.get("variants", [])},
-        "after_weights": {v["name"]: v["weight"] for v in after.get("variants", [])},
+    stopped = _stop_ab_test(data, ab_test_id, progress)
+    prior = exp.artifacts.get("promote") or {}
+    attempt = {
+        "ab_test_id": ab_test_id,
+        "ab_test_status": stopped.get("executionStatus"),
+        "stopped_at": _now(),
     }
-    _update(exp.id, status="promoted", stage="promote", artifact={"promote": result})
+    _update(
+        exp_id,
+        artifact={"promotion_attempt": attempt},
+    )
+
+    rec = exp.artifacts.get("recommend") or {}
+    meta = exp.artifacts.get("agent_meta") or {}
+    db = SessionLocal()
+    try:
+        agent = db.get(Agent, exp.agent_id)
+        if agent is None or agent.status == "deleted":
+            raise RuntimeError("production agent no longer exists")
+        spec_data = dict(agent.spec or {})
+        prompt = str(
+            rec.get("accepted_prompt")
+            or rec.get("recommended_prompt")
+            or meta.get("system_prompt")
+            or spec_data.get("system_prompt")
+            or ""
+        ).strip()
+        accepted_tools = {
+            str(name): str(description)
+            for name, description in (
+                rec.get("accepted_tool_descriptions") or {}
+            ).items()
+        }
+        overrides = dict(spec_data.get("tool_description_overrides") or {})
+        overrides.update(accepted_tools)
+        spec_data.update({
+            "name": agent.name,
+            "method": agent.method,
+            "system_prompt": prompt,
+            "tool_description_overrides": overrides,
+        })
+        spec = AgentSpec(**spec_data)
+        if spec.source_harness:
+            bundle = dict(spec.code_bundle or {})
+            if "main.py" not in bundle:
+                raise RuntimeError("converted runtime bundle has no main.py")
+            bundle["main.py"] = graft_config_bundle(
+                bundle["main.py"],
+                default_system_prompt=prompt,
+                tool_description_overrides=overrides,
+            )
+            spec = spec.model_copy(update={"code_bundle": bundle})
+        agent.spec = spec.model_dump()
+        agent.status = "deploying"
+        agent.error = None
+        deployment, job = create_deployment(
+            db, agent, mode="update", skip_register=True
+        )
+        deployment_id = deployment.id
+        job_id = job.id
+    finally:
+        db.close()
+
+    _update(
+        exp_id,
+        artifact={
+            "promotion_attempt": {
+                **attempt,
+                "deployment_id": deployment_id,
+                "job_id": job_id,
+            }
+        },
+    )
+    progress("deploying accepted treatment to the production runtime…")
+    execute_deploy_job(job_id)
+    db = SessionLocal()
+    try:
+        deployment = db.get(Deployment, deployment_id)
+        job = db.get(Job, job_id)
+        agent = db.get(Agent, exp.agent_id)
+        if (
+            deployment is None
+            or job is None
+            or agent is None
+            or deployment.status != "succeeded"
+            or job.status != "succeeded"
+        ):
+            detail = job.error if job is not None else "deployment ledger row missing"
+            raise RuntimeError(f"production deployment failed: {detail}")
+        agent_version = agent.version
+    finally:
+        db.close()
+
+    result = {
+        "ab_test_id": ab_test_id,
+        "ab_test_status": "STOPPED",
+        "agent_id": exp.agent_id,
+        "deployment_id": deployment_id,
+        "job_id": job_id,
+        "agent_version": agent_version,
+        "applied_system_prompt": True,
+        "applied_tool_descriptions": sorted(accepted_tools),
+        "completed_at": _now(),
+    }
+    if prior.get("after_weights"):
+        result["prior_shift"] = dict(prior["after_weights"])
+    _update(exp_id, status="promoted", stage="promote", artifact={"promote": result})
     return result
 
 

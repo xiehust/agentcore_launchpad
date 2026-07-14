@@ -32,27 +32,83 @@ _PROMPT_CONST_RE = re.compile(
     r'^DEFAULT_SYSTEM_PROMPT\s*=\s*(?:"""|\'\'\')', re.MULTILINE
 )
 _PROMPT_USE = "system_prompt=DEFAULT_SYSTEM_PROMPT"
+_RESOLVED_PROMPT_USE = "system_prompt=resolve_system_prompt()"
+_AGENT_USE = "    agent = get_or_create_agent(session_id, user_id)"
+_AGENT_APPLY = "    _launchpad_apply_tool_descriptions(agent)"
 _ENV_KEY_RE = re.compile(r'os\.(?:environ\.get|getenv)\(\s*["\']([A-Z0-9_]+)["\']')
 
-BUNDLE_GRAFT = '''
+GRAFT_START = "# <launchpad-config-bundle:v2>"
+GRAFT_END = "# </launchpad-config-bundle:v2>"
+_LEGACY_GRAFT_RE = re.compile(
+    r"\n# ─── Launchpad platform contract: config bundles \(A/B experiments\)"
+    r"[\s\S]*?# ─{10,}\n"
+)
 
-# ─── Launchpad platform contract: config bundles (A/B experiments) ───────────
+
+def _bundle_graft(
+    default_system_prompt: str | None,
+    tool_description_overrides: dict[str, str] | None,
+) -> str:
+    prompt_default = (
+        repr(default_system_prompt)
+        if default_system_prompt is not None
+        else "DEFAULT_SYSTEM_PROMPT"
+    )
+    tool_defaults = repr(tool_description_overrides or {})
+    return f'''
+
+{GRAFT_START}
 from bedrock_agentcore.runtime.context import BedrockAgentCoreContext as _LPContext
+
+_LAUNCHPAD_DEFAULT_SYSTEM_PROMPT = {prompt_default}
+_LAUNCHPAD_DEFAULT_TOOL_DESCRIPTIONS = {tool_defaults}
 
 
 def _launchpad_config_bundle():
-    """Active Launchpad config bundle for this request ({} when none routed)."""
+    """Active Launchpad config bundle for this request ({{}} when none routed)."""
     try:
-        return _LPContext.get_config_bundle() or {}
+        return _LPContext.get_config_bundle() or {{}}
     except Exception:
-        return {}
+        return {{}}
 
 
 def resolve_system_prompt() -> str:
-    """Bundle-provided system prompt wins; the exported default is the fallback."""
-    return str(_launchpad_config_bundle().get("system_prompt") or DEFAULT_SYSTEM_PROMPT)
-# ──────────────────────────────────────────────────────────────────────────────
+    """Bundle prompt wins; the promoted production prompt is the fallback."""
+    return str(
+        _launchpad_config_bundle().get("system_prompt")
+        or _LAUNCHPAD_DEFAULT_SYSTEM_PROMPT
+    )
+
+
+def _launchpad_tool_descriptions():
+    bundle = _launchpad_config_bundle()
+    descriptions = dict(_LAUNCHPAD_DEFAULT_TOOL_DESCRIPTIONS)
+    descriptions.update(bundle.get("tool_descriptions") or {{}})
+    tools = bundle.get("tools") or {{}}
+    if isinstance(tools, dict):
+        descriptions.update({{
+            name: value.get("description", "")
+            for name, value in tools.items()
+            if isinstance(value, dict)
+        }})
+    return descriptions
+
+
+def _launchpad_apply_tool_descriptions(agent):
+    registry = getattr(getattr(agent, "tool_registry", None), "registry", {{}})
+    for name, description in _launchpad_tool_descriptions().items():
+        tool = registry.get(name) if hasattr(registry, "get") else None
+        if tool is not None and description:
+            try:
+                tool.tool_spec["description"] = str(description)
+            except Exception:
+                pass
+    return agent
+{GRAFT_END}
 '''
+
+
+BUNDLE_GRAFT = _bundle_graft(None, {})
 
 
 class ConversionError(Exception):
@@ -134,24 +190,58 @@ def export_harness(harness_arn: str) -> dict[str, str]:
     return files
 
 
-def graft_config_bundle(main_py: str) -> str:
-    """Make the exported entrypoint consume launchpad config bundles."""
+def has_config_bundle_graft(main_py: str) -> bool:
+    """Whether source contains a Launchpad-owned prompt bundle contract."""
+    return (
+        GRAFT_START in main_py
+        or (
+            "Launchpad platform contract: config bundles" in main_py
+            and "def resolve_system_prompt()" in main_py
+        )
+    )
+
+
+def graft_config_bundle(
+    main_py: str,
+    *,
+    default_system_prompt: str | None = None,
+    tool_description_overrides: dict[str, str] | None = None,
+) -> str:
+    """Insert or upgrade the owned config-bundle contract idempotently."""
     match = _PROMPT_CONST_RE.search(main_py)
     if match is None:
         raise ConversionError(
             "graft anchor missing: DEFAULT_SYSTEM_PROMPT constant not found "
             "(agentcore CLI codegen changed?)"
         )
-    if _PROMPT_USE not in main_py:
+    if _PROMPT_USE not in main_py and _RESOLVED_PROMPT_USE not in main_py:
         raise ConversionError(
             "graft anchor missing: system_prompt=DEFAULT_SYSTEM_PROMPT "
             "construction site not found (agentcore CLI codegen changed?)"
         )
-    # insert the helpers right after the (triple-quoted) prompt constant ends
-    quote = main_py[match.end() - 3:match.end()]
-    const_end = main_py.index(quote, match.end()) + 3
-    grafted = main_py[:const_end] + BUNDLE_GRAFT + main_py[const_end:]
-    return grafted.replace(_PROMPT_USE, "system_prompt=resolve_system_prompt()")
+    graft = _bundle_graft(default_system_prompt, tool_description_overrides)
+    if GRAFT_START in main_py:
+        start = main_py.index(GRAFT_START)
+        end = main_py.index(GRAFT_END, start) + len(GRAFT_END)
+        grafted = main_py[:start] + graft.strip("\n") + main_py[end:]
+    elif _LEGACY_GRAFT_RE.search(main_py):
+        grafted = _LEGACY_GRAFT_RE.sub(graft, main_py, count=1)
+    else:
+        # Insert helpers immediately after the triple-quoted prompt constant.
+        quote = main_py[match.end() - 3:match.end()]
+        const_end = main_py.index(quote, match.end()) + 3
+        grafted = main_py[:const_end] + graft + main_py[const_end:]
+
+    grafted = grafted.replace(_PROMPT_USE, _RESOLVED_PROMPT_USE)
+    apply_line = f"{_AGENT_USE}\n{_AGENT_APPLY}"
+    if _AGENT_APPLY not in grafted:
+        if _AGENT_USE not in grafted:
+            raise ConversionError(
+                "graft anchor missing: constructed agent lookup not found "
+                "(agentcore CLI codegen changed?)"
+            )
+        grafted = grafted.replace(_AGENT_USE, apply_line, 1)
+    return grafted
 
 
 def discover_env(files: dict[str, str]) -> dict[str, str | None]:
@@ -203,7 +293,12 @@ def build_conversion_spec(
     new_name: str,
 ) -> AgentSpec:
     grafted = dict(files)
-    grafted["main.py"] = graft_config_bundle(files["main.py"])
+    source_spec = source_agent.spec or {}
+    grafted["main.py"] = graft_config_bundle(
+        files["main.py"],
+        default_system_prompt=source_spec.get("system_prompt"),
+        tool_description_overrides=source_spec.get("tool_description_overrides"),
+    )
     env_contract = discover_env(grafted)
     wired = {k: v for k, v in env_contract.items() if v is not None}
     notes = {"system_prompt": "wired (config-bundle override grafted)",
@@ -215,12 +310,12 @@ def build_conversion_spec(
             f"wired ({key})" if value is not None
             else f"not wired — {key} unset; exported code degrades gracefully"
         )
-    source_spec = source_agent.spec or {}
     return AgentSpec(
         name=new_name,
         method="zip_runtime",
         model_id=source_spec.get("model_id") or AgentSpec.model_fields["model_id"].default,
         system_prompt=source_spec.get("system_prompt") or "(baked into exported code)",
+        tool_description_overrides=source_spec.get("tool_description_overrides") or {},
         requirements=flatten_requirements(grafted, base_requirements),
         code_bundle={k: v for k, v in grafted.items() if k != "pyproject.toml"},
         source_harness={

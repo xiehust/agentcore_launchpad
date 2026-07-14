@@ -99,6 +99,43 @@ def test_bundle_overrides_prompt_and_tool_descriptions(template_module, monkeypa
     )
 
 
+def test_documented_bundle_tool_shape_overrides_legacy(template_module, monkeypatch):
+    bundle = {
+        "tool_descriptions": {"calculator": "legacy description"},
+        "tools": {"calculator": {"description": "documented description"}},
+    }
+    monkeypatch.setattr(
+        template_module.BedrockAgentCoreContext,
+        "get_config_bundle",
+        staticmethod(lambda: bundle),
+    )
+    assert (
+        template_module.resolve_tool_description("calculator")
+        == "documented description"
+    )
+
+
+def test_promoted_tool_defaults_are_rendered(tmp_path: Path, monkeypatch):
+    spec_with_defaults = SPEC.model_copy(update={
+        "tool_description_overrides": {"calculator": "promoted description"},
+    })
+    fake_strands = types.ModuleType("strands")
+    fake_strands.Agent = lambda **kwargs: types.SimpleNamespace(**kwargs)
+    fake_strands.tool = _FakeTool
+    monkeypatch.setitem(sys.modules, "strands", fake_strands)
+    target = tmp_path / "promoted_main.py"
+    target.write_text(render_main_py(spec_with_defaults), encoding="utf-8")
+    module_spec = importlib.util.spec_from_file_location("promoted_main", target)
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+    monkeypatch.setattr(
+        module.BedrockAgentCoreContext,
+        "get_config_bundle",
+        staticmethod(lambda: {}),
+    )
+    assert module.resolve_tool_description("calculator") == "promoted description"
+
+
 def test_template_tools_work(template_module):
     assert template_module.calculator("2+2*3") == "8"
     assert template_module.current_utc_time().startswith("20")

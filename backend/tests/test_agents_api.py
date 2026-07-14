@@ -34,6 +34,22 @@ def test_create_agent_returns_job_and_stages(client, no_real_deploy):
         "generate", "package", "provision", "deploy", "register",
     ]
     assert all(s["status"] == "pending" for s in stages)
+    assert body["agent"]["experiment_capability"]["eligible"] is False
+
+
+def test_agent_api_projects_experiment_capability(client):
+    spec = {
+        "name": "bundle-agent",
+        "method": "zip_runtime",
+        "system_prompt": "Answer concisely.",
+    }
+    body = client.post("/api/agents", json=spec).json()["agent"]
+    assert body["experiment_capability"] == {
+        "eligible": True,
+        "system_prompt": True,
+        "tool_descriptions": True,
+        "reason": None,
+    }
 
 
 def test_duplicate_name_conflict(client):

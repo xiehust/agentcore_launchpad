@@ -30,7 +30,13 @@ export interface ExperimentInfo {
   created_at: string | null;
   artifacts: {
     agent_meta?: { system_prompt?: string; name?: string;
-      tools?: Record<string, string> };
+      tools?: Record<string, string>;
+      experiment_capability?: {
+        eligible: boolean;
+        system_prompt: boolean;
+        tool_descriptions: boolean;
+        reason: string | null;
+      } };
     recommend?: {
       // each generator writes only its own keys — either side may be absent
       recommended_prompt?: string;
@@ -53,7 +59,26 @@ export interface ExperimentInfo {
       dataset_name?: string };
     verdict?: { verdict: string; avg_delta?: number; n?: number;
       significant?: boolean; metrics: ABMetric[] };
-    promote?: { after_weights: Record<string, number> };
+    promotion_attempt?: {
+      ab_test_id: string;
+      ab_test_status: string;
+      stopped_at: string;
+      deployment_id?: string;
+      job_id?: string;
+    };
+    promote?: {
+      after_weights?: Record<string, number>;
+      prior_shift?: Record<string, number>;
+      ab_test_id?: string;
+      ab_test_status?: string;
+      agent_id?: string;
+      deployment_id?: string;
+      job_id?: string;
+      agent_version?: string | null;
+      applied_system_prompt?: boolean;
+      applied_tool_descriptions?: string[];
+      completed_at?: string;
+    };
     canary?: {
       canary_ab_test_id: string;
       weights?: Record<string, number>;
@@ -176,8 +201,7 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
   const toast = useToast();
   const [experiments, setExperiments] = useState<ExperimentInfo[]>([]);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
-  const [harnessAgents, setHarnessAgents] = useState<AgentInfo[]>([]);
-  const [a2aAgents, setA2aAgents] = useState<AgentInfo[]>([]);
+  const [unsupportedAgents, setUnsupportedAgents] = useState<AgentInfo[]>([]);
   const [datasets, setDatasets] = useState<DatasetInfo[]>([]);
   const [busy, setBusy] = useState(false);
   const [startAgentId, setStartAgentId] = useState("");
@@ -209,18 +233,12 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
     api
       .listAgents()
       .then((res) => {
-        // Experiments target runtime-backed agents (zip_runtime / studio /
-        // container) — harness agents are rejected by POST /api/experiments
-        // (invoke-locked backing runtime, no config-bundle consumption), and
-        // A2A-protocol agents likewise (their server never reads config
-        // bundles). Both render as disabled options with the reason.
         const active = res.agents.filter((a) => a.status === "active");
-        const isA2a = (a: AgentInfo) =>
-          (a.spec as { protocol?: string } | undefined)?.protocol === "a2a";
-        const eligible = active.filter((a) => a.method !== "harness" && !isA2a(a));
+        const eligible = active.filter((a) => a.experiment_capability.eligible);
         setAgents(eligible);
-        setHarnessAgents(active.filter((a) => a.method === "harness"));
-        setA2aAgents(active.filter(isA2a));
+        setUnsupportedAgents(
+          active.filter((a) => !a.experiment_capability.eligible),
+        );
         setStartAgentId((prev) => prev || (eligible[0]?.id ?? ""));
       })
       .catch(() => {});
@@ -271,6 +289,19 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
   const a = exp?.artifacts ?? {};
   const verdict = a.verdict;
   const canary = a.canary;
+  const promotion = a.promote;
+  const promotionComplete = !!(
+    promotion?.deployment_id && promotion.ab_test_status === "STOPPED"
+  );
+  const legacyPromotion = !!(promotion?.after_weights && !promotionComplete);
+  const promotionRunning = exp?.running_action === "promote";
+  const promotionFailed = !promotionRunning
+    && !!exp?.error?.startsWith("promote: ");
+  const toolDescriptionsSupported =
+    a.agent_meta?.experiment_capability?.tool_descriptions ?? true;
+  useEffect(() => {
+    if (!toolDescriptionsSupported) setGenTd(false);
+  }, [exp?.id, toolDescriptionsSupported]);
   const canaryWeights = canary?.after_weights ?? canary?.weights;
   const insufficient = !!verdict?.verdict.includes("insufficient");
   // significant:false means the service compared the arms and the delta is
@@ -410,22 +441,18 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
               {ag.name} · {ag.method}
             </option>
           ))}
-          {harnessAgents.map((ag) => (
+          {unsupportedAgents.map((ag) => (
             <option key={ag.id} value="" disabled style={{ background: "#141816" }}>
-              {ag.name} · harness — {t("expPage.harnessDisabled")}
-            </option>
-          ))}
-          {a2aAgents.map((ag) => (
-            <option key={ag.id} value="" disabled style={{ background: "#141816" }}>
-              {ag.name} · a2a — {t("expPage.a2aDisabled")}
+              {ag.name} · {ag.method} — {ag.experiment_capability.reason}
             </option>
           ))}
         </select>
       </div>
-      {harnessAgents.length > 0 && (
-        <div className="note" style={{ marginBottom: 10 }} data-testid="harness-hint">
+      {unsupportedAgents.length > 0 && (
+        <div className="note" style={{ marginBottom: 10 }}
+             data-testid="unsupported-agent-hint">
           <span className="i">[i]</span>
-          <span>{t("expPage.harnessHint")}</span>
+          <span>{t("expPage.unsupportedHint")}</span>
         </div>
       )}
       {hasRunning && (
@@ -551,6 +578,7 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
 
   const recTypeCheckbox = (
     label: string, checked: boolean, set: (v: boolean) => void, testid: string,
+    disabled = false,
   ) => (
     <label className="mono" style={{ fontSize: 10.5, display: "inline-flex",
                                      alignItems: "center", gap: 5,
@@ -558,6 +586,7 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
       <input
         type="checkbox"
         checked={checked}
+        disabled={disabled}
         data-testid={testid}
         onChange={(e) => set(e.target.checked)}
       />
@@ -594,18 +623,27 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
             {recTypeCheckbox(t("expPage.recTypePrompt"), genSp, setGenSp,
                              "rec-type-sp")}
             {recTypeCheckbox(t("expPage.recTypeTools"), genTd, setGenTd,
-                             "rec-type-td")}
+                             "rec-type-td", !toolDescriptionsSupported)}
           </div>
-          {genTd && <div style={{ marginBottom: 8 }}>{toolInputsEditor}</div>}
+          {genTd && toolDescriptionsSupported && (
+            <div style={{ marginBottom: 8 }}>{toolInputsEditor}</div>
+          )}
+          {!toolDescriptionsSupported && (
+            <div className="mono dim" style={{ fontSize: 10, marginBottom: 8 }}>
+              {t("expPage.toolBundleUnsupported")}
+            </div>
+          )}
           {actionBtn("recommend", t("expPage.generateRec"), {
             primary: true,
-            disabled: (!genSp && !genTd) || (genTd && toolInputsBad),
+            disabled: (!genSp && !(genTd && toolDescriptionsSupported))
+              || (genTd && toolDescriptionsSupported && toolInputsBad),
             extra: {
               recommend_types: [
                 ...(genSp ? ["system_prompt"] : []),
-                ...(genTd ? ["tool_descriptions"] : []),
+                ...(genTd && toolDescriptionsSupported ? ["tool_descriptions"] : []),
               ],
-              ...(genTd && toolInputs ? { recommend_tools: toolInputs } : {}),
+              ...(genTd && toolDescriptionsSupported && toolInputs
+                ? { recommend_tools: toolInputs } : {}),
             },
           })}
         </>
@@ -653,7 +691,8 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
                   ▸ {t("expPage.genSp")}
                 </Btn>
               )}
-              {(!tdRan || (tdRan && Object.keys(recToolDescs).length === 0)) && (
+              {toolDescriptionsSupported
+                && (!tdRan || (tdRan && Object.keys(recToolDescs).length === 0)) && (
                 <div style={{ marginTop: !spDone ? 8 : 0 }}>
                   {toolInputsEditor}
                   <div style={{ marginTop: 6 }}>
@@ -942,7 +981,8 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
                 </span>
               )}
             </span>
-            {!a.promote && (
+            {!promotionComplete && !legacyPromotion && !promotionRunning
+              && !promotionFailed && (
               // weak evidence (non-significant or no samples at all)
               // demotes PROMOTE to a secondary, confirm-gated action
               insufficient || nonSignificant ? (
@@ -966,14 +1006,74 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
                 </Btn>
               )
             )}
-            {a.promote && (
+            {!promotionComplete && !legacyPromotion
+              && (promotionRunning
+                || (promotionFailed && !(insufficient || nonSignificant)))
+              && actionBtn("promote", t("expPage.promote"), {
+                primary: !(insufficient || nonSignificant),
+              })}
+            {!promotionComplete && !legacyPromotion && promotionFailed
+              && (insufficient || nonSignificant) && (
+                <Btn
+                  style={{ marginLeft: "auto" }}
+                  disabled={busy || !!exp.running_action}
+                  data-testid="promote-retry-btn"
+                  onClick={() => setConfirmPromote(true)}
+                >
+                  ↻ {t("expPage.retry")}
+                </Btn>
+              )}
+            {legacyPromotion && (
+              <div style={{ marginLeft: "auto", display: "flex", gap: 8,
+                            alignItems: "center", flexWrap: "wrap" }}>
+                <Chip tone="warn" icon="!" data-testid="legacy-promotion-chip">
+                  {t("expPage.legacyShift")} · T1{" "}
+                  {promotion?.after_weights?.T1 ?? 99}%
+                </Chip>
+                {promotionRunning
+                  ? actionBtn("promote", t("expPage.completePromotion"))
+                  : (
+                    <Btn
+                      disabled={busy || !!exp.running_action}
+                      data-testid="complete-promotion-btn"
+                      onClick={() => setConfirmPromote(true)}
+                    >
+                      {promotionFailed
+                        ? `↻ ${t("expPage.retry")}`
+                        : `▸ ${t("expPage.completePromotion")}`}
+                    </Btn>
+                  )}
+              </div>
+            )}
+            {promotionComplete && (
               <Chip tone="good" icon="✓" style={{ marginLeft: "auto" }}>
-                {t("expPage.promoted")} · T1{" "}
-                {a.promote.after_weights?.T1 ?? 100}%
+                {t("expPage.promoted")} · v{promotion?.agent_version ?? "—"}
               </Chip>
             )}
           </div>
-          {(insufficient || nonSignificant) && a.promote && (
+          {legacyPromotion && (
+            <div className="note" style={{ borderColor: "var(--warn)", marginTop: 8 }}
+                 data-testid="legacy-promotion-note">
+              <span className="i" style={{ color: "var(--warn)" }}>[!]</span>
+              <span>{t("expPage.legacyShiftHint")}</span>
+            </div>
+          )}
+          {promotionFailed && legacyPromotion && (
+            <div className="note" style={{ borderColor: "var(--crit)", marginTop: 6 }}
+                 data-testid="action-error-promote">
+              <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
+              <span className="mono" style={{ fontSize: 10.5 }}>{exp.error}</span>
+            </div>
+          )}
+          {promotionFailed && !legacyPromotion
+            && (insufficient || nonSignificant) && (
+              <div className="note" style={{ borderColor: "var(--crit)", marginTop: 6 }}
+                   data-testid="action-error-promote">
+                <span className="i" style={{ color: "var(--crit)" }}>[✕]</span>
+                <span className="mono" style={{ fontSize: 10.5 }}>{exp.error}</span>
+              </div>
+            )}
+          {(insufficient || nonSignificant) && promotionComplete && (
             <div
               className="mono dim"
               data-testid="promoted-context"
@@ -984,7 +1084,7 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
                 : t("evalPage.experiment.nonsig.promotedContext")}
             </div>
           )}
-          {insufficient && !a.promote && (
+          {insufficient && !promotionComplete && (
             <div
               className="note"
               style={{ borderColor: "var(--warn)", marginTop: 8 }}
@@ -999,7 +1099,7 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
               </span>
             </div>
           )}
-          {nonSignificant && !a.promote && (
+          {nonSignificant && !promotionComplete && (
             <div
               className="note"
               style={{ borderColor: "var(--warn)", marginTop: 8 }}
@@ -1023,7 +1123,7 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
     ? agents.filter((ag) => ag.id !== exp.agent_id)
     : [];
 
-  const canaryCard = exp && !!a.promote && (
+  const canaryCard = exp && promotionComplete && (
     <StageCard
       id="canary" index={6} title={t("expPage.canaryTitle")}
       active={activeCard === "post" && !canaryWeights}
@@ -1092,7 +1192,7 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
 
   const cleanupCard = exp && (
     <StageCard
-      id="cleanup" index={a.promote ? 7 : 6} title={t("expPage.card.cleanup")}
+      id="cleanup" index={promotionComplete ? 7 : 6} title={t("expPage.card.cleanup")}
       active={false} done={!!a.cleanup}
     >
       {!a.cleanup && (
@@ -1247,9 +1347,12 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
                     {verdictHeadline}
                     {verdict?.significant === true &&
                       ` · ✓ ${t("evalPage.experiment.significant")}`}
-                    {a.promote &&
-                      ` · ${t("expPage.promoted")} T1 ${
-                        a.promote.after_weights?.T1 ?? 100}%`}
+                    {promotionComplete
+                      && ` · ${t("expPage.promoted")} v${
+                        promotion?.agent_version ?? "—"}`}
+                    {legacyPromotion
+                      && ` · ${t("expPage.legacyShift")} T1 ${
+                        promotion?.after_weights?.T1 ?? 99}%`}
                   </span>
                 </div>
                 <div className="kv">
@@ -1258,7 +1361,7 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
                     {exp.created_at ? new Date(exp.created_at).toLocaleString() : "—"}
                   </span>
                 </div>
-                {a.promote && (insufficient || nonSignificant) && (
+                {promotionComplete && (insufficient || nonSignificant) && (
                   <div
                     className="mono dim"
                     data-testid="promoted-context"
@@ -1335,9 +1438,15 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
               />
               <ConfirmDialog
                 open={confirmPromote}
-                title={t("evalPage.experiment.nonsig.confirmPromote.title")}
-                body={t("evalPage.experiment.nonsig.confirmPromote.body")}
-                confirmLabel={t("expPage.promote")}
+                title={legacyPromotion
+                  ? t("expPage.confirmCompletePromotion.title")
+                  : t("evalPage.experiment.nonsig.confirmPromote.title")}
+                body={legacyPromotion
+                  ? t("expPage.confirmCompletePromotion.body")
+                  : t("evalPage.experiment.nonsig.confirmPromote.body")}
+                confirmLabel={legacyPromotion
+                  ? t("expPage.completePromotion")
+                  : t("expPage.promote")}
                 onConfirm={() => {
                   setConfirmPromote(false);
                   void onAction(exp.id, "promote");

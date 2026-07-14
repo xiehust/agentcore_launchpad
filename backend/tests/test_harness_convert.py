@@ -22,7 +22,10 @@ PYPROJECT = (FIXTURES / "harness_export_pyproject.toml").read_text()
 # ─── graft ───────────────────────────────────────────────────────────────────
 def test_graft_inserts_bundle_contract_on_real_export():
     grafted = hc.graft_config_bundle(MAIN_PY)
+    assert hc.GRAFT_START in grafted and hc.GRAFT_END in grafted
     assert "def resolve_system_prompt()" in grafted
+    assert "def _launchpad_apply_tool_descriptions(agent)" in grafted
+    assert "_launchpad_apply_tool_descriptions(agent)" in grafted
     assert "system_prompt=resolve_system_prompt()" in grafted
     assert "system_prompt=DEFAULT_SYSTEM_PROMPT" not in grafted
     # the baked default remains the fallback
@@ -32,6 +35,41 @@ def test_graft_inserts_bundle_contract_on_real_export():
         "system_prompt=resolve_system_prompt()"
     )
     assert grafted.count("def resolve_system_prompt") == 1
+
+
+def test_graft_is_idempotent_and_upgrades_promoted_defaults():
+    first = hc.graft_config_bundle(MAIN_PY)
+    upgraded = hc.graft_config_bundle(
+        first,
+        default_system_prompt="promoted prompt",
+        tool_description_overrides={"shell": "promoted shell description"},
+    )
+    assert upgraded.count(hc.GRAFT_START) == 1
+    assert upgraded.count("def resolve_system_prompt") == 1
+    assert upgraded.count("_launchpad_apply_tool_descriptions(agent)") == 2
+    assert "_LAUNCHPAD_DEFAULT_SYSTEM_PROMPT = 'promoted prompt'" in upgraded
+    assert "'shell': 'promoted shell description'" in upgraded
+
+
+def test_graft_upgrades_legacy_prompt_only_block():
+    legacy = MAIN_PY.replace(
+        'system_prompt=DEFAULT_SYSTEM_PROMPT',
+        'system_prompt=resolve_system_prompt()',
+    )
+    match = hc._PROMPT_CONST_RE.search(legacy)
+    quote = legacy[match.end() - 3:match.end()]
+    const_end = legacy.index(quote, match.end()) + 3
+    legacy = legacy[:const_end] + """
+
+# ─── Launchpad platform contract: config bundles (A/B experiments) ───────────
+def resolve_system_prompt():
+    return DEFAULT_SYSTEM_PROMPT
+# ──────────────────────────────────────────────────────────────────────────────
+""" + legacy[const_end:]
+    upgraded = hc.graft_config_bundle(legacy)
+    assert hc.GRAFT_START in upgraded
+    assert "Launchpad platform contract: config bundles" not in upgraded
+    assert "_launchpad_apply_tool_descriptions(agent)" in upgraded
 
 
 def test_graft_fails_without_anchors():

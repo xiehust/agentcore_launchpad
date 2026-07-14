@@ -29,6 +29,12 @@ export interface AgentInfo {
   owner: string;
   error: string | null;
   spec: Record<string, unknown>;
+  experiment_capability: {
+    eligible: boolean;
+    system_prompt: boolean;
+    tool_descriptions: boolean;
+    reason: string | null;
+  };
   created_at: string | null;
   updated_at: string | null;
   deployment?: DeploymentInfo;
@@ -72,6 +78,7 @@ export interface AgentSpecInput {
   method: string;
   model_id?: string;
   system_prompt: string;
+  tool_description_overrides?: Record<string, string>;
   tools?: { type: string; name: string; config?: Record<string, unknown> }[];
   skills?: string[];
   // Managed KB references mounted onto the agent (harness method only).

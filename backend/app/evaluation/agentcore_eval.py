@@ -99,7 +99,10 @@ def create_configuration_bundle(
             agent_arn: {
                 "configuration": {
                     "system_prompt": system_prompt,
-                    "tool_descriptions": tool_descriptions,
+                    "tools": {
+                        name: {"description": description}
+                        for name, description in tool_descriptions.items()
+                    },
                 }
             }
         },
@@ -136,7 +139,10 @@ def update_configuration_bundle(
             agent_arn: {
                 "configuration": {
                     "system_prompt": system_prompt,
-                    "tool_descriptions": tool_descriptions,
+                    "tools": {
+                        name: {"description": description}
+                        for name, description in tool_descriptions.items()
+                    },
                 }
             }
         },

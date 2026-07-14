@@ -332,6 +332,54 @@ def test_discover_agent_tools_from_spec_and_code():
     assert svc.discover_agent_tools({}) == {}
 
 
+def test_discover_agent_tools_promoted_overrides_win():
+    assert svc.discover_agent_tools({
+        "tools": [{"name": "search", "description": "old"}],
+        "tool_description_overrides": {"search": "promoted", "shell": "new"},
+    }) == {"search": "promoted", "shell": "new"}
+
+
+def test_experiment_capability_matrix():
+    generated = SimpleNamespace(method="zip_runtime", spec={"protocol": "http"})
+    assert svc.experiment_capability(generated) == {
+        "eligible": True,
+        "system_prompt": True,
+        "tool_descriptions": True,
+        "reason": None,
+    }
+    converted_v2 = SimpleNamespace(
+        method="zip_runtime",
+        spec={
+            "protocol": "http",
+            "source_harness": {"agent_id": "h1"},
+            "code_bundle": {"main.py": f"{svc.graft_config_bundle.__module__}\n"
+                            "# <launchpad-config-bundle:v2>\n"
+                            "def resolve_system_prompt(): pass"},
+        },
+    )
+    assert svc.experiment_capability(converted_v2)["tool_descriptions"] is True
+    converted_v1 = SimpleNamespace(
+        method="zip_runtime",
+        spec={
+            "source_harness": {"agent_id": "h1"},
+            "code_bundle": {"main.py":
+                "# ─── Launchpad platform contract: config bundles (A/B experiments)\n"
+                "def resolve_system_prompt(): pass"},
+        },
+    )
+    cap = svc.experiment_capability(converted_v1)
+    assert cap["eligible"] is True and cap["tool_descriptions"] is False
+    for row in [
+        SimpleNamespace(method="harness", spec={}),
+        SimpleNamespace(method="container", spec={}),
+        SimpleNamespace(method="studio", spec={}),
+        SimpleNamespace(method="zip_runtime", spec={"protocol": "a2a"}),
+        SimpleNamespace(method="zip_runtime", spec={"code": "custom"}),
+        SimpleNamespace(method="zip_runtime", spec={"code_bundle": {"main.py": "custom"}}),
+    ]:
+        assert svc.experiment_capability(row)["eligible"] is False
+
+
 # ─── bundles ─────────────────────────────────────────────────────────────────
 def test_bundles_consume_accepted_config(client, monkeypatch):
     captured: dict = {}
@@ -571,15 +619,225 @@ def test_old_pipeline_row_serializes_with_new_fields(client):
     assert body["artifacts"]["verdict"]["verdict"] == "insufficient-n"
 
 
+def test_legacy_promotion_projects_ready_without_mutating_row(client):
+    artifacts = {
+        **_old_pipeline_artifacts(),
+        "promote": {
+            "before_weights": {"C": 50, "T1": 50},
+            "after_weights": {"C": 1, "T1": 99},
+        },
+    }
+    exp = _mk_exp(status="promoted", stage="promote", artifacts=artifacts)
+    body = client.get(f"/api/experiments/{exp.id}").json()
+    assert body["status"] == "ready"
+    assert body["artifacts"]["promote"]["after_weights"]["T1"] == 99
+    assert _reload(exp.id).status == "promoted"  # read-time projection only
+
+
 def test_old_pipeline_row_still_promotes_and_rebundles(client, monkeypatch):
     exp = _mk_exp(status="ready", stage="verdict",
                   artifacts=_old_pipeline_artifacts())
-    monkeypatch.setattr(svc, "action_promote", lambda exp: {"ok": True})
+    _inline(monkeypatch)
+    monkeypatch.setattr(
+        svc, "act_promote",
+        lambda exp_id, progress: svc._update(
+            exp_id,
+            status="promoted",
+            artifact={"promote": {
+                "ab_test_status": "STOPPED",
+                "deployment_id": "d1",
+            }},
+        ),
+    )
     res = client.post(f"/api/experiments/{exp.id}/action",
                       json={"action": "promote"})
-    assert res.status_code == 200
+    assert res.status_code == 202
     # bundles retry stays open even though the row predates accepted_*
     assert svc.stage_not_ready_reason(_reload(exp.id), "bundles") is None
+
+
+class _ABData:
+    def __init__(self, status="RUNNING", fail_stop=False):
+        self.status = status
+        self.fail_stop = fail_stop
+        self.updates: list[str] = []
+
+    def get_ab_test(self, **kwargs):
+        return {"abTestId": kwargs["abTestId"], "executionStatus": self.status}
+
+    def update_ab_test(self, **kwargs):
+        status = kwargs["executionStatus"]
+        self.updates.append(status)
+        if self.fail_stop:
+            raise RuntimeError("stop rejected")
+        self.status = status
+        return {"executionStatus": status}
+
+
+def _promotion_fixture(*, legacy=False):
+    db = SessionLocal()
+    agent = Agent(
+        name="promotion-target",
+        method="zip_runtime",
+        status="active",
+        arn="arn:rt",
+        resource_id="rt-1",
+        version="1",
+        spec={
+            "name": "promotion-target",
+            "method": "zip_runtime",
+            "system_prompt": "old prompt",
+        },
+    )
+    db.add(agent)
+    db.commit()
+    artifacts = {
+        **_old_pipeline_artifacts(),
+        "agent_meta": {
+            "system_prompt": "old prompt",
+            "tools": {"calculator": "old calculator"},
+        },
+        "recommend": {
+            "recommended_prompt": "recommended prompt",
+            "accepted_prompt": "accepted prompt",
+            "accepted_tool_descriptions": {"calculator": "better calculator"},
+        },
+    }
+    if legacy:
+        artifacts["promote"] = {
+            "before_weights": {"C": 50, "T1": 50},
+            "after_weights": {"C": 1, "T1": 99},
+        }
+    exp = Experiment(
+        name="EXP-promotion",
+        agent_id=agent.id,
+        agent_name=agent.name,
+        status="promoted" if legacy else "ready",
+        stage="promote" if legacy else "verdict",
+        artifacts=artifacts,
+    )
+    db.add(exp)
+    db.commit()
+    ids = (agent.id, exp.id)
+    db.close()
+    return ids
+
+
+def _complete_deploy(job_id: str, *, failed=False):
+    from app.models.ledger import Deployment, Job
+
+    db = SessionLocal()
+    job = db.get(Job, job_id)
+    deployment = db.get(Deployment, job.payload["deployment_id"])
+    agent = db.get(Agent, job.payload["agent_id"])
+    if failed:
+        job.status = "failed"
+        job.error = "runtime update failed"
+        deployment.status = "failed"
+        agent.status = "failed"
+    else:
+        job.status = "succeeded"
+        deployment.status = "succeeded"
+        agent.status = "active"
+        agent.version = "2"
+    db.commit()
+    db.close()
+
+
+def test_official_promotion_stops_applies_deploys_then_marks_promoted(monkeypatch):
+    agent_id, exp_id = _promotion_fixture()
+    data = _ABData()
+    monkeypatch.setattr(svc, "data_client", lambda: data)
+
+    def complete(job_id):
+        assert _reload(exp_id).status == "ready"
+        assert "promote" not in _reload(exp_id).artifacts
+        _complete_deploy(job_id)
+
+    monkeypatch.setattr(svc, "execute_deploy_job", complete)
+
+    result = svc.act_promote(exp_id, svc._noop)
+
+    assert data.updates == ["STOPPED"]
+    assert result["ab_test_status"] == "STOPPED"
+    assert result["agent_version"] == "2"
+    row = _reload(exp_id)
+    assert row.status == "promoted"
+    assert row.artifacts["promote"]["deployment_id"]
+    assert "after_weights" not in row.artifacts["promote"]
+    db = SessionLocal()
+    agent = db.get(Agent, agent_id)
+    assert agent.spec["system_prompt"] == "accepted prompt"
+    assert agent.spec["tool_description_overrides"] == {
+        "calculator": "better calculator"
+    }
+    job = db.get(svc.Job, result["job_id"])
+    assert job.payload["mode"] == "update"
+    assert job.payload["skip_register"] is True
+    db.close()
+
+
+def test_promotion_retry_skips_already_stopped_test(monkeypatch):
+    _, exp_id = _promotion_fixture()
+    data = _ABData(status="STOPPED")
+    monkeypatch.setattr(svc, "data_client", lambda: data)
+    monkeypatch.setattr(svc, "execute_deploy_job", _complete_deploy)
+    svc.act_promote(exp_id, svc._noop)
+    assert data.updates == []
+
+
+def test_promotion_stop_failure_does_not_deploy_or_mark_success(monkeypatch):
+    _, exp_id = _promotion_fixture()
+    data = _ABData(fail_stop=True)
+    monkeypatch.setattr(svc, "data_client", lambda: data)
+    monkeypatch.setattr(
+        svc, "create_deployment",
+        lambda *a, **k: pytest.fail("deployment must not start"),
+    )
+    with pytest.raises(RuntimeError, match="stop rejected"):
+        svc.act_promote(exp_id, svc._noop)
+    row = _reload(exp_id)
+    assert row.status == "ready"
+    assert "promote" not in row.artifacts
+
+
+def test_promotion_deployment_failure_keeps_retryable_ready_state(monkeypatch):
+    _, exp_id = _promotion_fixture()
+    monkeypatch.setattr(svc, "data_client", lambda: _ABData())
+    monkeypatch.setattr(
+        svc, "execute_deploy_job",
+        lambda job_id: _complete_deploy(job_id, failed=True),
+    )
+    with pytest.raises(RuntimeError, match="production deployment failed"):
+        svc.act_promote(exp_id, svc._noop)
+    row = _reload(exp_id)
+    assert row.status == "ready"
+    assert "promote" not in row.artifacts
+    assert row.artifacts["promotion_attempt"]["ab_test_status"] == "STOPPED"
+
+
+def test_legacy_completion_preserves_prior_shift(monkeypatch):
+    _, exp_id = _promotion_fixture(legacy=True)
+    monkeypatch.setattr(svc, "data_client", lambda: _ABData(status="STOPPED"))
+    monkeypatch.setattr(svc, "execute_deploy_job", _complete_deploy)
+    result = svc.act_promote(exp_id, svc._noop)
+    assert result["prior_shift"] == {"C": 1, "T1": 99}
+    assert svc.promotion_complete(_reload(exp_id).artifacts)
+
+
+def test_canary_requires_completed_promotion():
+    exp = _mk_exp(artifacts={
+        "verdict": {"verdict": "treatment-wins"},
+        "promote": {"after_weights": {"C": 1, "T1": 99}},
+    })
+    assert svc.stage_not_ready_reason(exp, "canary") == (
+        "complete the production promotion first"
+    )
+    exp.artifacts = {
+        **exp.artifacts,
+        "promote": {"ab_test_status": "STOPPED", "deployment_id": "d1"},
+    }
+    assert svc.stage_not_ready_reason(exp, "canary") is None
 
 
 # ─── create defers all stage work ────────────────────────────────────────────
@@ -604,3 +862,37 @@ def test_create_defers_all_stage_work(client, monkeypatch):
     meta = body["artifacts"]["agent_meta"]
     assert meta["runtime_name"] == "RTName"
     assert meta["system_prompt"] == "sys"
+
+
+@pytest.mark.parametrize(
+    ("method", "spec", "code"),
+    [
+        ("harness", {}, "experiment.method_unsupported"),
+        ("container", {}, "experiment.agent_unsupported"),
+        ("studio", {}, "experiment.agent_unsupported"),
+        ("zip_runtime", {"protocol": "a2a"}, "experiment.protocol_unsupported"),
+        ("zip_runtime", {"code": "custom runtime"}, "experiment.agent_unsupported"),
+        (
+            "zip_runtime",
+            {"code_bundle": {"main.py": "custom runtime"}},
+            "experiment.agent_unsupported",
+        ),
+    ],
+)
+def test_create_rejects_unverified_bundle_consumers(client, method, spec, code):
+    db = SessionLocal()
+    agent = Agent(
+        name=f"unsupported-{method}",
+        method=method,
+        status="active",
+        arn="arn:rt",
+        resource_id="rt-9",
+        spec={"system_prompt": "sys", **spec},
+    )
+    db.add(agent)
+    db.commit()
+    agent_id = agent.id
+    db.close()
+    res = client.post("/api/experiments", json={"agent_id": agent_id})
+    assert res.status_code == 400
+    assert res.json()["code"] == code

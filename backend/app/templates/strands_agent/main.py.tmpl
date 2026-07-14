@@ -73,6 +73,7 @@ DEFAULT_SYSTEM_PROMPT = __LAUNCHPAD_SYSTEM_PROMPT__
 DEFAULT_TOOL_DESCRIPTIONS: dict[str, str] = {
     "calculator": "Evaluate a basic arithmetic expression (+ - * / ** parentheses) and return the numeric result.",
     "current_utc_time": "Return the current UTC date and time in ISO-8601 format.",
+    **__LAUNCHPAD_TOOL_DESCRIPTION_OVERRIDES__,
 }
 
 
@@ -90,7 +91,15 @@ def resolve_system_prompt() -> str:
 
 
 def resolve_tool_description(tool_name: str) -> str:
-    descriptions = _config_bundle().get("tool_descriptions") or {}
+    bundle = _config_bundle()
+    descriptions = dict(bundle.get("tool_descriptions") or {})
+    tools = bundle.get("tools") or {}
+    if isinstance(tools, dict):
+        descriptions.update({
+            name: value.get("description", "")
+            for name, value in tools.items()
+            if isinstance(value, dict)
+        })
     return str(descriptions.get(tool_name) or DEFAULT_TOOL_DESCRIPTIONS.get(tool_name, ""))
 
 

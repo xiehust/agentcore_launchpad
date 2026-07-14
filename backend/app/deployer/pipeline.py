@@ -98,12 +98,18 @@ def _set_stage(
 
 
 def create_deployment(
-    db: Session, agent: Agent, mode: str = "create"
+    db: Session,
+    agent: Agent,
+    mode: str = "create",
+    *,
+    skip_register: bool = False,
 ) -> tuple[Deployment, Job]:
     """Create the Deployment (stages pending) + Job rows for one deploy run.
 
     ``mode`` is "create" for a first deploy or "update" for an in-place
-    re-publish; the deploy stage reads it to choose Create* vs Update* APIs."""
+    re-publish; the deploy stage reads it to choose Create* vs Update* APIs.
+    Promotion updates may skip registry publication because identity is
+    unchanged and registry failure must not obscure a successful rollout."""
     deployment = Deployment(
         agent_id=agent.id,
         stages=[{"name": s, "status": "pending", "detail": ""} for s in STAGE_ORDER],
@@ -112,7 +118,12 @@ def create_deployment(
     db.flush()
     job = Job(
         type="deploy_agent",
-        payload={"agent_id": agent.id, "deployment_id": deployment.id, "mode": mode},
+        payload={
+            "agent_id": agent.id,
+            "deployment_id": deployment.id,
+            "mode": mode,
+            "skip_register": skip_register,
+        },
     )
     db.add(job)
     db.flush()
@@ -156,7 +167,16 @@ def execute_deploy_job(job_id: str) -> None:
             fn = stages.get(stage_name)
             try:
                 db.refresh(agent)
-                result = fn(ctx, agent) if fn else StageResult(skipped=True, detail="not used")
+                if stage_name == "register" and job.payload.get("skip_register"):
+                    result = StageResult(
+                        skipped=True, detail="promotion update keeps existing registry identity"
+                    )
+                else:
+                    result = (
+                        fn(ctx, agent)
+                        if fn
+                        else StageResult(skipped=True, detail="not used")
+                    )
             except Exception as exc:
                 detail = f"{type(exc).__name__}: {exc}"
                 _set_stage(db, deployment_id, stage_name, "failed", detail)

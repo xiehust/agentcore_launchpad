@@ -17,12 +17,13 @@ router = APIRouter(prefix="/api/experiments", tags=["experiments"])
 
 
 def _out(exp: Experiment) -> dict[str, Any]:
+    status = "ready" if service.legacy_promotion(exp.artifacts) else exp.status
     return {
         "id": exp.id,
         "name": exp.name,
         "agent_id": exp.agent_id,
         "agent_name": exp.agent_name,
-        "status": exp.status,
+        "status": status,
         "stage": exp.stage,
         "stages": STAGES,
         "artifacts": exp.artifacts,
@@ -67,19 +68,17 @@ def create_experiment(req: ExperimentCreate, db: Session = Depends(get_db)) -> d
     agent = db.get(Agent, req.agent_id)
     if agent is None or agent.status != "active":
         raise AppError("agent.not_active", "agent must be active", status_code=400)
-    if agent.method not in ("zip_runtime", "studio", "container"):
+    capability = service.experiment_capability(agent)
+    if not capability["eligible"]:
+        code = "experiment.agent_unsupported"
+        if agent.method == "harness":
+            code = "experiment.method_unsupported"
+        elif (agent.spec or {}).get("protocol") == "a2a":
+            code = "experiment.protocol_unsupported"
         raise AppError(
-            "experiment.method_unsupported",
-            "experiments target runtime-backed agents",
-            status_code=400,
-        )
-    if (agent.spec or {}).get("protocol") == "a2a":
-        # A2A servers own their prompt/tooling — they never read config
-        # bundles, so an A/B experiment would compare identical arms
-        raise AppError(
-            "experiment.protocol_unsupported",
-            "A2A-protocol agents don't consume config bundles — experiments "
-            "need an HTTP-protocol runtime agent",
+            code,
+            capability["reason"],
+            {"experiment_capability": capability},
             status_code=400,
         )
     exp = service.start_experiment(agent)
@@ -138,7 +137,11 @@ def experiment_action(
     elif req.action == "bundles":
         service.action_bundles(exp)
     elif req.action == "promote":
-        service.action_promote(exp)
+        service.run_action(
+            exp.id,
+            "promote",
+            lambda progress: service.act_promote(exp_id, progress),
+        )
     elif req.action == "ramp":
         service.action_ramp(exp)
     elif req.action == "traffic":
