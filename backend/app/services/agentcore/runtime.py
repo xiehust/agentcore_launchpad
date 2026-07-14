@@ -195,6 +195,90 @@ def wait_runtime_ready(
         sleeper(interval_s)
 
 
+# ─── named endpoints ─────────────────────────────────────────────────────────
+# A named endpoint pins a runtime to a specific version (unlike DEFAULT, which
+# auto-follows the latest version). Used by the target-based canary to hold a
+# stable=v_current / treatment=v_candidate pair on one runtime. Shapes per the
+# preview bedrock-agentcore-control API (create uses ``name``; update/get/delete
+# use ``endpointName``); keep the defensive .get() reads since detail may drift.
+
+
+def create_runtime_endpoint(
+    client: Any, *, runtime_id: str, endpoint_name: str, version: int | str
+) -> dict[str, Any]:
+    """CreateAgentRuntimeEndpoint — a named endpoint pinned to ``version``."""
+    return client.create_agent_runtime_endpoint(
+        agentRuntimeId=runtime_id,
+        name=endpoint_name,
+        agentRuntimeVersion=str(version),
+    )
+
+
+def update_runtime_endpoint(
+    client: Any, *, runtime_id: str, endpoint_name: str, version: int | str
+) -> dict[str, Any]:
+    """UpdateAgentRuntimeEndpoint — re-point a named endpoint at a new version
+    (the promote cutover: stable endpoint → the candidate version)."""
+    return client.update_agent_runtime_endpoint(
+        agentRuntimeId=runtime_id,
+        endpointName=endpoint_name,
+        agentRuntimeVersion=str(version),
+    )
+
+
+def get_runtime_endpoint(
+    client: Any, *, runtime_id: str, endpoint_name: str
+) -> dict[str, Any]:
+    return client.get_agent_runtime_endpoint(
+        agentRuntimeId=runtime_id, endpointName=endpoint_name
+    )
+
+
+def delete_runtime_endpoint(client: Any, *, runtime_id: str, endpoint_name: str) -> None:
+    client.delete_agent_runtime_endpoint(
+        agentRuntimeId=runtime_id, endpointName=endpoint_name
+    )
+
+
+def wait_endpoint_ready(
+    client: Any,
+    *,
+    runtime_id: str,
+    endpoint_name: str,
+    timeout_s: int = 600,
+    interval_s: int = 5,
+    sleeper: Any = time.sleep,
+    on_status: Any = None,
+) -> dict[str, Any]:
+    """Poll GetAgentRuntimeEndpoint until READY (CREATING/UPDATING → READY).
+
+    Mirrors ``wait_runtime_ready``; raises RuntimeError on CREATE_FAILED/
+    UPDATE_FAILED and TimeoutError past the deadline."""
+    deadline = time.monotonic() + timeout_s
+    last_status = None
+    while True:
+        detail = get_runtime_endpoint(
+            client, runtime_id=runtime_id, endpoint_name=endpoint_name
+        )
+        status = detail.get("status")
+        if status != last_status and on_status:
+            on_status(status)
+        last_status = status
+        if status == "READY":
+            return detail
+        if status in TERMINAL_FAILURES:
+            reason = detail.get("failureReason", "no failureReason provided")
+            raise RuntimeError(
+                f"endpoint {endpoint_name} on {runtime_id} entered {status}: {reason}"
+            )
+        if time.monotonic() > deadline:
+            raise TimeoutError(
+                f"endpoint {endpoint_name} on {runtime_id} still {status} "
+                f"after {timeout_s}s"
+            )
+        sleeper(interval_s)
+
+
 def flatten_sse_text(raw: str) -> str | None:
     """Join the text deltas of an SSE event stream, or None if raw isn't SSE.
 
@@ -231,14 +315,21 @@ def invoke_runtime_text(
     prompt: str,
     session_id: str | None = None,
     actor_id: str = "default",
+    qualifier: str | None = None,
 ) -> dict[str, Any]:
-    """Synchronous InvokeAgentRuntime with the template's {prompt} payload."""
+    """Synchronous InvokeAgentRuntime with the template's {prompt} payload.
+
+    ``qualifier`` selects a named endpoint (a version-pinned alias); None keeps
+    the DEFAULT endpoint (auto-follows latest), preserving prior behavior."""
     session_id = session_id or new_session_id()
-    response = client.invoke_agent_runtime(
-        agentRuntimeArn=runtime_arn,
-        runtimeSessionId=session_id,
-        payload=json.dumps({"prompt": prompt, "actor_id": actor_id}).encode("utf-8"),
-    )
+    params: dict[str, Any] = {
+        "agentRuntimeArn": runtime_arn,
+        "runtimeSessionId": session_id,
+        "payload": json.dumps({"prompt": prompt, "actor_id": actor_id}).encode("utf-8"),
+    }
+    if qualifier:
+        params["qualifier"] = qualifier
+    response = client.invoke_agent_runtime(**params)
     raw = response["response"].read()
     try:
         body = json.loads(raw)

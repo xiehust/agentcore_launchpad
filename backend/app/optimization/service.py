@@ -13,7 +13,6 @@ protocolType, targets of type http→agentcoreRuntime so A/B routing happens
 at {gatewayUrl}/{target}/invocations.
 """
 
-import json
 import re
 import threading
 import time
@@ -21,11 +20,6 @@ import uuid
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any
-
-import boto3
-import httpx
-from botocore.auth import SigV4Auth
-from botocore.awsrequest import AWSRequest
 
 from app.core.config import get_settings
 from app.core.db import SessionLocal
@@ -37,6 +31,7 @@ from app.models.ledger import Agent, Deployment, Job
 from app.optimization.models import Experiment
 from app.schemas.agent import AgentSpec
 from app.services.agentcore.client import control_client, data_client
+from app.services.agentcore.gateway import sigv4_post
 from app.services.harness_convert import graft_config_bundle
 
 EXP_GATEWAY_NAME = "launchpad-exp-gw"
@@ -795,37 +790,23 @@ def send_gateway_traffic(
     poster: Any = None, signer: Any = None, progress: Progress = _noop,
 ) -> dict[str, Any]:
     """SigV4 POST each prompt through the experiment gateway (A/B routes them)."""
-    settings = get_settings()
-    session = boto3.Session(region_name=settings.region)
-    credentials = session.get_credentials().get_frozen_credentials()
-
-    def default_signer(creds, region, aws_request):
-        SigV4Auth(creds, "bedrock-agentcore", region).add_auth(aws_request)
-
-    signer = signer or default_signer
     url = f"{gateway_url.rstrip('/')}/{target}/invocations"
     session_ids: list[str] = []
     failed = 0
-    with httpx.Client(timeout=120) as client:
-        post = poster or (lambda u, content, headers: client.post(u, content=content,
-                                                                  headers=headers))
-        for prompt in prompts:
-            session_id = str(uuid.uuid4())
-            body = json.dumps({"prompt": prompt, "sessionId": session_id})
-            aws_request = AWSRequest(
-                method="POST", url=url, data=body,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id": session_id,
-                },
-            )
-            signer(credentials, settings.region, aws_request)
-            response = post(url, content=body, headers=dict(aws_request.headers))
-            if response.status_code == 200:
-                session_ids.append(session_id)
-            else:
-                failed += 1
-            progress(f"sent {len(session_ids)}/{len(prompts)} ({failed} failed)")
+    for prompt in prompts:
+        session_id = str(uuid.uuid4())
+        response = sigv4_post(
+            url,
+            {"prompt": prompt, "sessionId": session_id},
+            session_id=session_id,
+            poster=poster,
+            signer=signer,
+        )
+        if response.status_code == 200:
+            session_ids.append(session_id)
+        else:
+            failed += 1
+        progress(f"sent {len(session_ids)}/{len(prompts)} ({failed} failed)")
     return {"session_ids": session_ids, "sent": len(session_ids), "failed": failed}
 
 

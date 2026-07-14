@@ -85,8 +85,10 @@ def test_gateway_traffic_signs_and_collects_sessions(monkeypatch):
         return FakeResponse()
 
     signed = []
+    import app.services.agentcore.gateway as gw
+
     monkeypatch.setattr(
-        svc.boto3, "Session",
+        gw.boto3, "Session",
         lambda region_name=None: MagicMock(
             get_credentials=lambda: MagicMock(
                 get_frozen_credentials=lambda: "frozen-creds"
