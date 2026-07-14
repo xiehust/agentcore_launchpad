@@ -1062,8 +1062,8 @@
     "meta": "Runtime Target 流量 · 共享实验网关",
     "modeLabel": "实验流程",
     "mode": {
-      "configuration": "配置 A/B",
-      "canary": "运行时金丝雀"
+      "configuration": "基于配置包的 A/B",
+      "canary": "基于目标的 A/B"
     },
     "sub": "冠军与挑战者 · 实验网关流量",
     "create": "创建运行时金丝雀",

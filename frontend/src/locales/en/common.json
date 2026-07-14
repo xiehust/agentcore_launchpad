@@ -1062,8 +1062,8 @@
     "meta": "Runtime target traffic · shared experiment gateway",
     "modeLabel": "Experiment workflow",
     "mode": {
-      "configuration": "CONFIGURATION A/B",
-      "canary": "RUNTIME CANARY"
+      "configuration": "CONFIGURATION-BUNDLE A/B",
+      "canary": "TARGET-BASED A/B"
     },
     "sub": "champion vs challenger · experimental gateway traffic",
     "create": "CREATE RUNTIME CANARY",
