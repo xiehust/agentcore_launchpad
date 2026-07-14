@@ -100,6 +100,19 @@ def test_arn_from_url_variants():
     assert h["arn_from_url"]("https://nope.example/") == ""
 
 
+def test_derive_session_stable_per_agent_random_when_adhoc():
+    h = _load_helpers()
+    fd = "83e9260598e14c3c96ba73fb802800f0e072149db400408eabce708c5150164a"
+    a = h["derive_session"](fd, "aurora-support")
+    assert a == h["derive_session"](fd, "aurora-support")  # stable
+    assert a != h["derive_session"](fd, "hr-bot")          # per-agent
+    assert a != h["derive_session"]("other-session", "aurora-support")
+    assert len(a) == 64 and all(c in "0123456789abcdef" for c in a)
+    # adhoc: no front-desk session → random, still a valid runtimeSessionId
+    r1, r2 = h["derive_session"]("", "aurora-support"), h["derive_session"]("", "aurora-support")
+    assert r1 != r2 and len(r1) >= 16
+
+
 def test_parse_card_and_a2a_reply_text():
     h = _load_helpers()
     card = {"name": "aurora-faq-a2a", "description": "d", "url": "u",

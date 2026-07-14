@@ -108,6 +108,13 @@ a2a_base_requirements() -> list[str]      # strands-agents[a2a,otel] + fastapi/u
   `launchpad.transport` (a2a-jsonrpc → JSON-RPC passthrough, harness →
   InvokeHarness, else {prompt}); entrypoint returns `a2a_trace` next to
   `result` — extra payload fields ride through InvokeAgentRuntime.
+- Downstream `runtimeSessionId` = `sha256(f"{fd_session}:{agent_name}")`
+  (derive_session, 07-14): same front-desk session + same specialist reuses
+  the specialist session, so harness short-term memory survives repeat
+  routings and its memory events are locatable from the front-desk session
+  (random fallback when adhoc/no session). Each invoke trace entry carries
+  the derived `session`. Live-proven: two routings to aurora-support in one
+  fd session accumulated 10→18 events under the derived id.
 - `POST /api/registry/a2a-demo` {agent_id, question} → {answer, trace} —
   bypasses invoke_agent_text deliberately (needs the trace field).
 - Registry `?view=a2a-demo` sub-page narrates DISCOVER→SELECT→INVOKE→RESPOND.

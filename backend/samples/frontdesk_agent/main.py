@@ -12,6 +12,7 @@ alongside the answer so the demo sub-page can narrate the four stages.
 Deployed as a zip_runtime code_bundle agent by scripts/deploy_frontdesk_agent.py.
 """
 
+import hashlib
 import json
 import os
 import uuid
@@ -40,6 +41,18 @@ SYSTEM_PROMPT = (
 
 TRACE: list[dict[str, Any]] = []
 _LAST_HITS: dict[str, dict[str, Any]] = {}
+_SESSION_ID = ""  # front-desk session of the current request, set by the entrypoint
+
+
+def derive_session(fd_session: str, agent_name: str) -> str:
+    """Stable downstream runtimeSessionId (pure). Same front-desk session +
+    same specialist → same downstream session, so the specialist keeps its
+    short-term memory across repeat routings and its memory events can be
+    located from the front-desk session id. Adhoc calls (no session) fall
+    back to a random id; sha256 hex satisfies the ≥16-char constraint."""
+    if not fd_session:
+        return uuid.uuid4().hex + uuid.uuid4().hex[:8]
+    return hashlib.sha256(f"{fd_session}:{agent_name}".encode()).hexdigest()
 
 
 def _client():
@@ -118,7 +131,7 @@ def call_agent(agent_name: str, message: str, reason: str) -> str:
     card = _LAST_HITS.get(agent_name)
     if card is None:
         return f"unknown agent '{agent_name}' — call discover_agents first"
-    session = uuid.uuid4().hex + uuid.uuid4().hex[:8]
+    session = derive_session(_SESSION_ID, agent_name)
     client = _client()
     transport = card["transport"]
     request_excerpt = message[:300]
@@ -166,7 +179,7 @@ def call_agent(agent_name: str, message: str, reason: str) -> str:
         answer = f"[specialist call failed: {type(exc).__name__}: {exc}]"
     TRACE.append({
         "stage": "invoke", "target": agent_name, "transport": transport,
-        "reason": reason, "request_excerpt": request_excerpt,
+        "session": session, "reason": reason, "request_excerpt": request_excerpt,
         "response_excerpt": answer[:400],
     })
     return answer
@@ -177,11 +190,15 @@ app = BedrockAgentCoreApp()
 
 @app.entrypoint
 def invoke(payload: dict[str, Any], context: Any = None) -> dict[str, Any]:
+    global _SESSION_ID
     prompt = str(payload.get("prompt", "")).strip()
     if not prompt:
         return {"error": "payload must include a non-empty 'prompt'"}
     TRACE.clear()
     _LAST_HITS.clear()
+    _SESSION_ID = str(
+        getattr(context, "session_id", "") or payload.get("session_id", "") or ""
+    )
     agent = Agent(model=MODEL_ID, system_prompt=SYSTEM_PROMPT,
                   tools=[discover_agents, call_agent])
     result = agent(prompt)
