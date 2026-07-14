@@ -959,3 +959,37 @@ Replaced legacy 1/99 promotion with stop-and-deploy production promotion, added 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 13: Canary challenger eligibility
+
+**Date**: 2026-07-14
+**Task**: Canary challenger eligibility
+**Package**: lab4-interactive
+**Branch**: `main`
+
+### Summary
+
+Separated runtime canary eligibility from bundle experiment eligibility, enforced the capability in the API, exposed disabled reasons in the selector, and verified the live experiment UI.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4e59e72` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
