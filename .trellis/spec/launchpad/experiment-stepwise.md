@@ -1,21 +1,21 @@
 # Experiment Stepwise Actions (backend + frontend)
 
-> The optimization experiment (`/evaluation?view=experiment`) runs as
-> user-triggered stage actions, not an auto pipeline. Server-side
-> orchestration; per-row progress; artifact-driven progressive UI.
-> Introduced 2026-07-13 (task 07-13-experiment-stepwise, modeled on the
-> agentxray Live console UX).
+> Configuration A/B and Runtime Canary are separate, user-triggered workflows
+> under `/evaluation?view=experiment`. Both use server-side orchestration,
+> per-record progress, and artifact-driven UI, but they have different tables,
+> APIs, state machines, and cleanup ownership.
 
-## Scenario: driving one experiment stage
+## Scenario: driving one configuration A/B stage
 
 ### 1. Scope / Trigger
 
-- Cross-layer API contract: `POST /api/experiments/{id}/action` verb set,
-  202-vs-200 semantics, `running_action`/`progress` polling fields.
+- Cross-layer API contract: `POST /api/experiments/{id}/action` owns only
+  configuration recommendation, bundle A/B, promotion, and cleanup.
 - DB schema: `experiments.running_action` (VARCHAR 24, nullable),
   `experiments.progress` (TEXT, nullable) — added via the additive `_migrate`
   in `app/core/db.py` (no Alembic).
-- Anything editing `backend/app/optimization/*` or
+- Anything editing `backend/app/optimization/service.py`,
+  `backend/app/optimization/routers.py`, or
   `frontend/src/pages/EvaluationExperiment.tsx` must respect this contract.
 
 ### 2. Signatures
@@ -30,45 +30,44 @@ POST /api/experiments/{id}/action         ActionRequest          → 200 | 202 {
 ```python
 class ActionRequest(BaseModel):
     action: str  # recommend|accept|bundles|gateway|abtest|traffic|verdict
-                 # |promote|canary|ramp|cleanup
+                 # |promote|cleanup
     accepted_prompt: str | None                        # accept
     accepted_tool_descriptions: dict[str, str] | None  # accept
     dataset_id: str | None                             # traffic
-    challenger_agent_id: str | None                    # canary
 ```
 
 Service layer (`app/optimization/service.py`):
 
 ```python
 run_action(exp_id, action, fn: Callable[[Progress], Any])  # daemon thread runner
-act_recommend/act_gateway/act_abtest/act_traffic/act_verdict/act_promote/act_canary/act_cleanup(exp_id, ..., progress)
+act_recommend/act_gateway/act_abtest/act_traffic/act_verdict/act_promote/act_cleanup(exp_id, ..., progress)
 action_accept(exp, prompt, tool_descriptions)  # sync
-action_bundles(exp) / action_ramp(exp)  # sync
+action_bundles(exp)  # sync
 stage_not_ready_reason(exp, action) -> str | None
 resolve_traffic_prompts(dataset) -> list[str]
 create_bundle_idempotent(control, **kwargs)    # conflict-adopt via ListConfigurationBundles
 clear_stale_running_actions() -> list[str]     # startup sweep (main.py resume block)
-canary_capability(agent) -> {
-    "eligible": bool,
-    "reason": str | None,
-}
+assert_shared_gateway_available(own_test_name=None) -> None
 ```
 
 ### 3. Contracts
 
 - **Async actions** `{recommend, gateway, abtest, traffic, verdict, promote,
-  canary, cleanup}` → `202`, work runs on a daemon thread; the thread persists
-  its artifact + stage on success. **Sync actions** `{accept, bundles, ramp}` →
-  `200` inline. Both response bodies are `{"experiment": <row>}`
+  cleanup}` → `202`, work runs on a daemon thread; the thread persists its
+  artifact + stage on success. **Sync actions** `{accept, bundles}` → `200`
+  inline. Both response bodies are `{"experiment": <row>}`
   (NOT the pre-refactor `{"result": ...}`).
 - Experiment serialization adds `running_action: str|null` and
   `progress: str|null`. The UI polls `GET /api/experiments` every 8s, and
   2.5s while `running_action` is set.
-- `stage` is a **furthest-completed marker** (same `STAGES` list as before);
+- `stage` is a **furthest-completed marker** in
+  `recommend|bundles|gateway|abtest|traffic|verdict|promote|cleanup`;
   card visibility in the UI is **artifact-driven**, not stage-driven, so old
   auto-pipeline rows render unchanged (A8 backward compat).
-- Artifact keys are unchanged (`recommend/bundles/gateway/abtest/traffic/
-  verdict/promote/canary/cleanup`) plus:
+- New configuration records own `recommend/bundles/gateway/abtest/traffic/
+  verdict/promote/cleanup`. A stored legacy `canary` artifact remains readable
+  and cleanable, but is never created or ramped by this API.
+- Other artifact keys include:
   - `agent_meta` — runtime snapshot written at create
     (`{id,name,arn,resource_id,runtime_name,system_prompt}`); rebuilt lazily
     by `_agent_meta()` for old rows.
@@ -78,15 +77,17 @@ canary_capability(agent) -> {
     replayed instead of the built-in `TRAFFIC_PROMPTS*2`.
 - `POST /api/experiments` performs **no AWS-mutating work** (A1) — only the
   row + `agent_meta` (one `get_agent_runtime` read).
-- `GET /api/agents` exposes `canary_capability` separately from
-  `experiment_capability`. Target-canary challengers must be active HTTP
-  AgentCore Runtime resources deployed by `zip_runtime`, `container`, or
-  `studio`; they do not need to consume Launchpad configuration bundles.
-  Harness and A2A agents remain visible in the challenger selector as disabled
-  options with the backend-provided reason.
-- The current experiment champion is omitted from the challenger selector.
-  The action endpoint repeats the active/self/capability checks before calling
-  `run_action`; frontend filtering is explanatory UX, not authorization.
+- The Gateway is the shared `EXP_GATEWAY_NAME`. `gateway` and `abtest` run a
+  read-only active-test preflight before mutation. Any foreign test on the same
+  Gateway whose `executionStatus != "STOPPED"` returns
+  `409 experiment.gateway_busy`; an exact record-owned test name is adoptable
+  on idempotent retry.
+- Cleanup deletes only configuration-owned bundles, targets, online evaluator
+  configs, and A/B tests. It passes `delete_gateway=False`; the shared Gateway
+  is never deleted.
+- `canary` and `ramp` are compatibility-only request values. They return
+  `410 experiment.action_moved` and point callers to `/api/runtime-canaries`;
+  they never dispatch asynchronous work.
 - Failure: the runner stores `error = "<action>: <Type>: <msg>"` (action
   prefix is a UI contract — the page pins the retry button by
   `error.startsWith(action + ": ")`), clears `running_action`, KEEPS the
@@ -96,7 +97,7 @@ canary_capability(agent) -> {
   failures keep `status="running"` with inline retry. A permanently stuck
   experiment therefore holds the single-running-experiment slot — the
   escape hatch is `cleanup` (→ `cleaned`). Sync-action failures
-  (accept/bundles/ramp) surface as the HTTP error → UI toast; they
+  (accept/bundles) surface as the HTTP error → UI toast; they
   do NOT write `exp.error` (only the async runner does).
 
 ### 4. Validation & Error Matrix
@@ -109,30 +110,31 @@ canary_capability(agent) -> {
 | accept with no prompt anywhere | 400 `experiment.accept_invalid` |
 | traffic dataset not found | 404 `dataset.not_found` |
 | traffic dataset kind `simulated` / no usable prompts | 422 `experiment.dataset_unsupported` |
-| canary challenger missing/inactive/self | 400 `experiment.challenger_required` |
-| canary challenger is Harness, A2A, lacks a Runtime ARN, or uses an unsupported method | 400 `experiment.challenger_unsupported` with `detail.canary_capability` |
+| foreign active A/B test on shared Gateway | 409 `experiment.gateway_busy`, with `gateway_arn` and `active_tests` |
+| legacy `canary` or `ramp` action | 410 `experiment.action_moved`, with `runtime_canaries_path` |
 | second concurrent experiment (create) | 409 `experiment.already_running` |
 
 Prerequisites (`stage_not_ready_reason`): accept←recommend artifact;
 bundles←`recommend.accepted_prompt` OR existing bundles artifact (old-row
 retry); gateway←bundles; abtest←gateway; traffic←abtest; verdict←traffic;
-promote/canary←verdict; ramp←canary; recommend/cleanup←none.
+promote←verdict; recommend/cleanup←none.
 
 ### 5. Good/Base/Bad Cases
 
 - **Good**: create → recommend(202, poll) → accept(edited prompt) → bundles →
-  gateway → abtest → traffic(dataset_id) → verdict → promote → canary →
-  ramp×2 → cleanup. Each card shows button → progress → artifact echo.
+  gateway → abtest → traffic(dataset_id) → verdict → promote → cleanup. The
+  promoted Agent can be handed off into a separate Runtime Canary record.
 - **Base**: old auto-pipeline row (all artifacts, no `accepted_*`, NULL new
-  columns) — GET serializes, all cards render read-only results,
-  promote/canary/ramp/cleanup still work; re-running `bundles` is allowed.
+  columns, possible `canary` artifact) — GET serializes, the legacy Canary
+  renders read-only, cleanup still owns its old resources, and re-running
+  `bundles` is allowed.
 - **Bad**: POST `gateway` before `bundles` → 409 stage_not_ready; POST while
-  recommend runs → 409 action_in_flight; simulated dataset → 422; Harness or
-  A2A challenger → 400 before asynchronous AWS work starts.
+  recommend runs → 409 action_in_flight; active Canary test on the shared
+  Gateway → 409 gateway_busy before configuration resources are mutated.
 
 ### 6. Tests Required
 
-`backend/tests/optimization/test_stepwise_actions.py` (31 total in the dir):
+`backend/tests/optimization/test_stepwise_actions.py`:
 - guard matrix (every action w/o prereq → 409; in-flight → 409)
 - accept persists edit + keeps `recommended_prompt`; empty accept → 400
 - `act_recommend` re-run preserves prior `accepted_*`
@@ -144,14 +146,12 @@ promote/canary←verdict; ramp←canary; recommend/cleanup←none.
   success clears error/progress (monkeypatch `svc._spawn` to run inline)
 - `clear_stale_running_actions` clears only stuck rows, writes retryable error
 - create defers all stage work (`artifacts == {agent_meta}`)
-- canary capability matrix: custom HTTP zip runtime, container, and Studio are
-  eligible; inactive, Harness, A2A, and missing-Runtime-ARN agents are not
-- canary action rejects inactive/self/incompatible challengers before
-  `run_action`, while a compatible custom HTTP runtime dispatches successfully
+- old `canary`/`ramp` actions return `experiment.action_moved`
+- Gateway conflict is detected before config mutation; exact own test is
+  adoptable; cleanup never calls shared-Gateway deletion
 
 Frontend has NO test runner — verify via the fetch-stub browser evidence
-flow (stub `window.fetch` with synthetic experiment states; screenshots in
-the task's `evidence/`).
+flow with synthetic experiment states plus a real handoff URL.
 
 ### 7. Wrong vs Correct
 
@@ -159,22 +159,18 @@ the task's `evidence/`).
 ```python
 # Orchestrate in the frontend / auto-run stages at create
 threading.Thread(target=run_experiment_loop, ...).start()   # removed
-# Pass the ORM row into the action thread
-run_action(exp.id, "canary", lambda p: act_canary(exp, ...))  # detached-row risk
-# Reuse bundle-consumption eligibility for target routing
-challengers = [a for a in agents if experiment_capability(a)["eligible"]]
+# Continue target canary work on the configuration record
+POST /api/experiments/{id}/action {"action": "canary"}
 ```
 
 #### Correct
 ```python
-# Router validates inline, thread gets plain snapshots + exp_id only
-capability = canary_capability(challenger)
-if not capability["eligible"]:
-    raise AppError("experiment.challenger_unsupported", ...)
-snapshot = {"name": challenger.name, "arn": challenger.arn,
-            "resource_id": challenger.resource_id}
-service.run_action(exp.id, "canary",
-                   lambda progress: service.act_canary(exp_id, snapshot, progress))
+# Configuration A/B ends at promotion/cleanup. Canary gets a separate row.
+POST /api/runtime-canaries {
+    "champion_agent_id": promoted_agent_id,
+    "challenger_agent_id": challenger_id,
+    "source_experiment_id": experiment_id,
+}
 ```
 
 ## Design Decisions
@@ -202,9 +198,152 @@ extraction reuses `app.evaluation.scenarios.scenario_prompts` so dict turn
 inputs unwrap exactly as in eval replay. Simulated datasets are rejected —
 they need an actor loop, not a fire-and-forget prompt replay.
 
-> **Warning**: only ONE A/B test can run per gateway — `act_canary` still
-> STOPs the bundle test before creating the canary test, and the
-> single-running-experiment guard on create remains load-bearing.
+> **Warning**: AgentCore permits only one active A/B test per Gateway.
+> Configuration A/B and Runtime Canary therefore share the
+> `experiment.gateway_busy` mutex; neither workflow may stop the other's test
+> to make room.
+
+## Scenario: independent Runtime Canary
+
+### 1. Scope / Trigger
+
+- Runtime Canary compares two active HTTP AgentCore Runtime Agents by routing
+  target traffic on the shared experiment Gateway.
+- It is not a configuration-bundle stage and never updates a production
+  Gateway or target.
+- Changes to `canary_routers.py`, `canary_service.py`, `RuntimeCanary`, or
+  `EvaluationRuntimeCanary.tsx` must preserve this separate lifecycle.
+
+### 2. Signatures
+
+```text
+GET  /api/runtime-canaries
+GET  /api/runtime-canaries/{id}
+POST /api/runtime-canaries
+     {champion_agent_id, challenger_agent_id, source_experiment_id?}
+     -> 201 canary
+POST /api/runtime-canaries/{id}/action
+     {action, dataset_id?, allow_non_significant?}
+     -> 202 {"canary": canary}
+```
+
+```python
+class RuntimeCanary(Base):
+    id: str
+    champion_agent_id: str
+    challenger_agent_id: str
+    source_experiment_id: str | None
+    status: str  # running|completed|rolled_back|cleaned
+    stage: str   # setup|traffic|verdict|ramp|complete|rollback|cleanup
+    artifacts: dict[str, Any]
+    running_action: str | None
+    progress: str | None
+    error: str | None
+
+canary_capability(agent) -> {"eligible": bool, "reason": str | None}
+stage_not_ready_reason(canary, action) -> str | None
+assert_verdict_allows(canary, allow_non_significant: bool) -> None
+```
+
+### 3. Contracts
+
+- Create validates both Agents with the backend-owned `canary_capability`,
+  requires distinct active Agents, snapshots both Runtime identities, and
+  writes only the `runtime_canaries` row. Setup remains an explicit action.
+- Optional `source_experiment_id` is valid only when that experiment has a
+  completed production promotion and its Agent is the selected champion.
+  Direct Canary creation does not require any configuration experiment.
+- Every action is asynchronous and uses the Canary row's
+  `running_action/progress/error` fields. Backend startup clears stale action
+  flags into retryable `"<action>: interrupted..."` errors.
+- State machine:
+  `setup(90/10) -> traffic -> verdict -> advance(50/50) -> traffic -> verdict
+  -> advance(1/99) -> traffic -> verdict -> complete`. Each gate is manually
+  triggered; `rollback` is available after setup and `cleanup` is always
+  available.
+- `artifacts.setup` owns the Gateway identity, record-derived A/B test name,
+  A/B test ID, champion/challenger target and online-evaluation IDs,
+  `ramp_stage`, and weights. `artifacts.rounds[]` owns one evidence record per
+  ramp stage.
+- Before every traffic attempt, normalize current A/B metrics and store their
+  aggregate sample count as `baseline_n`. Recording a verdict waits for
+  `sample_n > baseline_n`; otherwise it stores `insufficient-data`. Sending
+  more traffic removes the prior verdict for that stage.
+- Significant `treatment-wins` advances directly. `tie` or any result with
+  `significant=false` requires `allow_non_significant=true`.
+  `control-wins`, `insufficient-data`, and `insufficient-n` cannot be
+  overridden.
+- Setup runs the shared-Gateway active-test preflight before targets are
+  created and again before A/B creation. A conflict returns
+  `experiment.gateway_busy`. A retry may adopt only its own exact
+  `can_<id>_target` test.
+- Complete and rollback stop the Canary A/B test and record
+  `experimental_only=true`; they do not deploy either Agent. Cleanup discovers
+  resources by record-derived names, deletes only Canary-owned A/B tests,
+  evaluator configs, and targets, and always passes `delete_gateway=False`.
+
+### 4. Validation & Error Matrix
+
+| Condition | Error |
+|---|---|
+| Canary not found | 404 `canary.not_found` |
+| Agent missing or inactive | 400 `canary.agent_not_active` |
+| Harness, A2A, missing Runtime ARN, or unsupported method | 400 `canary.agent_unsupported`, with role and `canary_capability` |
+| champion equals challenger | 400 `canary.same_agent` |
+| invalid/incomplete source experiment | 400 `canary.source_experiment_invalid` |
+| source experiment Agent is not champion | 400 `canary.source_champion_mismatch` |
+| action already running | 409 `canary.action_in_flight` |
+| setup/traffic/verdict/ramp prerequisite missing | 409 `canary.stage_not_ready` |
+| simulated or unusable traffic dataset | 422 `canary.dataset_unsupported` |
+| foreign active test on shared Gateway | 409 `experiment.gateway_busy` before setup mutation |
+| tie/non-significant without explicit override | 409 `canary.override_required` |
+| control win or insufficient evidence | 409 `canary.verdict_blocked` |
+
+### 5. Good/Base/Bad Cases
+
+- **Good**: create directly -> setup 90/10 -> fresh traffic/verdict at all
+  three stages -> treatment wins -> complete -> cleanup. Completion records a
+  challenger winner but performs no production update.
+- **Base**: promoted configuration experiment opens
+  `mode=canary&canary=new&champion=<agent>&sourceExp=<experiment>`; create
+  validates the linkage and starts a separate record.
+- **Bad**: an unrelated configuration A/B test is active; setup returns
+  `experiment.gateway_busy` before creating Canary targets or evaluators.
+
+### 6. Tests Required
+
+- API create: direct record, optional valid source, source mismatch,
+  same/inactive/unsupported Agents, and no AWS mutation.
+- Setup: shared-Gateway conflict before mutation, exact-name idempotent retry,
+  90/10 artifact ownership, and no Gateway deletion.
+- Every ramp: traffic required before verdict; fresh sample growth required
+  after the latest baseline; prior-stage evidence cannot unlock the next gate.
+- Verdict policy: treatment win, tie, non-significant, control win,
+  insufficient-data, and insufficient-n, including explicit override behavior.
+- Terminal actions: complete/rollback stop only the Canary A/B test; cleanup
+  discovers partial resources, is retryable, and never deletes the Gateway.
+- Browser: direct create, promotion handoff, disabled capability reasons,
+  every gate/override/blocked state, EN/ZH, and desktop/mobile overflow.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+# Treat completion as production promotion or reuse an old verdict.
+update_production_target(challenger)
+round_1["verdict"] = round_0["verdict"]
+```
+
+#### Correct
+
+```python
+baseline_n = metric_sample_count(current_metrics)
+send_gateway_traffic(...)
+assert metric_sample_count(next_metrics) > baseline_n
+stop_canary_ab_test()
+record_complete(winner="challenger", experimental_only=True)
+```
 
 ## Scenario: official AgentCore production promotion
 
@@ -214,7 +353,7 @@ they need an actor loop, not a fire-and-forget prompt replay.
   variant weights to `C=1/T1=99`.
 - This contract covers experiment eligibility, configuration-bundle payloads,
   production defaults, A/B test shutdown, in-place runtime deployment, legacy
-  1/99 records, and the canary prerequisite.
+  1/99 records, and optional Runtime Canary handoff validation.
 
 ### 2. Signatures
 
@@ -276,8 +415,10 @@ backend-owned projection and returns `400` when `eligible=false`.
   projected as `status="ready"` without mutating its stored row. The UI labels
   it `LEGACY TRAFFIC SHIFT` and requires explicit `COMPLETE PROMOTION`.
   Completion preserves its former weights as `promote.prior_shift`.
-- Canary requires `promote.deployment_id` and
-  `promote.ab_test_status == "STOPPED"`; a legacy 1/99 artifact is insufficient.
+- A Runtime Canary handoff with `source_experiment_id` requires
+  `promote.deployment_id` and `promote.ab_test_status == "STOPPED"`; a legacy
+  1/99 artifact is insufficient. Direct Runtime Canary creation has no
+  configuration-experiment prerequisite.
 
 ### 4. Validation & Error Matrix
 
@@ -291,7 +432,7 @@ backend-owned projection and returns `400` when `eligible=false`.
 | managed converted source lacks graft anchors | promotion fails before deployment |
 | production agent is missing/deleted | promotion fails before deployment |
 | deployment or job does not succeed | keep `status="ready"`; retain `promotion_attempt`; no success artifact |
-| canary requested after legacy 1/99 shift | `409 experiment.stage_not_ready` |
+| Canary source references legacy 1/99 shift | `400 canary.source_experiment_invalid` |
 
 ### 5. Good/Base/Bad Cases
 

@@ -100,7 +100,7 @@ class ActionRequest(BaseModel):
     accepted_prompt: str | None = None                        # accept
     accepted_tool_descriptions: dict[str, str] | None = None  # accept
     dataset_id: str | None = None                             # traffic
-    challenger_agent_id: str | None = None                    # canary
+    challenger_agent_id: str | None = None                    # legacy canary
 
 
 @router.post("/{exp_id}/action")
@@ -116,6 +116,13 @@ def experiment_action(
             "experiment.action_in_flight",
             f"{exp.running_action} is still running — wait for it to finish",
             status_code=409,
+        )
+    if req.action in {"canary", "ramp"}:
+        raise AppError(
+            "experiment.action_moved",
+            "Runtime canaries now use /api/runtime-canaries",
+            {"runtime_canaries_path": "/api/runtime-canaries"},
+            status_code=410,
         )
     reason = service.stage_not_ready_reason(exp, req.action)
     if reason:
@@ -142,8 +149,6 @@ def experiment_action(
             "promote",
             lambda progress: service.act_promote(exp_id, progress),
         )
-    elif req.action == "ramp":
-        service.action_ramp(exp)
     elif req.action == "traffic":
         prompts = None
         dataset_info = None
@@ -162,28 +167,6 @@ def experiment_action(
             lambda progress: service.act_traffic(exp_id, prompts, dataset_info,
                                                  progress),
         )
-    elif req.action == "canary":
-        challenger = db.get(Agent, req.challenger_agent_id or "")
-        if challenger is None or challenger.status != "active":
-            raise AppError("experiment.challenger_required",
-                           "canary needs an active challenger agent", status_code=400)
-        if challenger.id == exp.agent_id:
-            raise AppError("experiment.challenger_required",
-                           "the champion cannot challenge itself", status_code=400)
-        capability = service.canary_capability(challenger)
-        if not capability["eligible"]:
-            raise AppError(
-                "experiment.challenger_unsupported",
-                capability["reason"],
-                {"canary_capability": capability},
-                status_code=400,
-            )
-        snapshot = {"name": challenger.name, "arn": challenger.arn,
-                    "resource_id": challenger.resource_id}
-        service.run_action(
-            exp.id, "canary",
-            lambda progress: service.act_canary(exp_id, snapshot, progress),
-        )
     elif req.action == "recommend":
         service.run_action(
             exp.id, "recommend",
@@ -192,6 +175,15 @@ def experiment_action(
                 types=req.recommend_types, tools=req.recommend_tools),
         )
     else:  # gateway | abtest | verdict | cleanup
+        if req.action in {"gateway", "abtest"}:
+            own_test_name = (
+                f"exp_{exp.id[:8]}_bundle"
+                if req.action == "abtest"
+                else None
+            )
+            service.assert_shared_gateway_available(
+                own_test_name=own_test_name
+            )
         fn = {
             "gateway": service.act_gateway,
             "abtest": service.act_abtest,

@@ -9,4 +9,5 @@ export { LaunchSequence } from "./LaunchSequence";
 export { Markdown } from "./Markdown";
 export { Panel } from "./Panel";
 export { StatTile } from "./StatTile";
+export { StageCard } from "./StageCard";
 export { ViewHead } from "./ViewHead";

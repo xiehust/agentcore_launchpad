@@ -42,7 +42,7 @@ def _inline(monkeypatch):
 def test_every_action_requires_its_prerequisite(client):
     exp = _mk_exp(artifacts={"agent_meta": {}})
     for action in ["accept", "bundles", "gateway", "abtest", "traffic",
-                   "verdict", "promote", "canary", "ramp"]:
+                   "verdict", "promote"]:
         res = client.post(f"/api/experiments/{exp.id}/action",
                           json={"action": action})
         assert res.status_code == 409, action
@@ -856,172 +856,104 @@ def test_legacy_completion_preserves_prior_shift(monkeypatch):
     assert svc.promotion_complete(_reload(exp_id).artifacts)
 
 
-def test_canary_requires_completed_promotion():
-    exp = _mk_exp(artifacts={
-        "verdict": {"verdict": "treatment-wins"},
-        "promote": {"after_weights": {"C": 1, "T1": 99}},
-    })
-    assert svc.stage_not_ready_reason(exp, "canary") == (
-        "complete the production promotion first"
-    )
-    exp.artifacts = {
-        **exp.artifacts,
-        "promote": {"ab_test_status": "STOPPED", "deployment_id": "d1"},
-    }
-    assert svc.stage_not_ready_reason(exp, "canary") is None
-
-
-@pytest.mark.parametrize(
-    ("method", "spec", "arn"),
-    [
-        ("harness", {}, "arn:aws:bedrock-agentcore:us-west-2:111122223333:harness/x"),
-        (
-            "zip_runtime",
-            {"protocol": "a2a"},
-            "arn:aws:bedrock-agentcore:us-west-2:111122223333:"
-            "runtime/a2a_challenger-abcdefghij",
-        ),
-    ],
-)
-def test_canary_rejects_incompatible_challenger_before_dispatch(
-    client, monkeypatch, method, spec, arn,
-):
-    exp = _mk_exp(artifacts={
-        "verdict": {"verdict": "treatment-wins"},
-        "promote": {"ab_test_status": "STOPPED", "deployment_id": "d1"},
-    })
-    db = SessionLocal()
-    challenger = Agent(
-        name=f"bad-{method}",
-        method=method,
-        status="active",
-        arn=arn,
-        resource_id="challenger-1",
-        spec=spec,
-    )
-    db.add(challenger)
-    db.commit()
-    challenger_id = challenger.id
-    db.close()
-    dispatched: list[str] = []
-    monkeypatch.setattr(
-        svc, "run_action",
-        lambda exp_id, action, fn: dispatched.append(action),
-    )
-
+@pytest.mark.parametrize("action", ["canary", "ramp"])
+def test_combined_canary_actions_moved_to_independent_api(client, action):
+    exp = _mk_exp(artifacts={"verdict": {"verdict": "treatment-wins"}})
     res = client.post(
         f"/api/experiments/{exp.id}/action",
-        json={"action": "canary", "challenger_agent_id": challenger_id},
+        json={"action": action},
     )
-
-    assert res.status_code == 400
-    assert res.json()["code"] == "experiment.challenger_unsupported"
-    assert res.json()["detail"]["canary_capability"]["eligible"] is False
-    assert dispatched == []
+    assert res.status_code == 410
+    assert res.json()["code"] == "experiment.action_moved"
+    assert res.json()["detail"]["runtime_canaries_path"] == "/api/runtime-canaries"
 
 
-def test_canary_dispatches_compatible_custom_http_runtime(client, monkeypatch):
-    exp = _mk_exp(artifacts={
-        "verdict": {"verdict": "treatment-wins"},
-        "promote": {"ab_test_status": "STOPPED", "deployment_id": "d1"},
-    })
-    db = SessionLocal()
-    challenger = Agent(
-        name="custom-http-runtime",
-        method="zip_runtime",
-        status="active",
-        arn=(
-            "arn:aws:bedrock-agentcore:us-west-2:111122223333:"
-            "runtime/custom_http-abcdefghij"
-        ),
-        resource_id="custom-http-abcdefghij",
-        spec={"protocol": "http", "code": "custom runtime"},
-    )
-    db.add(challenger)
-    db.commit()
-    challenger_id = challenger.id
-    db.close()
-    captured: dict = {}
-    monkeypatch.setattr(
-        svc,
-        "act_canary",
-        lambda exp_id, snapshot, progress: captured.update(
-            exp_id=exp_id, snapshot=snapshot,
-        ),
-    )
+def test_configuration_gateway_rejects_active_canary_before_dispatch(
+    client, monkeypatch,
+):
+    exp = _mk_exp(artifacts={"bundles": {"control": {}, "treatment": {}}})
+    control = MagicMock()
+    control.list_gateways.return_value = {
+        "items": [{"name": svc.EXP_GATEWAY_NAME, "gatewayId": "gw-1"}]
+    }
+    control.get_gateway.return_value = {
+        "gatewayId": "gw-1",
+        "gatewayArn": "arn:gateway",
+    }
+    data = MagicMock()
+    data.list_ab_tests.return_value = {
+        "abTests": [
+            {
+                "abTestId": "canary-ab",
+                "name": "can_12345678_target",
+                "gatewayArn": "arn:gateway",
+                "executionStatus": "RUNNING",
+            }
+        ]
+    }
+    monkeypatch.setattr(svc, "control_client", lambda: control)
+    monkeypatch.setattr(svc, "data_client", lambda: data)
+    dispatched: list[str] = []
     monkeypatch.setattr(
         svc,
         "run_action",
-        lambda exp_id, action, fn: fn(svc._noop),
+        lambda exp_id, action, fn: dispatched.append(action),
     )
 
     res = client.post(
         f"/api/experiments/{exp.id}/action",
-        json={"action": "canary", "challenger_agent_id": challenger_id},
+        json={"action": "gateway"},
     )
 
-    assert res.status_code == 202
-    assert captured == {
-        "exp_id": exp.id,
-        "snapshot": {
-            "name": "custom-http-runtime",
-            "arn": (
-                "arn:aws:bedrock-agentcore:us-west-2:111122223333:"
-                "runtime/custom_http-abcdefghij"
-            ),
-            "resource_id": "custom-http-abcdefghij",
-        },
-    }
-
-
-def test_canary_rejects_inactive_and_self_challengers(client, monkeypatch):
-    artifacts = {
-        "verdict": {"verdict": "treatment-wins"},
-        "promote": {"ab_test_status": "STOPPED", "deployment_id": "d1"},
-    }
-    exp = _mk_exp(artifacts=artifacts)
-    db = SessionLocal()
-    challenger = Agent(
-        name="inactive-runtime",
-        method="zip_runtime",
-        status="failed",
-        arn=(
-            "arn:aws:bedrock-agentcore:us-west-2:111122223333:"
-            "runtime/inactive_runtime-abcdefghij"
-        ),
-        resource_id="inactive-runtime-abcdefghij",
-        spec={"protocol": "http"},
-    )
-    db.add(challenger)
-    db.commit()
-    challenger_id = challenger.id
-    db.close()
-    dispatched: list[str] = []
-    monkeypatch.setattr(
-        svc, "run_action",
-        lambda exp_id, action, fn: dispatched.append(action),
-    )
-
-    inactive = client.post(
-        f"/api/experiments/{exp.id}/action",
-        json={"action": "canary", "challenger_agent_id": challenger_id},
-    )
-    assert inactive.status_code == 400
-    assert inactive.json()["code"] == "experiment.challenger_required"
-
-    db = SessionLocal()
-    challenger = db.get(Agent, challenger_id)
-    challenger.status = "active"
-    db.commit()
-    db.close()
-    self_exp = _mk_exp(agent_id=challenger_id, artifacts=artifacts)
-    self_response = client.post(
-        f"/api/experiments/{self_exp.id}/action",
-        json={"action": "canary", "challenger_agent_id": challenger_id},
-    )
-    assert self_response.status_code == 400
-    assert self_response.json()["code"] == "experiment.challenger_required"
+    assert res.status_code == 409
+    assert res.json()["code"] == "experiment.gateway_busy"
     assert dispatched == []
+
+
+def test_configuration_cleanup_keeps_legacy_canary_resources(monkeypatch):
+    exp = _mk_exp(
+        artifacts={
+            "bundles": {
+                "control": {"bundle_id": "bundle-c"},
+                "treatment": {"bundle_id": "bundle-t"},
+            },
+            "gateway": {
+                "gateway_id": "gw-shared",
+                "target_id_v1": "target-v1",
+            },
+            "abtest": {"ab_test_id": "bundle-ab"},
+            "canary": {
+                "canary_ab_test_id": "legacy-canary-ab",
+                "target_id_v2": "target-v2",
+            },
+        }
+    )
+    control = MagicMock()
+    control.list_online_evaluation_configs.return_value = {
+        "onlineEvaluationConfigs": [
+            {
+                "onlineEvaluationConfigId": "oe-1",
+                "onlineEvaluationConfigName": f"exp_{exp.id[:8]}_oe1",
+            }
+        ]
+    }
+    captured: dict = {}
+    monkeypatch.setattr(svc, "control_client", lambda: control)
+    monkeypatch.setattr(svc, "data_client", MagicMock)
+    monkeypatch.setattr(
+        svc.ac,
+        "cleanup_resources",
+        lambda control, data, **kwargs: (
+            captured.update(kwargs)
+            or [{"category": "cleanup", "status": "deleted", "detail": ""}]
+        ),
+    )
+
+    svc.act_cleanup(exp.id)
+
+    assert captured["ab_test_ids"] == ["bundle-ab", "legacy-canary-ab"]
+    assert captured["target_ids"] == ["target-v1", "target-v2"]
+    assert captured["delete_gateway"] is False
 
 
 # ─── create defers all stage work ────────────────────────────────────────────

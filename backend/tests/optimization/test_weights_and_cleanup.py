@@ -4,7 +4,8 @@ tests/test_weights_pause_resume.py and cleanup shapes."""
 from unittest.mock import MagicMock
 
 from app.evaluation import agentcore_eval as ac
-from app.optimization.service import RAMP_STEPS, compute_verdict
+from app.optimization.canary_service import RAMP_WEIGHTS
+from app.optimization.service import compute_verdict
 
 
 def test_update_weights_payload():
@@ -17,7 +18,7 @@ def test_update_weights_payload():
 
 
 def test_ramp_steps_progression():
-    assert RAMP_STEPS == [(90, 10), (50, 50), (1, 99)]  # service weight floor is 1
+    assert RAMP_WEIGHTS == ((90, 10), (50, 50), (1, 99))
 
 
 def test_cleanup_resources_tolerates_failures():
@@ -34,6 +35,19 @@ def test_cleanup_resources_tolerates_failures():
     assert by_cat["online-eval:oe-1"] == "deleted"
     assert by_cat["bundle:b-1"] == "deleted"
     assert by_cat["bundle:b-2"] == "skipped"  # per-category tolerance
+
+
+def test_cleanup_can_keep_shared_gateway_while_deleting_targets():
+    control, data = MagicMock(), MagicMock()
+    ac.cleanup_resources(
+        control,
+        data,
+        gateway_id="gw-shared",
+        target_ids=["t1", "t2"],
+        delete_gateway=False,
+    )
+    assert control.delete_gateway_target.call_count == 2
+    control.delete_gateway.assert_not_called()
 
 
 def test_verdict_honest_about_small_n():

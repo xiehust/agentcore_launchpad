@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""E2E: the stepwise optimization flow against real AWS (small-n, budget-conscious).
+"""E2E: configuration A/B plus independent Runtime Canary against real AWS.
 
-Drives every user action in order, exactly like the UI:
+Drives both user workflows in order, exactly like the UI:
 recommend → accept → bundles → gateway → abtest → traffic → verdict →
-promote → canary (v2 challenger 90/10) → ramp (→50/50) → cleanup.
+promote, then a separate canary record through
+90/10 → 50/50 → 1/99 with traffic and verdict gates at every stage.
 
 Async actions return 202; this waits on running_action/progress like the
 page's poll loop does.
@@ -21,26 +22,34 @@ AGENT = "eval-target"
 CHALLENGER = "eval-target-v2"
 
 
-def action(client, exp_id, name, timeout_s=1800, **fields):
+def action(
+    client,
+    collection,
+    row_id,
+    response_key,
+    name,
+    timeout_s=1800,
+    **fields,
+):
     """POST one stage action, then poll the row until the runner is idle."""
-    res = client.post(f"/api/experiments/{exp_id}/action",
+    res = client.post(f"{collection}/{row_id}/action",
                       json={"action": name, **fields})
     res.raise_for_status()
-    exp = res.json()["experiment"]
+    row = res.json()[response_key]
     if res.status_code != 202:  # sync action — done already
-        return exp
+        return row
     deadline = time.time() + timeout_s
     last = ""
     while time.time() < deadline:
-        exp = client.get(f"/api/experiments/{exp_id}").json()
-        line = exp.get("progress") or exp.get("stage")
+        row = client.get(f"{collection}/{row_id}").json()
+        line = row.get("progress") or row.get("stage")
         if line != last:
             print(f"  [{time.strftime('%H:%M:%S')}] {line}")
             last = line
-        if not exp.get("running_action"):
-            if exp.get("error"):
-                raise RuntimeError(f"action {name} failed: {exp['error']}")
-            return exp
+        if not row.get("running_action"):
+            if row.get("error"):
+                raise RuntimeError(f"action {name} failed: {row['error']}")
+            return row
         time.sleep(10)
     raise TimeoutError(f"action {name} timed out")
 
@@ -103,7 +112,14 @@ def main() -> int:
             print(f"── {name}: already done, skipping")
             return exp
         print(f"── {name}…")
-        exp = action(client, exp_id, name, **fields)
+        exp = action(
+            client,
+            "/api/experiments",
+            exp_id,
+            "experiment",
+            name,
+            **fields,
+        )
         return exp
 
     ensure("recommend", lambda a: "recommend" in a)
@@ -140,7 +156,9 @@ def main() -> int:
                          if k != "session_ids"})
 
     print("── verdict (monitoring)…")
-    exp = action(client, exp_id, "verdict")
+    exp = action(
+        client, "/api/experiments", exp_id, "experiment", "verdict"
+    )
     verdict = exp["artifacts"]["verdict"]
     print("  verdict:", json.dumps({k: v for k, v in verdict.items()
                                     if k != "metrics"}))
@@ -148,40 +166,131 @@ def main() -> int:
 
     ensure("promote", lambda a: "promote" in a)
     promote = exp["artifacts"]["promote"]
-    print("  weights:", promote["before_weights"], "→", promote["after_weights"])
+    print("  deployed version:", promote["agent_version"],
+          "· A/B test:", promote["ab_test_status"])
 
-    ensure("canary", lambda a: "canary" in a,
-           challenger_agent_id=challenger["id"])
-    canary = exp["artifacts"]["canary"]
-    print("  canary abtest:", canary["canary_ab_test_id"], "weights:",
-          canary["weights"])
+    running_canaries = [
+        row
+        for row in client.get("/api/runtime-canaries").json()["canaries"]
+        if row["status"] == "running"
+        and row["champion_agent_id"] == agent["id"]
+        and row["challenger_agent_id"] == challenger["id"]
+    ]
+    if running_canaries:
+        canary = running_canaries[0]
+        canary_id = canary["id"]
+        print(f"── resuming Runtime Canary {canary_id}…")
+    else:
+        print("── create independent Runtime Canary…")
+        res = client.post(
+            "/api/runtime-canaries",
+            json={
+                "champion_agent_id": agent["id"],
+                "challenger_agent_id": challenger["id"],
+                "source_experiment_id": exp_id,
+            },
+        )
+        res.raise_for_status()
+        canary = res.json()
+        canary_id = canary["id"]
 
-    print("── ramp…")
-    exp = action(client, exp_id, "ramp")
-    canary = exp["artifacts"]["canary"]
-    print("  weights:", canary["before_weights"], "→", canary["after_weights"],
-          f"(stage {canary['ramp_stage']})")
+    def canary_action(name, **fields):
+        nonlocal canary
+        print(f"── canary {name}…")
+        canary = action(
+            client,
+            "/api/runtime-canaries",
+            canary_id,
+            "canary",
+            name,
+            **fields,
+        )
+        return canary
 
-    print("── online eval config state:")
+    if "setup" not in canary["artifacts"]:
+        canary_action("setup")
+    setup = canary["artifacts"]["setup"]
+    print("  target A/B:", setup["ab_test_id"], "· weights:", setup["weights"])
+
+    for ramp_stage in range(3):
+        canary = client.get(f"/api/runtime-canaries/{canary_id}").json()
+        rounds = canary["artifacts"].get("rounds", [])
+        current = next(
+            (row for row in rounds if row["ramp_stage"] == ramp_stage),
+            None,
+        )
+        if current is None or not current.get("traffic_attempts"):
+            canary_action("traffic", **fields)
+            rounds = canary["artifacts"].get("rounds", [])
+            current = next(
+                row for row in rounds if row["ramp_stage"] == ramp_stage
+            )
+        if not current.get("verdict"):
+            canary_action("verdict")
+            current = next(
+                row
+                for row in canary["artifacts"]["rounds"]
+                if row["ramp_stage"] == ramp_stage
+            )
+
+        verdict = current["verdict"]
+        summary = {
+            key: value for key, value in verdict.items() if key != "metrics"
+        }
+        print(f"  stage {ramp_stage} verdict:", json.dumps(summary))
+        outcome = verdict["verdict"]
+        if outcome in ("control-wins", "insufficient-data", "insufficient-n"):
+            raise RuntimeError(
+                f"canary stage {ramp_stage} is blocked by {outcome}; "
+                "send more traffic or roll back"
+            )
+        allow_override = outcome == "tie" or verdict.get("significant") is False
+        if ramp_stage < 2:
+            if canary["artifacts"]["setup"]["ramp_stage"] == ramp_stage:
+                canary_action(
+                    "advance",
+                    allow_non_significant=allow_override,
+                )
+        elif canary["status"] == "running":
+            canary_action(
+                "complete",
+                allow_non_significant=allow_override,
+            )
+
+    print("── canary online eval config state:")
     import boto3
     control = boto3.client("bedrock-agentcore-control", region_name="us-west-2")
-    oe = control.get_online_evaluation_config(
-        onlineEvaluationConfigId=exp["artifacts"]["gateway"]["online_eval_id"]
-    )
-    print(f"  {oe.get('onlineEvaluationConfigName')} · status={oe.get('status')} "
-          f"· execution={oe.get('executionStatus')}")
+    setup = canary["artifacts"]["setup"]
+    for role in ("champion", "challenger"):
+        oe = control.get_online_evaluation_config(
+            onlineEvaluationConfigId=setup[role]["online_eval_id"]
+        )
+        print(f"  {oe.get('onlineEvaluationConfigName')} · status={oe.get('status')} "
+              f"· execution={oe.get('executionStatus')}")
 
-    print("── cleanup…")
-    exp = action(client, exp_id, "cleanup")
-    cleanup = exp["artifacts"]["cleanup"]
-    for row in cleanup:
+    print("── canary cleanup…")
+    canary_action("cleanup")
+    canary_cleanup = canary["artifacts"]["cleanup"]
+    for row in canary_cleanup:
+        print(f"  {row['status']:<8} {row['category']:<28} {row['detail'][:60]}")
+
+    print("── configuration experiment cleanup…")
+    exp = action(
+        client, "/api/experiments", exp_id, "experiment", "cleanup"
+    )
+    experiment_cleanup = exp["artifacts"]["cleanup"]
+    for row in experiment_cleanup:
         print(f"  {row['status']:<8} {row['category']:<28} {row['detail'][:60]}")
 
     print("── shared gateway untouched check:")
-    gw = control.get_gateway(gatewayIdentifier="launchpad-gw-em0yuqmmdp")
-    print(f"  launchpad-gw status: {gw['status']}")
+    gw = control.get_gateway(gatewayIdentifier=setup["gateway_id"])
+    print(f"  {gw['name']} status: {gw['status']}")
 
-    failed = [r for r in cleanup if r["status"] != "deleted"]
+    failed = [
+        row
+        for row in canary_cleanup + experiment_cleanup
+        if row["status"] != "deleted"
+    ]
     if failed:
         print(f"cleanup had {len(failed)} skipped categories")
     print("E2E EXPERIMENT: PASS")

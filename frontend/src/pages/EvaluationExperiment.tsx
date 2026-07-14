@@ -1,13 +1,23 @@
 import type { TFunction } from "i18next";
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties } from "react";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { FlaskConical, Gauge } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
-import { Btn, Chip, ConfirmDialog, Panel, useToast, ViewHead } from "../components";
+import {
+  Btn,
+  Chip,
+  ConfirmDialog,
+  Panel,
+  StageCard,
+  useToast,
+  ViewHead,
+} from "../components";
 import type { AgentInfo } from "../lib/api";
 import { api } from "../lib/api";
 import { evaluatorLabel } from "../lib/evaluators";
+import { RuntimeCanaryView } from "./EvaluationRuntimeCanary";
 
 export interface ABMetric {
   label: string;
@@ -101,7 +111,7 @@ interface DatasetInfo {
 // the loop even before any experiment exists, so the list is static here.
 const LOOP_STAGES = [
   "recommend", "bundles", "gateway", "abtest", "traffic", "verdict",
-  "promote", "canary", "ramp", "cleanup",
+  "promote", "cleanup",
 ];
 
 // "0.0310" reads worse than "0.031"; tiny values collapse to a bound.
@@ -121,7 +131,7 @@ function verdictLabel(
 }
 
 // status → chip tone, shared by the sub-page header and the dashboard row.
-export function experimentTone(status: string): "good" | "warn" | "crit" | "muted" {
+function experimentTone(status: string): "good" | "warn" | "crit" | "muted" {
   if (status === "failed") return "crit";
   if (status === "cleaned") return "muted";
   if (status === "running") return "warn";
@@ -168,35 +178,98 @@ function DiffPanes({ before, after, beforeLabel, afterLabel }: {
   );
 }
 
-// One stage card: numbered title, accent bar for the active stage, ✓ when done.
-function StageCard({ id, index, title, active, done, children }: {
-  id: string; index: number; title: string;
-  active: boolean; done: boolean; children: ReactNode;
-}) {
+export function ExperimentView({ onBack }: { onBack: () => void }) {
+  const { t } = useTranslation();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const canaryMode = searchParams.get("mode") === "canary";
+  const switchMode = (mode: "configuration" | "canary") => {
+    if (mode === "canary") {
+      const selectedCanary = searchParams.get("canary");
+      setSearchParams({
+        view: "experiment",
+        mode: "canary",
+        ...(selectedCanary ? { canary: selectedCanary } : {}),
+      });
+      return;
+    }
+    const selectedExperiment = searchParams.get("exp");
+    setSearchParams({
+      view: "experiment",
+      ...(selectedExperiment ? { exp: selectedExperiment } : {}),
+    });
+  };
+
   return (
-    <div
-      data-testid={`card-${id}`}
-      style={{
-        border: "1px solid var(--line)",
-        borderLeft: `3px solid ${
-          active ? "var(--warn)" : done ? "var(--good)" : "var(--line)"}`,
-        borderRadius: 4, padding: "10px 12px", marginBottom: 10,
-      }}
-    >
-      <div
-        className="mono"
-        style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".08em",
-                 marginBottom: 8,
-                 color: active ? "var(--warn)" : done ? "var(--good)" : "var(--ink-3)" }}
-      >
-        {String(index).padStart(2, "0")} · {title}{done ? " ✓" : ""}
+    <section>
+      <ViewHead
+        kicker={t("evaluation.kicker")}
+        title={t("evalPage.experiment.title")}
+        meta={canaryMode ? t("canaryPage.meta") : t("evalPage.experiment.meta")}
+      />
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12,
+                    alignItems: "center", flexWrap: "wrap", marginBottom: 14 }}>
+        <Btn onClick={onBack}>◂ {t("evalPage.backToRuns")}</Btn>
+        <div
+          role="tablist"
+          aria-label={t("canaryPage.modeLabel")}
+          style={{
+            display: "grid",
+            gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+            width: "min(100%, 430px)",
+            border: "1px solid var(--line)",
+            borderRadius: 4,
+            padding: 3,
+            gap: 3,
+          }}
+        >
+          <Btn
+            role="tab"
+            aria-selected={!canaryMode}
+            data-testid="mode-configuration"
+            onClick={() => switchMode("configuration")}
+            style={{
+              minWidth: 0,
+              minHeight: 34,
+              borderColor: !canaryMode ? "var(--warn)" : "transparent",
+              color: !canaryMode ? "var(--warn)" : undefined,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 6,
+              whiteSpace: "normal",
+            }}
+          >
+            <FlaskConical size={14} />
+            {t("canaryPage.mode.configuration")}
+          </Btn>
+          <Btn
+            role="tab"
+            aria-selected={canaryMode}
+            data-testid="mode-canary"
+            onClick={() => switchMode("canary")}
+            style={{
+              minWidth: 0,
+              minHeight: 34,
+              borderColor: canaryMode ? "var(--warn)" : "transparent",
+              color: canaryMode ? "var(--warn)" : undefined,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 6,
+              whiteSpace: "normal",
+            }}
+          >
+            <Gauge size={14} />
+            {t("canaryPage.mode.canary")}
+          </Btn>
+        </div>
       </div>
-      {children}
-    </div>
+      {canaryMode ? <RuntimeCanaryView /> : <ConfigurationExperimentView />}
+    </section>
   );
 }
 
-export function ExperimentView({ onBack }: { onBack: () => void }) {
+function ConfigurationExperimentView() {
   const { t } = useTranslation();
   const toast = useToast();
   const [experiments, setExperiments] = useState<ExperimentInfo[]>([]);
@@ -205,7 +278,6 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
   const [busy, setBusy] = useState(false);
   const [startAgentId, setStartAgentId] = useState("");
   const [startError, setStartError] = useState<string | null>(null);
-  const [challengerId, setChallengerId] = useState("");
   const [trafficDatasetId, setTrafficDatasetId] = useState("");
   const [editedPrompt, setEditedPrompt] = useState<string | null>(null);
   const [editedToolJson, setEditedToolJson] = useState<string | null>(null);
@@ -268,7 +340,6 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
   };
   // per-experiment control state must not leak across row switches
   useEffect(() => {
-    setChallengerId("");
     setTrafficDatasetId("");
     setEditedPrompt(null);
     setEditedToolJson(null);
@@ -1047,9 +1118,26 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
               </div>
             )}
             {promotionComplete && (
-              <Chip tone="good" icon="✓" style={{ marginLeft: "auto" }}>
-                {t("expPage.promoted")} · v{promotion?.agent_version ?? "—"}
-              </Chip>
+              <div style={{ marginLeft: "auto", display: "flex", gap: 8,
+                            alignItems: "center", flexWrap: "wrap" }}>
+                <Chip tone="good" icon="✓">
+                  {t("expPage.promoted")} · v{promotion?.agent_version ?? "—"}
+                </Chip>
+                <Btn
+                  data-testid="handoff-runtime-canary"
+                  onClick={() => setSearchParams({
+                    view: "experiment",
+                    mode: "canary",
+                    canary: "new",
+                    champion: exp.agent_id,
+                    sourceExp: exp.id,
+                  })}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+                >
+                  <Gauge size={14} />
+                  {t("canaryPage.handoff")}
+                </Btn>
+              </div>
             )}
           </div>
           {legacyPromotion && (
@@ -1120,96 +1208,46 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
     </StageCard>
   );
 
-  const challengerCandidates = exp
-    ? activeAgents.filter((ag) => ag.id !== exp.agent_id)
-    : [];
-  const eligibleChallengers = challengerCandidates.filter(
-    (ag) => ag.canary_capability.eligible,
-  );
-  const unsupportedChallengers = challengerCandidates.filter(
-    (ag) => !ag.canary_capability.eligible,
-  );
-
-  const canaryCard = exp && promotionComplete && (
-    <StageCard
-      id="canary" index={6} title={t("expPage.canaryTitle")}
-      active={activeCard === "post" && !canaryWeights}
-      done={(canary?.ramp_stage ?? 0) >= 2}
+  const legacyCanaryArtifact = exp && canary && (
+    <div
+      data-testid="legacy-canary-artifact"
+      style={{
+        border: "1px solid var(--line)",
+        borderLeft: "3px solid var(--warn)",
+        borderRadius: 4,
+        padding: "10px 12px",
+        marginBottom: 10,
+      }}
     >
-      <div className="am-h" style={{ fontSize: 11, color: "var(--ink-3)" }}>
-        <span className="mono">
-          {canary?.challenger_agent ? `— ${canary.challenger_agent}` : ""}
-        </span>
-        <span className="mono">RAMP 10 → 50 → 100</span>
+      <div className="mono" style={{ color: "var(--warn)", fontSize: 11,
+                                     fontWeight: 700, marginBottom: 7 }}>
+        {t("expPage.legacyCanary.title")}
       </div>
-      {canaryWeights ? (
+      {canaryWeights && (
         <>
           <div className="split">
-            <div style={{ flex: `0 0 ${canaryWeights.C ?? 90}%`,
-                          background: "var(--s1)" }} />
+            <div style={{
+              flex: `0 0 ${canaryWeights.C ?? 90}%`,
+              background: "var(--s1)",
+            }} />
             <div style={{ flex: 1, background: "var(--s3)" }} />
           </div>
           <div className="mono dim" style={{ fontSize: 9.5 }}>
-            champion {canaryWeights.C}% · challenger {canaryWeights.T1}% — stage{" "}
-            {(canary?.ramp_stage ?? 0) + 1}/3
+            champion {canaryWeights.C}% · challenger {canaryWeights.T1}% · stage{" "}
+            {(canary.ramp_stage ?? 0) + 1}/3
           </div>
-          {(canary?.ramp_stage ?? 0) < 2 && (
-            <div style={{ marginTop: 8, display: "flex", gap: 9 }}>
-              <Btn
-                disabled={busy || !!exp.running_action}
-                data-testid="ramp-btn"
-                onClick={() => void onAction(exp.id, "ramp")}
-              >
-                {t("expPage.ramp")} ▸
-              </Btn>
-            </div>
-          )}
-        </>
-      ) : (
-        <>
-          <div style={{ display: "flex", gap: 9, alignItems: "flex-start",
-                        flexWrap: "wrap" }}>
-            <select
-              className="input"
-              style={{ maxWidth: 220 }}
-              value={challengerId}
-              onChange={(e) => setChallengerId(e.target.value)}
-            >
-              <option value="">{t("expPage.pickChallenger")}</option>
-              {eligibleChallengers.map((ag) => (
-                <option key={ag.id} value={ag.id} style={{ background: "#141816" }}>
-                  {ag.name} · {ag.method}
-                </option>
-              ))}
-              {unsupportedChallengers.map((ag) => (
-                <option
-                  key={ag.id}
-                  value={ag.id}
-                  disabled
-                  style={{ background: "#141816" }}
-                >
-                  {ag.name} · {ag.method} — {ag.canary_capability.reason}
-                </option>
-              ))}
-            </select>
-            {actionBtn("canary", t("expPage.startCanary"), {
-              disabled: !challengerId,
-              extra: { challenger_agent_id: challengerId },
-            })}
-          </div>
-          {eligibleChallengers.length === 0 && (
-            <div className="mono dim" style={{ fontSize: 10, marginTop: 6 }}>
-              {t("expPage.noChallenger")}
-            </div>
-          )}
         </>
       )}
-    </StageCard>
+      <div className="note" style={{ marginTop: 8 }}>
+        <span className="i">[i]</span>
+        <span>{t("expPage.legacyCanary.body")}</span>
+      </div>
+    </div>
   );
 
   const cleanupCard = exp && (
     <StageCard
-      id="cleanup" index={promotionComplete ? 7 : 6} title={t("expPage.card.cleanup")}
+      id="cleanup" index={6} title={t("expPage.card.cleanup")}
       active={false} done={!!a.cleanup}
     >
       {!a.cleanup && (
@@ -1239,16 +1277,7 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
   );
 
   return (
-    <section>
-      <ViewHead
-        kicker={t("evaluation.kicker")}
-        title={t("evalPage.experiment.title")}
-        meta={t("evalPage.experiment.meta")}
-      />
-      <div style={{ marginBottom: 14 }}>
-        <Btn onClick={onBack}>◂ {t("evalPage.backToRuns")}</Btn>
-      </div>
-
+    <>
       <Panel
         brk
         pad={false}
@@ -1436,7 +1465,7 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
               {gwabCard}
               {trafficCard}
               {verdictCard}
-              {canaryCard}
+              {legacyCanaryArtifact}
               {cleanupCard}
             </>
           )}
@@ -1493,6 +1522,6 @@ export function ExperimentView({ onBack }: { onBack: () => void }) {
           </div>
         </Panel>
       </div>
-    </section>
+    </>
   );
 }

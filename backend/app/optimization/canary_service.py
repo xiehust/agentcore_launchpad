@@ -1,0 +1,630 @@
+"""Independent Runtime target-canary orchestration on the experiment Gateway."""
+
+import copy
+from collections.abc import Callable
+from datetime import UTC, datetime
+from typing import Any
+
+from app.core.config import get_settings
+from app.core.db import SessionLocal
+from app.core.errors import AppError
+from app.evaluation import agentcore_eval as ac
+from app.optimization import service as experiment_service
+from app.optimization.models import RuntimeCanary
+from app.services.agentcore.client import control_client, data_client
+
+Progress = Callable[[str], None]
+RAMP_WEIGHTS = ((90, 10), (50, 50), (1, 99))
+ASYNC_ACTIONS = frozenset(
+    {"setup", "traffic", "verdict", "advance", "complete", "rollback", "cleanup"}
+)
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _get(canary_id: str) -> RuntimeCanary:
+    db = SessionLocal()
+    try:
+        row = db.get(RuntimeCanary, canary_id)
+        if row is None:
+            raise RuntimeError(f"runtime canary {canary_id} no longer exists")
+        return row
+    finally:
+        db.close()
+
+
+def _update(canary_id: str, **fields: Any) -> None:
+    db = SessionLocal()
+    try:
+        row = db.get(RuntimeCanary, canary_id)
+        if row is None:
+            raise RuntimeError(f"runtime canary {canary_id} no longer exists")
+        artifact = fields.pop("artifact", None)
+        if artifact is not None:
+            merged = dict(row.artifacts)
+            merged.update(artifact)
+            row.artifacts = merged
+        for key, value in fields.items():
+            setattr(row, key, value)
+        db.commit()
+    finally:
+        db.close()
+
+
+def run_action(
+    canary_id: str,
+    action: str,
+    fn: Callable[[Progress], Any],
+) -> None:
+    """Run one canary action with progress persisted on its own ledger row."""
+
+    def progress(message: str) -> None:
+        _update(canary_id, progress=message[:300])
+
+    def runner() -> None:
+        try:
+            fn(progress)
+            _update(canary_id, running_action=None, progress=None)
+        except Exception as exc:
+            _update(
+                canary_id,
+                running_action=None,
+                progress=None,
+                error=f"{action}: {type(exc).__name__}: {exc}"[:500],
+            )
+
+    _update(canary_id, running_action=action, error=None)
+    experiment_service._spawn(runner)
+
+
+def clear_stale_running_actions() -> list[str]:
+    """Clear daemon-thread flags left by a backend restart."""
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(RuntimeCanary)
+            .filter(RuntimeCanary.running_action.isnot(None))
+            .all()
+        )
+        cleared: list[str] = []
+        for row in rows:
+            row.error = (
+                f"{row.running_action}: interrupted by a backend restart "
+                "— retry the action"
+            )
+            row.running_action = None
+            row.progress = None
+            cleared.append(row.id)
+        db.commit()
+        return cleared
+    finally:
+        db.close()
+
+
+def _agent_meta(agent: Any, control: Any) -> dict[str, Any]:
+    return {
+        "id": agent.id,
+        "name": agent.name,
+        "arn": agent.arn,
+        "resource_id": agent.resource_id,
+        "runtime_name": experiment_service.rt_name(control, agent.resource_id),
+        "canary_capability": experiment_service.canary_capability(agent),
+    }
+
+
+def start_canary(
+    champion: Any,
+    challenger: Any,
+    source_experiment_id: str | None = None,
+) -> RuntimeCanary:
+    """Create only the ledger row; setup remains an explicit action."""
+    control = control_client()
+    champion_meta = _agent_meta(champion, control)
+    challenger_meta = _agent_meta(challenger, control)
+    row = RuntimeCanary(
+        name=f"CANARY-{champion.name[:18]}-{challenger.name[:18]}",
+        champion_agent_id=champion.id,
+        champion_agent_name=champion.name,
+        challenger_agent_id=challenger.id,
+        challenger_agent_name=challenger.name,
+        source_experiment_id=source_experiment_id,
+        artifacts={
+            "champion_meta": champion_meta,
+            "challenger_meta": challenger_meta,
+            "rounds": [],
+        },
+    )
+    db = SessionLocal()
+    try:
+        db.add(row)
+        db.commit()
+        row_id = row.id
+    finally:
+        db.close()
+    return _get(row_id)
+
+
+def _test_name(canary_id: str) -> str:
+    return f"can_{canary_id[:8]}_target"
+
+
+def assert_setup_available(canary_id: str) -> None:
+    """Read-only Gateway preflight for the setup API entry point."""
+    experiment_service.assert_shared_gateway_available(
+        own_test_name=_test_name(canary_id)
+    )
+
+
+def _current_round(
+    row: RuntimeCanary,
+    *,
+    create: bool = False,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    setup = row.artifacts.get("setup") or {}
+    ramp_stage = int(setup.get("ramp_stage", 0))
+    rounds = copy.deepcopy(row.artifacts.get("rounds") or [])
+    current = next(
+        (entry for entry in rounds if entry.get("ramp_stage") == ramp_stage),
+        None,
+    )
+    if current is None and create:
+        current = {
+            "ramp_stage": ramp_stage,
+            "weights": dict(setup.get("weights") or {}),
+            "traffic_attempts": [],
+        }
+        rounds.append(current)
+    return rounds, current
+
+
+def metric_sample_count(metrics: list[dict[str, Any]]) -> int:
+    """Aggregate sample count used only as a monotonic fresh-evidence marker."""
+    total = 0
+    for metric in metrics:
+        total += int((metric.get("control") or {}).get("sampleSize") or 0)
+        total += sum(
+            int(variant.get("sampleSize") or 0)
+            for variant in metric.get("variants", [])
+        )
+    return total
+
+
+def stage_not_ready_reason(row: RuntimeCanary, action: str) -> str | None:
+    setup = row.artifacts.get("setup")
+    if action == "cleanup":
+        return None
+    if row.status != "running":
+        return f"canary is already {row.status}"
+    if action == "setup":
+        return "canary setup is already complete" if setup else None
+    if not setup:
+        return "run canary setup first"
+    if action == "rollback":
+        return None
+
+    _, current = _current_round(row)
+    attempts = (current or {}).get("traffic_attempts") or []
+    if action == "traffic":
+        return None
+    if action == "verdict":
+        return None if attempts else "send traffic at the current weights first"
+    if action in {"advance", "complete"}:
+        if current is None or current.get("verdict") is None:
+            return "record a verdict at the current weights first"
+        ramp_stage = int(setup.get("ramp_stage", 0))
+        if action == "advance" and ramp_stage >= len(RAMP_WEIGHTS) - 1:
+            return "the final 1/99 stage must be completed, not advanced"
+        if action == "complete" and ramp_stage != len(RAMP_WEIGHTS) - 1:
+            return "reach the final 1/99 stage first"
+    return None
+
+
+def assert_verdict_allows(
+    row: RuntimeCanary,
+    *,
+    allow_non_significant: bool,
+) -> None:
+    """Enforce the reviewed treatment/tie/control ramp policy."""
+    _, current = _current_round(row)
+    verdict = (current or {}).get("verdict") or {}
+    outcome = verdict.get("verdict")
+    if outcome in {"control-wins", "insufficient-data", "insufficient-n"}:
+        raise AppError(
+            "canary.verdict_blocked",
+            f"{outcome} cannot advance; send more traffic or roll back",
+            {"verdict": verdict},
+            status_code=409,
+        )
+    needs_override = outcome == "tie" or verdict.get("significant") is False
+    if outcome != "treatment-wins" and not needs_override:
+        raise AppError(
+            "canary.verdict_blocked",
+            "the current verdict does not allow advancing",
+            {"verdict": verdict},
+            status_code=409,
+        )
+    if needs_override and not allow_non_significant:
+        raise AppError(
+            "canary.override_required",
+            "tie or non-significant evidence requires explicit operator override",
+            {"verdict": verdict},
+            status_code=409,
+        )
+
+
+def _create_target_and_eval(
+    *,
+    control: Any,
+    gateway_id: str,
+    target_name: str,
+    eval_name: str,
+    agent: dict[str, Any],
+    progress: Progress,
+    role: str,
+) -> dict[str, Any]:
+    progress(f"creating {role} target + waiting READY…")
+    target_id = experiment_service.create_runtime_target_idempotent(
+        control, gateway_id, target_name, agent["arn"]
+    )
+    progress(f"creating {role} online evaluation config…")
+    online_eval = experiment_service.create_online_eval_idempotent(
+        control,
+        name=eval_name,
+        log_group=(
+            f"/aws/bedrock-agentcore/runtimes/{agent['resource_id']}-DEFAULT"
+        ),
+        service_name=f"{agent['runtime_name']}.DEFAULT",
+        role_arn=get_settings().resources["execution_role_arn"],
+    )
+    return {
+        "target_name": target_name,
+        "target_id": target_id,
+        "online_eval_id": online_eval.get("onlineEvaluationConfigId"),
+        "online_eval_arn": online_eval.get("onlineEvaluationConfigArn"),
+    }
+
+
+def act_setup(canary_id: str, progress: Progress) -> dict[str, Any]:
+    row = _get(canary_id)
+    control = control_client()
+    data = data_client()
+    gateway = experiment_service.ensure_experiment_gateway(progress, control)
+    test_name = _test_name(canary_id)
+    experiment_service.assert_gateway_available(
+        gateway["gateway_arn"], own_test_name=test_name, data=data
+    )
+
+    champion = _create_target_and_eval(
+        control=control,
+        gateway_id=gateway["gateway_id"],
+        target_name=f"can{canary_id[:6]}c",
+        eval_name=f"can_{canary_id[:8]}_oec",
+        agent=row.artifacts["champion_meta"],
+        progress=progress,
+        role="champion",
+    )
+    challenger = _create_target_and_eval(
+        control=control,
+        gateway_id=gateway["gateway_id"],
+        target_name=f"can{canary_id[:6]}t",
+        eval_name=f"can_{canary_id[:8]}_oet",
+        agent=row.artifacts["challenger_meta"],
+        progress=progress,
+        role="challenger",
+    )
+
+    experiment_service.assert_gateway_available(
+        gateway["gateway_arn"], own_test_name=test_name, data=data
+    )
+    variants = ac.target_variants(
+        champion["target_name"], challenger["target_name"]
+    )
+    progress("creating target-routing A/B test at 90/10…")
+    try:
+        response = ac.create_ab_test(
+            data,
+            name=test_name,
+            gatewayArn=gateway["gateway_arn"],
+            roleArn=get_settings().resources["execution_role_arn"],
+            enableOnCreate=True,
+            evaluationConfig={
+                "perVariantOnlineEvaluationConfig": [
+                    {
+                        "name": "C",
+                        "onlineEvaluationConfigArn": champion["online_eval_arn"],
+                    },
+                    {
+                        "name": "T1",
+                        "onlineEvaluationConfigArn": challenger["online_eval_arn"],
+                    },
+                ]
+            },
+            gatewayFilter={
+                "targetPaths": [f"/{champion['target_name']}/*"]
+            },
+            variants=variants,
+        )
+    except Exception as exc:
+        if not experiment_service._is_conflict(exc):
+            raise
+        response = next(
+            (
+                test
+                for test in experiment_service.list_ab_tests(data)
+                if str(test.get("name", "")).lower() == test_name.lower()
+            ),
+            None,
+        )
+        if response is None:
+            experiment_service.assert_gateway_available(
+                gateway["gateway_arn"], own_test_name=test_name, data=data
+            )
+            raise
+
+    result = {
+        **gateway,
+        "test_name": test_name,
+        "ab_test_id": response.get("abTestId"),
+        "champion": champion,
+        "challenger": challenger,
+        "ramp_stage": 0,
+        "weights": {variant["name"]: variant["weight"] for variant in variants},
+    }
+    _update(canary_id, stage="setup", artifact={"setup": result, "rounds": []})
+    return result
+
+
+def act_traffic(
+    canary_id: str,
+    prompts: list[str] | None,
+    dataset_info: dict[str, str] | None,
+    progress: Progress,
+) -> dict[str, Any]:
+    row = _get(canary_id)
+    setup = row.artifacts["setup"]
+    metrics = ac.normalize_ab_results(
+        ac.get_ab_test(data_client(), ab_test_id=setup["ab_test_id"])
+    )
+    baseline_n = metric_sample_count(metrics)
+    result = experiment_service.send_gateway_traffic(
+        setup["gateway_url"],
+        setup["champion"]["target_name"],
+        prompts if prompts is not None else experiment_service.TRAFFIC_PROMPTS * 2,
+        progress=progress,
+    )
+    attempt = {
+        **result,
+        **(dataset_info or {}),
+        "baseline_n": baseline_n,
+        "completed_at": _now(),
+    }
+    rounds, current = _current_round(row, create=True)
+    assert current is not None
+    current.setdefault("traffic_attempts", []).append(attempt)
+    current.pop("verdict", None)
+    _update(canary_id, stage="traffic", artifact={"rounds": rounds})
+    return attempt
+
+
+def act_verdict(canary_id: str, progress: Progress) -> dict[str, Any]:
+    row = _get(canary_id)
+    setup = row.artifacts["setup"]
+    rounds, current = _current_round(row)
+    if current is None or not current.get("traffic_attempts"):
+        raise RuntimeError("current ramp stage has no traffic attempt")
+    baseline_n = int(current["traffic_attempts"][-1].get("baseline_n", 0))
+    data = data_client()
+    deadline = datetime.now(UTC).timestamp() + 900
+    metrics: list[dict[str, Any]] = []
+    sample_n = 0
+    result: dict[str, Any] = {}
+    while True:
+        result = ac.get_ab_test(data, ab_test_id=setup["ab_test_id"])
+        metrics = ac.normalize_ab_results(result)
+        sample_n = metric_sample_count(metrics)
+        if sample_n > baseline_n:
+            break
+        if datetime.now(UTC).timestamp() >= deadline:
+            break
+        progress(
+            f"aggregating current-stage evidence · n {sample_n}/{baseline_n + 1} "
+            f"· status {result.get('executionStatus', '?')}"
+        )
+        experiment_service._sleep(45)
+
+    verdict = experiment_service.compute_verdict(metrics)
+    if sample_n <= baseline_n:
+        verdict = {
+            "verdict": "insufficient-data",
+            "reason": "no new evaluator samples arrived after current-stage traffic",
+            "n": sample_n,
+        }
+    stored = {
+        "metrics": metrics,
+        **verdict,
+        "baseline_n": baseline_n,
+        "recorded_at": _now(),
+    }
+    current["verdict"] = stored
+    _update(canary_id, stage="verdict", artifact={"rounds": rounds})
+    return stored
+
+
+def act_advance(
+    canary_id: str,
+    progress: Progress,
+    *,
+    allow_non_significant: bool,
+) -> dict[str, Any]:
+    row = _get(canary_id)
+    assert_verdict_allows(
+        row, allow_non_significant=allow_non_significant
+    )
+    setup = copy.deepcopy(row.artifacts["setup"])
+    next_stage = int(setup["ramp_stage"]) + 1
+    control_weight, treatment_weight = RAMP_WEIGHTS[next_stage]
+    variants = ac.target_variants(
+        setup["champion"]["target_name"],
+        setup["challenger"]["target_name"],
+        control_weight=control_weight,
+        treatment_weight=treatment_weight,
+    )
+    progress(f"updating experiment Gateway traffic to {control_weight}/{treatment_weight}…")
+    experiment_service.update_weights_with_pause(
+        data_client(), setup["ab_test_id"], variants
+    )
+    setup.update(
+        ramp_stage=next_stage,
+        weights={variant["name"]: variant["weight"] for variant in variants},
+    )
+    _update(canary_id, stage="ramp", artifact={"setup": setup})
+    return {"ramp_stage": next_stage, "weights": setup["weights"]}
+
+
+def act_complete(
+    canary_id: str,
+    progress: Progress,
+    *,
+    allow_non_significant: bool,
+) -> dict[str, Any]:
+    row = _get(canary_id)
+    assert_verdict_allows(
+        row, allow_non_significant=allow_non_significant
+    )
+    setup = row.artifacts["setup"]
+    stopped = experiment_service._stop_ab_test(
+        data_client(),
+        setup["ab_test_id"],
+        progress,
+        label="Runtime canary A/B test",
+    )
+    result = {
+        "winner": "challenger",
+        "ab_test_status": stopped.get("executionStatus"),
+        "completed_at": _now(),
+        "experimental_only": True,
+    }
+    _update(
+        canary_id,
+        status="completed",
+        stage="complete",
+        artifact={"complete": result},
+    )
+    return result
+
+
+def act_rollback(canary_id: str, progress: Progress) -> dict[str, Any]:
+    row = _get(canary_id)
+    setup = row.artifacts["setup"]
+    stopped = experiment_service._stop_ab_test(
+        data_client(),
+        setup["ab_test_id"],
+        progress,
+        label="Runtime canary A/B test",
+    )
+    result = {
+        "winner": "champion",
+        "ab_test_status": stopped.get("executionStatus"),
+        "rolled_back_at": _now(),
+        "experimental_only": True,
+    }
+    _update(
+        canary_id,
+        status="rolled_back",
+        stage="rollback",
+        artifact={"rollback": result},
+    )
+    return result
+
+
+def _owned_resources(
+    row: RuntimeCanary,
+    control: Any,
+    data: Any,
+) -> tuple[str | None, list[str], list[str], list[str]]:
+    setup = row.artifacts.get("setup") or {}
+    gateway = experiment_service.find_experiment_gateway(control)
+    gateway_id = setup.get("gateway_id") or (
+        gateway.get("gatewayId") if gateway else None
+    )
+
+    target_names = {f"can{row.id[:6]}c", f"can{row.id[:6]}t"}
+    target_ids = {
+        target.get("target_id")
+        for target in [setup.get("champion") or {}, setup.get("challenger") or {}]
+        if target.get("target_id")
+    }
+    if gateway_id:
+        for target in control.list_gateway_targets(
+            gatewayIdentifier=gateway_id
+        ).get("items", []):
+            if target.get("name") in target_names and target.get("targetId"):
+                target_ids.add(target["targetId"])
+
+    eval_prefix = f"can_{row.id[:8]}_"
+    online_eval_ids = {
+        config["onlineEvaluationConfigId"]
+        for config in control.list_online_evaluation_configs().get(
+            "onlineEvaluationConfigs", []
+        )
+        if str(config.get("onlineEvaluationConfigName", "")).startswith(eval_prefix)
+    }
+    for target in [setup.get("champion") or {}, setup.get("challenger") or {}]:
+        if target.get("online_eval_id"):
+            online_eval_ids.add(target["online_eval_id"])
+
+    ab_test_ids = {
+        test["abTestId"]
+        for test in experiment_service.list_ab_tests(data)
+        if str(test.get("name", "")).lower() == _test_name(row.id).lower()
+        and test.get("abTestId")
+    }
+    if setup.get("ab_test_id"):
+        ab_test_ids.add(setup["ab_test_id"])
+    return (
+        gateway_id,
+        sorted(target_ids),
+        sorted(online_eval_ids),
+        sorted(ab_test_ids),
+    )
+
+
+def act_cleanup(
+    canary_id: str,
+    progress: Progress,
+) -> list[dict[str, str]]:
+    row = _get(canary_id)
+    control = control_client()
+    data = data_client()
+    gateway_id, target_ids, online_eval_ids, ab_test_ids = _owned_resources(
+        row, control, data
+    )
+    progress("tearing down canary-owned A/B test, evaluators, and targets…")
+    for ab_test_id in ab_test_ids:
+        try:
+            experiment_service._stop_ab_test(
+                data,
+                ab_test_id,
+                progress,
+                label="Runtime canary A/B test",
+            )
+        except Exception:
+            pass
+    results = ac.cleanup_resources(
+        control,
+        data,
+        ab_test_ids=ab_test_ids,
+        online_eval_ids=online_eval_ids,
+        gateway_id=gateway_id,
+        target_ids=target_ids,
+        delete_gateway=False,
+    )
+    _update(
+        canary_id,
+        status="cleaned",
+        stage="cleanup",
+        artifact={"cleanup": results},
+    )
+    return results

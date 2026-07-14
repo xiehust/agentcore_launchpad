@@ -603,6 +603,7 @@ def cleanup_resources(
     bundle_ids: list[str] | None = None,
     gateway_id: str | None = None,
     target_ids: list[str] | None = None,
+    delete_gateway: bool = True,
     runtime_ids: list[str] | None = None,
     role_name: str | None = None,
     delivery_id: str | None = None,
@@ -666,7 +667,7 @@ def cleanup_resources(
             ),
         )
 
-    if gateway_id:
+    if gateway_id and delete_gateway:
         def _del_gateway() -> None:
             # Target deletion is async; DeleteGateway rejects while any target
             # is still attached. Wait for the target list to drain first.

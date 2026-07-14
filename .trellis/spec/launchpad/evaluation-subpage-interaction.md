@@ -1,7 +1,11 @@
 # Evaluation Sub-page Interaction (table + URL-param selection)
 
-> Status: Active · 2026-07-13
-> Files: `frontend/src/pages/EvaluationExperiment.tsx` (reference), `frontend/src/pages/EvaluationEvaluators.tsx`, `frontend/src/pages/EvaluationDatasets.tsx`, router `frontend/src/pages/Evaluation.tsx`
+> Status: Active · 2026-07-14
+> Files: `frontend/src/pages/EvaluationExperiment.tsx`,
+> `frontend/src/pages/EvaluationRuntimeCanary.tsx`,
+> `frontend/src/pages/EvaluationEvaluators.tsx`,
+> `frontend/src/pages/EvaluationDatasets.tsx`, router
+> `frontend/src/pages/Evaluation.tsx`
 
 All three Evaluation sub-pages share one interaction shape (Experiment introduced it;
 Evaluators/Datasets adopted it in task 07-13-eval-pages-experiment-layout):
@@ -19,15 +23,40 @@ Evaluators/Datasets adopted it in task 07-13-eval-pages-experiment-layout):
 | Page | param | values | default (no param) |
 |------|-------|--------|--------------------|
 | `?view=experiment` | `exp` | `<id>` \| `new` | `experiments[0]` |
+| `?view=experiment&mode=canary` | `canary` | `<id>` \| `new` | `canaries[0]` |
 | `?view=evaluators` | `ev` | `<evaluatorId>` (builtin or custom) \| `new` | first **custom** row, else create form |
 | `?view=datasets` | `ds` | `<localId>` \| `cloud:<datasetId>` \| `new` | `rows[0]` (local), else create form |
 
 - `setSearchParams` must always carry `view=…` — dropping it falls back to the runs dashboard.
+- Experiment mode is URL-owned: no `mode` means Configuration A/B;
+  `mode=canary` means Runtime Canary. Switching modes drops the other mode's
+  selection and handoff params instead of retaining hidden state.
+- Optional promotion handoff URL:
+  `?view=experiment&mode=canary&canary=new&champion=<agentId>&sourceExp=<experimentId>`.
+  It prefills the champion and source linkage only. If the operator changes
+  champion, clear `sourceExp` from form state so create cannot submit a stale
+  source/champion pair.
 - `cloud:` prefix matches the runs-scope encoding (`Evaluation.tsx` CLOUD_VALUE_PREFIX).
 - Unknown id → fall back to the default (never crash). Unresolved `cloud:` id while the cloud
   list loads → create form; do NOT fall back to a local row (would flash the wrong editor).
 - After create: `await load()` then select the new id (`evaluator_id` from POST /evaluators;
-  `id` from POST /datasets). After delete: if the deleted id is the current param, clear it.
+  `id` from POST /datasets or POST `/runtime-canaries`). After delete: if the
+  deleted id is the current param, clear it.
+
+## Experiment workflow split (2026-07-14)
+
+- The segmented control is navigation, not shared form state. Configuration
+  A/B continues using `exp`; Runtime Canary uses `canary`.
+- Configuration promotion may render a handoff button, but it only opens the
+  separate Canary create form. It does not call a configuration action.
+- Runtime Canary selectors render every active Agent: options with
+  `canary_capability.eligible=false` stay visible and disabled with the
+  backend-provided reason. The same Agent cannot be selected in both roles.
+- The Canary table uses an internal horizontal scroll container with a stable
+  minimum table width; mobile document width must remain viewport-bounded.
+- Legacy `experiment.artifacts.canary` is read-only in Configuration A/B.
+  Cleanup stays available because the configuration record still owns those
+  historical resources.
 
 ## Editor rehydration — the one real gotcha
 

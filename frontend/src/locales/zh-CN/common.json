@@ -914,21 +914,19 @@
     },
     "experiment": {
       "title": "实验",
-      "meta": "提示词 A/B 循环 · 会创建真实 AWS 资源",
+      "meta": "配置 A/B 与 Runtime Canary · 两个独立流程",
       "how": {
-        "title": "实验循环是如何执行的",
-        "sub": "10 个阶段 · recommend → cleanup",
+        "title": "配置 A/B 如何执行",
+        "sub": "8 个阶段 · recommend → cleanup",
         "recommend": "RECOMMEND——AI 起草改进版系统提示词",
         "bundles": "BUNDLES——生成 control 与 treatment 配置包",
-        "gateway": "GATEWAY——专用网关路由实验流量",
+        "gateway": "GATEWAY——共享实验网关路由测试流量",
         "abtest": "ABTEST——A/B 测试按 50/50 分流",
         "traffic": "TRAFFIC——采样调用同时流经两个分组",
         "verdict": "VERDICT——在线评估器为两组打分并对比",
         "promote": "PROMOTE——停止 A/B 测试并将 Treatment 部署到生产",
-        "canary": "CANARY——挑战者 Agent 以 90/10 加入",
-        "ramp": "RAMP——挑战者流量按 10 → 50 → 100 递增",
         "cleanup": "CLEANUP——删除实验的 AWS 资源",
-        "note": "实验会创建真实 AWS 资源(配置包、网关、A/B 测试、在线评估器);verdict 之前的流量阶段最长约 15 分钟。"
+        "note": "配置实验会创建真实 AWS 资源（配置包、临时 Target、A/B 测试、在线评估器），共享实验网关会被保留。"
       },
       "startNew": "启动新实验",
       "summary": {
@@ -995,7 +993,7 @@
     "startCanary": "启动金丝雀 90/10",
     "confirmCleanup": {
       "title": "清理实验",
-      "body": "将删除该实验的 AWS 资源(挑战者运行时、网关目标、A/B 测试、在线评估器),此操作不可撤销。"
+      "body": "将删除配置实验拥有的 Bundle、临时 Target、A/B 测试和在线评估器；共享实验网关会保留。"
     },
     "stepHint": "每个阶段都由你手动触发——结果即时持久化，可随时刷新或离开页面。",
     "card": {
@@ -1042,7 +1040,85 @@
     "harnessDisabled": "需先转换为 runtime",
     "harnessHint": "托管 harness agent 无法直接实验（backing runtime 锁定直调、不消费 config bundle）。请在 Agent 管理中将其转换为 runtime agent（转换 ⇄ RT），再在此选择转换后的 agent。",
     "a2aDisabled": "A2A 协议——不消费 config-bundle",
-    "unsupportedHint": "只有活跃的 Launchpad 生成 HTTP runtime 和已验证的 harness 转换 runtime 可运行配置 Bundle 实验。"
+    "unsupportedHint": "只有活跃的 Launchpad 生成 HTTP runtime 和已验证的 harness 转换 runtime 可运行配置 Bundle 实验。",
+    "legacyCanary": {
+      "title": "历史 RUNTIME CANARY 产物",
+      "body": "该只读结果来自旧版合并流程。仍可清理其资源；新的 Runtime Canary 使用独立记录。"
+    }
+  },
+  "canaryPage": {
+    "meta": "Runtime Target 流量 · 共享实验网关",
+    "modeLabel": "实验流程",
+    "mode": {
+      "configuration": "配置 A/B",
+      "canary": "RUNTIME CANARY"
+    },
+    "sub": "Champion 与 Challenger · 实验网关流量",
+    "create": "创建 RUNTIME CANARY",
+    "createHint": "选择两个兼容的 Runtime Agent；只有手动触发 Setup 后才会创建 AWS 资源。",
+    "handoff": "启动 RUNTIME CANARY",
+    "handoffSource": "Champion 已从配置推广实验 {{id}} 预填。",
+    "champion": "CHAMPION",
+    "challenger": "CHALLENGER",
+    "pickChampion": "选择 Champion Agent……",
+    "pickChallenger": "选择 Challenger Agent……",
+    "eligibilityHint": "只有活跃的 HTTP AgentCore Runtime Agent 可加入 Runtime Canary；禁用原因由后端能力合同统一提供。",
+    "experimentalOnly": "下方权重仅作用于共享实验网关。完成 Canary 不会更新生产 Gateway 或 Target。",
+    "setup": "设置 90/10",
+    "running": "运行中…",
+    "retry": "重试",
+    "builtinPrompts": "内置演示提示词（12 条）",
+    "sendTraffic": "发送流量",
+    "sendMoreTraffic": "追加流量",
+    "recordVerdict": "记录判定",
+    "advance": "进入下一档",
+    "complete": "完成 CANARY",
+    "rollback": "回滚",
+    "cleanup": "清理",
+    "notSignificant": "未达统计显著",
+    "experimentalWeights": "实验网关 · Champion {{control}}% · Challenger {{treatment}}%",
+    "trafficEvidence": "{{attempts}} 次流量 · 成功 {{sent}} · 失败 {{failed}} · 基线 n={{baseline}}",
+    "blocked": "{{verdict}} 阻止继续放量。请追加流量或回滚。",
+    "overrideHint": "平局或未达统计显著的结果需要操作员显式确认后才能继续。",
+    "completedSummary": "Challenger 赢得本次实验 Canary，A/B 测试已停止；未更改任何生产网关。",
+    "rollbackSummary": "Canary 已回滚到 Champion，A/B 测试已停止。",
+    "stage": {
+      "setup": "实验网关设置",
+      "ramp": "{{control}}/{{treatment}} 流量与判定",
+      "locked": "请先完成上一档的流量、判定和放量门禁。"
+    },
+    "list": {
+      "title": "RUNTIME CANARY",
+      "sub": "独立 Target 分流记录 · 最新在前",
+      "new": "新建 CANARY",
+      "name": "CANARY",
+      "weights": "权重",
+      "created": "创建时间",
+      "status": "状态",
+      "empty": "还没有 RUNTIME CANARY——创建一个 ▸"
+    },
+    "confirmOverride": {
+      "title": "覆盖非显著证据门禁",
+      "body": "当前结果为平局或未达统计显著。是否仍进入下一档实验流量？"
+    },
+    "confirmRollback": {
+      "title": "回滚 RUNTIME CANARY",
+      "body": "将停止 Canary A/B 测试，并记录 Champion 获胜。临时资源会保留到执行清理。"
+    },
+    "confirmCleanup": {
+      "title": "清理 RUNTIME CANARY",
+      "body": "只删除本 Canary 的 A/B 测试、在线评估器和临时 Target；共享实验网关会保留。"
+    },
+    "how": {
+      "title": "RUNTIME CANARY 门禁",
+      "sub": "每一档流量都需要手动证据门禁",
+      "setup": "SETUP——创建两个临时 Runtime Target，并从 90/10 开始",
+      "ramp90": "90/10——发送流量，然后记录本档的新判定",
+      "ramp50": "50/50——只有上一档判定允许时才能进入",
+      "ramp99": "1/99——最终实验档；AgentCore 权重下限为 1",
+      "finish": "FINISH——Treatment 获胜后完成，或回滚并清理",
+      "note": "Treatment 显著获胜可直接继续；平局或未达显著需显式覆盖；Control 获胜或证据不足会继续阻断。"
+    }
   },
   "obs": {
     "kicker": "// 遥测层",

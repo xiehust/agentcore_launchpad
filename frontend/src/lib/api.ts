@@ -46,6 +46,105 @@ export interface AgentInfo {
   revision?: number;
 }
 
+export interface RuntimeCanaryMetric {
+  label: string;
+  control: { mean: number | null; sampleSize: number | null };
+  variants: {
+    name: string;
+    mean: number | null;
+    sampleSize: number | null;
+    pValue?: number | null;
+    percentChange?: number | null;
+    isSignificant?: boolean;
+  }[];
+}
+
+export interface RuntimeCanaryInfo {
+  id: string;
+  name: string;
+  champion_agent_id: string;
+  champion_agent_name: string;
+  challenger_agent_id: string;
+  challenger_agent_name: string;
+  source_experiment_id: string | null;
+  status: "running" | "completed" | "rolled_back" | "cleaned";
+  stage: string;
+  stages: string[];
+  running_action: string | null;
+  progress: string | null;
+  error: string | null;
+  created_at: string | null;
+  artifacts: {
+    champion_meta?: {
+      id: string;
+      name: string;
+      arn: string;
+      resource_id: string;
+      runtime_name: string;
+    };
+    challenger_meta?: {
+      id: string;
+      name: string;
+      arn: string;
+      resource_id: string;
+      runtime_name: string;
+    };
+    setup?: {
+      gateway_id: string;
+      gateway_arn: string;
+      gateway_url: string;
+      test_name: string;
+      ab_test_id: string;
+      ramp_stage: number;
+      weights: Record<string, number>;
+      champion: {
+        target_name: string;
+        target_id: string;
+        online_eval_id: string;
+      };
+      challenger: {
+        target_name: string;
+        target_id: string;
+        online_eval_id: string;
+      };
+    };
+    rounds?: {
+      ramp_stage: number;
+      weights: Record<string, number>;
+      traffic_attempts: {
+        sent: number;
+        failed: number;
+        baseline_n: number;
+        dataset_id?: string;
+        dataset_name?: string;
+        completed_at?: string;
+      }[];
+      verdict?: {
+        verdict: string;
+        avg_delta?: number;
+        n?: number;
+        significant?: boolean;
+        baseline_n?: number;
+        reason?: string;
+        metrics: RuntimeCanaryMetric[];
+      };
+    }[];
+    complete?: {
+      winner: string;
+      ab_test_status: string;
+      completed_at: string;
+      experimental_only: boolean;
+    };
+    rollback?: {
+      winner: string;
+      ab_test_status: string;
+      rolled_back_at: string;
+      experimental_only: boolean;
+    };
+    cleanup?: { category: string; status: string; detail?: string }[];
+  };
+}
+
 export interface JobEvent {
   ts: string;
   stage: string;
@@ -381,6 +480,31 @@ export const api = {
   getOverview: () => request<OverviewInfo>("/api/overview"),
   getAgent: (id: string) => request<AgentInfo>(`/api/agents/${id}`),
   getJob: (id: string) => request<JobInfo>(`/api/jobs/${id}`),
+  listRuntimeCanaries: () =>
+    request<{ canaries: RuntimeCanaryInfo[] }>("/api/runtime-canaries"),
+  getRuntimeCanary: (id: string) =>
+    request<RuntimeCanaryInfo>(`/api/runtime-canaries/${id}`),
+  createRuntimeCanary: (input: {
+    champion_agent_id: string;
+    challenger_agent_id: string;
+    source_experiment_id?: string;
+  }) =>
+    request<RuntimeCanaryInfo>("/api/runtime-canaries", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  runtimeCanaryAction: (
+    id: string,
+    input: {
+      action: string;
+      dataset_id?: string;
+      allow_non_significant?: boolean;
+    },
+  ) =>
+    request<{ canary: RuntimeCanaryInfo }>(`/api/runtime-canaries/${id}/action`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
   invokeAgent: (id: string, prompt: string, sessionId?: string) =>
     request<{ text: string; session_id: string; latency_ms: number }>(
       `/api/agents/${id}/invoke`,

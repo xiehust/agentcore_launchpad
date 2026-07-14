@@ -14,6 +14,10 @@ from app.core.errors import register_error_handlers
 from app.deployer.pipeline import resume_pending_jobs
 from app.evaluation.routers import router as evaluation_router
 from app.evaluation.service import resume_interrupted_runs
+from app.optimization.canary_routers import router as runtime_canaries_router
+from app.optimization.canary_service import (
+    clear_stale_running_actions as clear_stale_canary_actions,
+)
 from app.optimization.routers import router as experiments_router
 from app.optimization.service import clear_stale_running_actions
 from app.routers.agent_skills import router as agent_skills_router
@@ -74,6 +78,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     app.include_router(observability_router)
     app.include_router(evaluation_router)
     app.include_router(experiments_router)
+    app.include_router(runtime_canaries_router)
     app.include_router(apikeys_router)
     app.include_router(public_router)
     if resume_jobs:
@@ -93,6 +98,12 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
             logging.getLogger("launchpad").info(
                 "cleared stale experiment action(s) on: %s",
                 ", ".join(stale_actions),
+            )
+        stale_canaries = clear_stale_canary_actions()
+        if stale_canaries:
+            logging.getLogger("launchpad").info(
+                "cleared stale Runtime Canary action(s) on: %s",
+                ", ".join(stale_canaries),
             )
         start_auto_refresh()  # periodic model-price refresh (real server only)
 

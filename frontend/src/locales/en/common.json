@@ -913,22 +913,20 @@
       "TrajectoryAnyOrderMatch": "Trajectory Any-Order Match"
     },
     "experiment": {
-      "title": "EXPERIMENT",
-      "meta": "prompt A/B loop · real AWS resources",
+      "title": "EXPERIMENTS",
+      "meta": "configuration A/B and Runtime Canary · separate workflows",
       "how": {
-        "title": "HOW A LOOP WORKS",
-        "sub": "10 stages · recommend → cleanup",
+        "title": "HOW CONFIGURATION A/B WORKS",
+        "sub": "8 stages · recommend → cleanup",
         "recommend": "RECOMMEND — AI drafts an improved system prompt",
         "bundles": "BUNDLES — control & treatment configuration bundles",
-        "gateway": "GATEWAY — dedicated gateway routes experiment traffic",
+        "gateway": "GATEWAY — the shared experiment gateway routes test traffic",
         "abtest": "ABTEST — A/B test splits traffic 50/50 between arms",
         "traffic": "TRAFFIC — sample invocations flow through both arms",
         "verdict": "VERDICT — online evaluators score and compare the arms",
         "promote": "PROMOTE — stop the A/B test and deploy treatment to production",
-        "canary": "CANARY — a challenger agent joins at 90/10",
-        "ramp": "RAMP — challenger traffic steps 10 → 50 → 100",
         "cleanup": "CLEANUP — delete the experiment's AWS resources",
-        "note": "Experiments create real AWS resources (config bundles, a gateway, A/B tests, online evaluators). Traffic stages before the verdict can take ~15 minutes."
+        "note": "Configuration experiments create real AWS resources (config bundles, targets, A/B tests, online evaluators). The shared experiment gateway is retained."
       },
       "startNew": "START NEW EXPERIMENT",
       "summary": {
@@ -995,7 +993,7 @@
     "startCanary": "START CANARY 90/10",
     "confirmCleanup": {
       "title": "Clean up experiment",
-      "body": "This deletes the experiment's AWS resources (challenger runtime, gateway targets, A/B tests, online evaluators). This cannot be undone."
+      "body": "This deletes the configuration experiment's bundles, targets, A/B tests, and online evaluators. The shared experiment gateway is retained."
     },
     "stepHint": "Each stage runs only when you trigger it — every result persists immediately, so you can reload or leave anytime.",
     "card": {
@@ -1042,7 +1040,85 @@
     "harnessDisabled": "convert to runtime first",
     "harnessHint": "Managed-harness agents can't run experiments (invoke-locked runtime, no config-bundle support). Convert one to a runtime agent in Agent Management (CONVERT ⇄ RT), then pick the converted agent here.",
     "a2aDisabled": "A2A protocol — no config-bundle A/B",
-    "unsupportedHint": "Only active Launchpad-generated HTTP runtimes and verified harness conversions can run configuration-bundle experiments."
+    "unsupportedHint": "Only active Launchpad-generated HTTP runtimes and verified harness conversions can run configuration-bundle experiments.",
+    "legacyCanary": {
+      "title": "LEGACY RUNTIME CANARY ARTIFACT",
+      "body": "This read-only result was created by the former combined workflow. Cleanup remains available; new Runtime Canaries use their own records."
+    }
+  },
+  "canaryPage": {
+    "meta": "Runtime target traffic · shared experiment gateway",
+    "modeLabel": "Experiment workflow",
+    "mode": {
+      "configuration": "CONFIGURATION A/B",
+      "canary": "RUNTIME CANARY"
+    },
+    "sub": "champion vs challenger · experimental gateway traffic",
+    "create": "CREATE RUNTIME CANARY",
+    "createHint": "Choose two compatible Runtime Agents; AWS setup starts only on command.",
+    "handoff": "START RUNTIME CANARY",
+    "handoffSource": "Champion prefilled from promoted configuration experiment {{id}}.",
+    "champion": "CHAMPION",
+    "challenger": "CHALLENGER",
+    "pickChampion": "pick champion agent…",
+    "pickChallenger": "pick challenger agent…",
+    "eligibilityHint": "Only active HTTP AgentCore Runtime agents can join a Runtime Canary. Disabled reasons come from the backend capability contract.",
+    "experimentalOnly": "All weights below apply only to the shared experiment Gateway. Completion does not update a production Gateway or target.",
+    "setup": "SET UP 90/10",
+    "running": "RUNNING…",
+    "retry": "RETRY",
+    "builtinPrompts": "built-in demo prompts (12)",
+    "sendTraffic": "SEND TRAFFIC",
+    "sendMoreTraffic": "SEND MORE TRAFFIC",
+    "recordVerdict": "RECORD VERDICT",
+    "advance": "ADVANCE",
+    "complete": "COMPLETE CANARY",
+    "rollback": "ROLL BACK",
+    "cleanup": "CLEAN UP",
+    "notSignificant": "not significant",
+    "experimentalWeights": "experiment Gateway · champion {{control}}% · challenger {{treatment}}%",
+    "trafficEvidence": "{{attempts}} traffic attempt(s) · sent {{sent}} · failed {{failed}} · baseline n={{baseline}}",
+    "blocked": "{{verdict}} blocks advancement. Send more traffic or roll back.",
+    "overrideHint": "This tie or non-significant result requires an explicit operator override.",
+    "completedSummary": "The challenger won the experimental canary. Its A/B test is stopped; no production Gateway was changed.",
+    "rollbackSummary": "The canary was rolled back to the champion and its A/B test was stopped.",
+    "stage": {
+      "setup": "EXPERIMENT GATEWAY SETUP",
+      "ramp": "{{control}}/{{treatment}} TRAFFIC + VERDICT",
+      "locked": "Complete the previous stage's traffic, verdict, and advancement gate first."
+    },
+    "list": {
+      "title": "RUNTIME CANARIES",
+      "sub": "independent target-routing records · newest first",
+      "new": "NEW CANARY",
+      "name": "CANARY",
+      "weights": "WEIGHTS",
+      "created": "CREATED",
+      "status": "STATUS",
+      "empty": "NO RUNTIME CANARIES YET — CREATE ONE ▸"
+    },
+    "confirmOverride": {
+      "title": "Override non-significant evidence",
+      "body": "The current result is tied or not statistically significant. Continue to the next experimental traffic stage anyway?"
+    },
+    "confirmRollback": {
+      "title": "Roll back Runtime Canary",
+      "body": "This stops the canary A/B test and records the champion as the winner. Temporary resources remain until cleanup."
+    },
+    "confirmCleanup": {
+      "title": "Clean up Runtime Canary",
+      "body": "This deletes only this canary's A/B test, online evaluators, and temporary targets. The shared experiment Gateway is retained."
+    },
+    "how": {
+      "title": "RUNTIME CANARY GATES",
+      "sub": "manual evidence gate at every traffic stage",
+      "setup": "SETUP — create two temporary Runtime targets and start at 90/10",
+      "ramp90": "90/10 — send traffic, then record a fresh verdict",
+      "ramp50": "50/50 — advance only after the prior verdict allows it",
+      "ramp99": "1/99 — final experimental stage; AgentCore weights have a floor of one",
+      "finish": "FINISH — complete on a treatment win, or roll back and clean up",
+      "note": "Treatment wins advance directly. Ties and non-significant results require override; control wins and insufficient evidence remain blocked."
+    }
   },
   "obs": {
     "kicker": "// TELEMETRY LAYER",

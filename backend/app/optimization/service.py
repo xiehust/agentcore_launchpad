@@ -3,7 +3,7 @@ routers/abtest.py + recommend.py + bundles.py — github.com/xiehust/agentcore_e
 
 Stepwise actions, each user-triggered (stage = furthest point completed):
     recommend → accept → bundles → gateway → abtest → traffic → verdict
-    → promote | canary → ramp → cleanup
+    → promote → cleanup
 Long actions run on a daemon thread via run_action, streaming a progress
 line onto the experiment row (running_action/progress) so the UI can poll
 and a reload resumes mid-action. Short actions run inline in the request.
@@ -29,6 +29,7 @@ from botocore.awsrequest import AWSRequest
 
 from app.core.config import get_settings
 from app.core.db import SessionLocal
+from app.core.errors import AppError
 from app.deployer.pipeline import create_deployment, execute_deploy_job
 from app.evaluation import agentcore_eval as ac
 from app.evaluation.scenarios import scenario_prompts
@@ -591,38 +592,128 @@ def create_online_eval_idempotent(
         )
 
 
-def stage_gateway(
-    exp_id: str, agent: dict[str, Any], progress: Progress = _noop
+def find_experiment_gateway(control: Any | None = None) -> dict[str, Any] | None:
+    """Return the live shared experiment Gateway detail without creating it."""
+    control = control or control_client()
+    items = control.list_gateways(maxResults=100).get("items", [])
+    summary = next((g for g in items if g.get("name") == EXP_GATEWAY_NAME), None)
+    if summary is None:
+        return None
+    return control.get_gateway(gatewayIdentifier=summary["gatewayId"])
+
+
+def ensure_experiment_gateway(
+    progress: Progress = _noop,
+    control: Any | None = None,
 ) -> dict[str, Any]:
+    """Create or adopt the shared experiment Gateway and wait until READY."""
     settings = get_settings()
-    control = control_client()
-    role_arn = settings.resources["gateway_role_arn"]
+    control = control or control_client()
     progress("creating experiment gateway…")
     try:
         gateway = control.create_gateway(
             name=EXP_GATEWAY_NAME,
             description="Launchpad experiment gateway (A/B routing)",
             authorizerType="AWS_IAM",
-            roleArn=role_arn,
+            roleArn=settings.resources["gateway_role_arn"],
             clientToken=str(uuid.uuid4()),
         )
         gateway_id = gateway["gatewayId"]
     except Exception as exc:
         if not _is_conflict(exc):
             raise
-        items = control.list_gateways(maxResults=100).get("items", [])
-        gateway_id = next(
-            g["gatewayId"] for g in items if g.get("name") == EXP_GATEWAY_NAME
-        )
-    gateway_arn = gateway_url = ""
+        existing = find_experiment_gateway(control)
+        if existing is None:
+            raise
+        gateway_id = existing["gatewayId"]
+
     progress("waiting for gateway READY…")
     for _ in range(30):
         detail = control.get_gateway(gatewayIdentifier=gateway_id)
         if detail.get("status") == "READY":
-            gateway_arn = detail["gatewayArn"]
-            gateway_url = detail["gatewayUrl"]
-            break
+            return {
+                "gateway_id": gateway_id,
+                "gateway_arn": detail["gatewayArn"],
+                "gateway_url": detail["gatewayUrl"],
+            }
         _sleep(5)
+    raise TimeoutError(f"gateway {gateway_id} not READY")
+
+
+def list_ab_tests(data: Any | None = None) -> list[dict[str, Any]]:
+    """List every A/B test, following the preview API's nextToken pagination."""
+    data = data or data_client()
+    tests: list[dict[str, Any]] = []
+    token: str | None = None
+    while True:
+        response = (
+            data.list_ab_tests(nextToken=token)
+            if token
+            else data.list_ab_tests()
+        )
+        tests.extend(response.get("abTests", []))
+        token = response.get("nextToken")
+        if not token:
+            return tests
+
+
+def assert_gateway_available(
+    gateway_arn: str,
+    *,
+    own_test_name: str | None = None,
+    data: Any | None = None,
+) -> None:
+    """Reject a foreign active A/B test on the shared Gateway."""
+    active = [
+        test
+        for test in list_ab_tests(data)
+        if test.get("gatewayArn") == gateway_arn
+        and test.get("executionStatus") != "STOPPED"
+        and (
+            own_test_name is None
+            or str(test.get("name", "")).lower() != own_test_name.lower()
+        )
+    ]
+    if active:
+        raise AppError(
+            "experiment.gateway_busy",
+            "the shared experiment Gateway already has an active A/B test",
+            {
+                "gateway_arn": gateway_arn,
+                "active_tests": [
+                    {
+                        "id": test.get("abTestId"),
+                        "name": test.get("name"),
+                        "execution_status": test.get("executionStatus"),
+                    }
+                    for test in active
+                ],
+            },
+            status_code=409,
+        )
+
+
+def assert_shared_gateway_available(
+    *,
+    own_test_name: str | None = None,
+    control: Any | None = None,
+    data: Any | None = None,
+) -> None:
+    """Read-only preflight used before an action starts AWS mutation."""
+    gateway = find_experiment_gateway(control)
+    if gateway is not None:
+        assert_gateway_available(
+            gateway["gatewayArn"], own_test_name=own_test_name, data=data
+        )
+
+
+def stage_gateway(
+    exp_id: str, agent: dict[str, Any], progress: Progress = _noop
+) -> dict[str, Any]:
+    settings = get_settings()
+    control = control_client()
+    gateway = ensure_experiment_gateway(progress, control)
+    gateway_id = gateway["gateway_id"]
 
     target_v1 = f"exp{exp_id[:6]}v1"
     progress("creating v1 runtime target…")
@@ -637,9 +728,7 @@ def stage_gateway(
         role_arn=settings.resources["execution_role_arn"],
     )
     return {
-        "gateway_id": gateway_id,
-        "gateway_arn": gateway_arn,
-        "gateway_url": gateway_url,
+        **gateway,
         "target_v1": target_v1,
         "target_id_v1": target_id,
         "online_eval_arn": online_eval.get("onlineEvaluationConfigArn"),
@@ -650,6 +739,10 @@ def stage_gateway(
 def stage_abtest(exp_id: str, gateway_art: dict, bundle_art: dict) -> dict[str, Any]:
     settings = get_settings()
     data = data_client()
+    test_name = f"exp_{exp_id[:8]}_bundle"
+    assert_gateway_available(
+        gateway_art["gateway_arn"], own_test_name=test_name, data=data
+    )
     variants = ac.config_bundle_variants(
         bundle_art["control"]["arn"],
         bundle_art["control"]["version"],
@@ -659,7 +752,7 @@ def stage_abtest(exp_id: str, gateway_art: dict, bundle_art: dict) -> dict[str, 
     try:
         response = ac.create_ab_test(
             data,
-            name=f"exp_{exp_id[:8]}_bundle",
+            name=test_name,
             gatewayArn=gateway_art["gateway_arn"],
             roleArn=settings.resources["execution_role_arn"],
             enableOnCreate=True,
@@ -669,11 +762,19 @@ def stage_abtest(exp_id: str, gateway_art: dict, bundle_art: dict) -> dict[str, 
     except Exception as exc:
         if not _is_conflict(exc):
             raise
-        tests = data.list_ab_tests().get("abTests", [])
         response = next(
-            t for t in tests
-            if t.get("name", "").lower() == f"exp_{exp_id[:8]}_bundle".lower()
+            (
+                test
+                for test in list_ab_tests(data)
+                if str(test.get("name", "")).lower() == test_name.lower()
+            ),
+            None,
         )
+        if response is None:
+            assert_gateway_available(
+                gateway_art["gateway_arn"], own_test_name=test_name, data=data
+            )
+            raise
     return {"ab_test_id": response.get("abTestId"), "variants": variants}
 
 
@@ -752,7 +853,7 @@ def compute_verdict(metrics: list[dict[str, Any]], min_n: int = 3) -> dict[str, 
 ASYNC_ACTIONS = frozenset(
     {
         "recommend", "gateway", "abtest", "traffic", "verdict", "promote",
-        "canary", "cleanup",
+        "cleanup",
     }
 )
 
@@ -764,17 +865,11 @@ _ACTION_PREREQS: dict[str, tuple[str, str]] = {
     "traffic": ("abtest", "create the A/B test first"),
     "verdict": ("traffic", "send traffic first"),
     "promote": ("verdict", "wait for the verdict first"),
-    "canary": ("verdict", "wait for the verdict first"),
-    "ramp": ("canary", "start the canary first"),
 }
 
 
 def stage_not_ready_reason(exp: Experiment, action: str) -> str | None:
     """None when the action's prerequisite artifact exists, else the reason."""
-    if action == "canary":
-        if not promotion_complete(exp.artifacts):
-            return "complete the production promotion first"
-        return None
     if action == "bundles":
         rec = exp.artifacts.get("recommend") or {}
         # old auto-pipeline rows never wrote accepted_* — an existing bundles
@@ -959,11 +1054,14 @@ def update_weights_with_pause(data: Any, ab_test_id: str, variants: list[dict]) 
 
 
 def _stop_ab_test(
-    data: Any, ab_test_id: str, progress: Progress
+    data: Any,
+    ab_test_id: str,
+    progress: Progress,
+    label: str = "A/B test",
 ) -> dict[str, Any]:
     current = ac.get_ab_test(data, ab_test_id=ab_test_id)
     if current.get("executionStatus") != "STOPPED":
-        progress("stopping configuration-bundle A/B test…")
+        progress(f"stopping {label}…")
         data.update_ab_test(abTestId=ab_test_id, executionStatus="STOPPED")
     for _ in range(60):
         current = ac.get_ab_test(data, ab_test_id=ab_test_id)
@@ -972,7 +1070,7 @@ def _stop_ab_test(
             return current
         progress(f"waiting for A/B test to stop · status {status or '?'}")
         _sleep(3)
-    raise TimeoutError(f"A/B test {ab_test_id} did not reach STOPPED")
+    raise TimeoutError(f"{label} {ab_test_id} did not reach STOPPED")
 
 
 def act_promote(exp_id: str, progress: Progress) -> dict[str, Any]:
@@ -1091,111 +1189,8 @@ def act_promote(exp_id: str, progress: Progress) -> dict[str, Any]:
     return result
 
 
-def act_canary(
-    exp_id: str, challenger: dict[str, str], progress: Progress = _noop
-) -> dict[str, Any]:
-    """Target-based canary: add the v2 agent as a 10% challenger target.
-
-    challenger is a plain snapshot {name, arn, resource_id} — the ORM row
-    must not cross into this thread.
-    """
-    exp = _get(exp_id)
-    settings = get_settings()
-    control = control_client()
-    data = data_client()
-    gateway = exp.artifacts["gateway"]
-    target_v2 = f"exp{exp.id[:6]}v2"
-    progress("creating challenger target + waiting READY…")
-    target_id_v2 = create_runtime_target_idempotent(
-        control, gateway["gateway_id"], target_v2, challenger["arn"]
-    )
-    log_group_v2 = f"/aws/bedrock-agentcore/runtimes/{challenger['resource_id']}-DEFAULT"
-    progress("creating challenger online evaluation config…")
-    online_eval_v2 = create_online_eval_idempotent(
-        control,
-        name=f"exp_{exp.id[:8]}_oe2",
-        log_group=log_group_v2,
-        service_name=f"{rt_name(control, challenger['resource_id'])}.DEFAULT",
-        role_arn=settings.resources["execution_role_arn"],
-    )
-    # only one A/B test runs per gateway — stop the bundle test first
-    progress("stopping the bundle A/B test (one test per gateway)…")
-    try:
-        data.update_ab_test(
-            abTestId=exp.artifacts["abtest"]["ab_test_id"], executionStatus="STOPPED"
-        )
-    except Exception:
-        pass
-    variants = ac.target_variants(gateway["target_v1"], target_v2)  # 90/10
-    progress("creating target-routing canary A/B test (90/10)…")
-    try:
-        response = ac.create_ab_test(
-            data,
-            name=f"exp_{exp.id[:8]}_canary",
-            gatewayArn=gateway["gateway_arn"],
-            roleArn=settings.resources["execution_role_arn"],
-            enableOnCreate=True,
-            evaluationConfig={
-                "perVariantOnlineEvaluationConfig": [
-                    {"name": "C", "onlineEvaluationConfigArn": gateway["online_eval_arn"]},
-                    {"name": "T1",
-                     "onlineEvaluationConfigArn":
-                         online_eval_v2.get("onlineEvaluationConfigArn")},
-                ]
-            },
-            gatewayFilter={"targetPaths": [f"/{gateway['target_v1']}/*"]},
-            variants=variants,
-        )
-    except Exception as exc:
-        if not _is_conflict(exc):
-            raise
-        tests = data.list_ab_tests().get("abTests", [])
-        response = next(
-            t for t in tests
-            if t.get("name", "").lower() == f"exp_{exp.id[:8]}_canary".lower()
-        )
-    result = {
-        "canary_ab_test_id": response.get("abTestId"),
-        "target_v2": target_v2,
-        "target_id_v2": target_id_v2,
-        "online_eval_id_v2": online_eval_v2.get("onlineEvaluationConfigId"),
-        "challenger_agent": challenger["name"],
-        "weights": {v["name"]: v["weight"] for v in variants},
-        "ramp_stage": 0,
-    }
-    _update(exp.id, stage="canary", artifact={"canary": result})
-    return result
-
-
-RAMP_STEPS = [(90, 10), (50, 50), (1, 99)]  # weight floor is 1
-
-
-def action_ramp(exp: Experiment) -> dict[str, Any]:
-    data = data_client()
-    canary = exp.artifacts["canary"]
-    ab_test_id = canary["canary_ab_test_id"]
-    before = ac.get_ab_test(data, ab_test_id=ab_test_id)
-    next_stage = min(canary.get("ramp_stage", 0) + 1, len(RAMP_STEPS) - 1)
-    weights = RAMP_STEPS[next_stage]
-    variants = ac.target_variants(
-        exp.artifacts["gateway"]["target_v1"],
-        canary["target_v2"],
-        control_weight=weights[0], treatment_weight=weights[1],
-    )
-    update_weights_with_pause(data, ab_test_id, variants)
-    after = ac.get_ab_test(data, ab_test_id=ab_test_id)
-    result = {
-        **canary,
-        "ramp_stage": next_stage,
-        "before_weights": {v["name"]: v["weight"] for v in before.get("variants", [])},
-        "after_weights": {v["name"]: v["weight"] for v in after.get("variants", [])},
-    }
-    _update(exp.id, stage="ramp", artifact={"canary": result})
-    return result
-
-
 def act_cleanup(exp_id: str, progress: Progress = _noop) -> list[dict[str, str]]:
-    """Tear down experiment resources; the shared launchpad-gw is untouched."""
+    """Tear down record-owned resources; keep the shared experiment Gateway."""
     exp = _get(exp_id)
     control = control_client()
     data = data_client()
@@ -1229,6 +1224,7 @@ def act_cleanup(exp_id: str, progress: Progress = _noop) -> list[dict[str, str]]
         bundle_ids=bundles,
         gateway_id=gateway.get("gateway_id"),
         target_ids=targets,
+        delete_gateway=False,
     )
     _update(exp.id, status="cleaned", stage="cleanup",
             artifact={"cleanup": results})
