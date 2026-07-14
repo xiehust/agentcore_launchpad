@@ -539,14 +539,21 @@ def stage_bundles(
 
 
 def create_runtime_target_idempotent(
-    control: Any, gateway_id: str, name: str, agent_arn: str
+    control: Any, gateway_id: str, name: str, agent_arn: str,
+    qualifier: str = "DEFAULT",
 ) -> str:
+    """Create (or adopt on conflict) an http-runtime gateway target.
+
+    ``qualifier`` selects the runtime endpoint the target fronts — DEFAULT
+    (auto-follows latest) by default; a named endpoint pins a version, which
+    the target-based canary uses for its stable/treatment variant pair.
+    """
     try:
         target = control.create_gateway_target(
             gatewayIdentifier=gateway_id,
             name=name,
             targetConfiguration={
-                "http": {"agentcoreRuntime": {"arn": agent_arn, "qualifier": "DEFAULT"}}
+                "http": {"agentcoreRuntime": {"arn": agent_arn, "qualifier": qualifier}}
             },
             credentialProviderConfigurations=[{"credentialProviderType": "GATEWAY_IAM_ROLE"}],
             clientToken=str(uuid.uuid4()),
