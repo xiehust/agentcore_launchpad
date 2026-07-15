@@ -257,13 +257,13 @@ def canary_capability(agent_row: Any) -> dict[str, Any]:
         return {
             **base,
             "reason_code": "not-active",
-            "reason": "Canary challengers must be active.",
+            "reason": "Canary agent must be active.",
         }
     if agent_row.method not in {"zip_runtime", "container", "studio"}:
         return {
             **base,
             "reason_code": "not-runtime",
-            "reason": "Target canaries require an AgentCore Runtime challenger.",
+            "reason": "Target canaries require an AgentCore Runtime agent.",
         }
     if agent_row.method == "container":
         return {
@@ -281,7 +281,7 @@ def canary_capability(agent_row: Any) -> dict[str, Any]:
         return {
             **base,
             "reason_code": "no-runtime-arn",
-            "reason": "The challenger has no deployed AgentCore Runtime ARN.",
+            "reason": "The agent has no deployed AgentCore Runtime ARN.",
         }
     return {**base, "eligible": True}
 

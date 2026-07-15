@@ -339,6 +339,9 @@ def test_setup_mints_candidate_targets_endpoints_and_own_ab_test(monkeypatch):
         canary_svc.canary_infra, "mint_candidate_version", lambda **kw: ("1", "2")
     )
     monkeypatch.setattr(
+        canary_svc.canary_infra, "current_version", lambda control, runtime_id: "1"
+    )
+    monkeypatch.setattr(
         canary_svc.canary_infra,
         "create_canary_gateway",
         lambda **kw: {
@@ -350,9 +353,10 @@ def test_setup_mints_candidate_targets_endpoints_and_own_ab_test(monkeypatch):
     endpoints_seen: dict = {}
     monkeypatch.setattr(
         canary_svc.canary_infra,
-        "ensure_canary_endpoints",
-        lambda **kw: endpoints_seen.update(kw)
-        or {"stable": kw["stable_name"], "treatment": kw["treatment_name"]},
+        "ensure_endpoint_ready",
+        lambda control, *, runtime_id, endpoint_name, version, log=None: (
+            endpoints_seen.update({endpoint_name: version}) or {"status": "READY"}
+        ),
     )
     targets_seen: list[tuple[str, str]] = []
     monkeypatch.setattr(
@@ -389,9 +393,9 @@ def test_setup_mints_candidate_targets_endpoints_and_own_ab_test(monkeypatch):
     # the two targets are pinned to the stable / treatment named endpoints
     assert targets_seen[0][1] == result["stable_endpoint"]
     assert targets_seen[1][1] == result["treatment_endpoint"]
-    # endpoints pinned control→v_current, treatment→v_candidate
-    assert endpoints_seen["v_current"] == "1"
-    assert endpoints_seen["v_candidate"] == "2"
+    # endpoints pinned stable→v_current, treatment→v_candidate
+    assert endpoints_seen[result["stable_endpoint"]] == "1"
+    assert endpoints_seen[result["treatment_endpoint"]] == "2"
     # the A/B test is created on the dedicated per-canary gateway at 90/10
     ab_kwargs = data.create_ab_test.call_args.kwargs
     assert ab_kwargs["gatewayArn"] == "arn:gw"
@@ -423,6 +427,9 @@ def test_setup_retry_adopts_its_own_ab_test_after_conflict(monkeypatch):
         canary_svc.canary_infra, "mint_candidate_version", lambda **kw: ("1", "2")
     )
     monkeypatch.setattr(
+        canary_svc.canary_infra, "current_version", lambda control, runtime_id: "1"
+    )
+    monkeypatch.setattr(
         canary_svc.canary_infra,
         "create_canary_gateway",
         lambda **kw: {
@@ -433,8 +440,10 @@ def test_setup_retry_adopts_its_own_ab_test_after_conflict(monkeypatch):
     )
     monkeypatch.setattr(
         canary_svc.canary_infra,
-        "ensure_canary_endpoints",
-        lambda **kw: {"stable": kw["stable_name"], "treatment": kw["treatment_name"]},
+        "ensure_endpoint_ready",
+        lambda control, *, runtime_id, endpoint_name, version, log=None: {
+            "status": "READY"
+        },
     )
     monkeypatch.setattr(
         exp_svc,
@@ -474,6 +483,65 @@ def test_setup_retry_adopts_its_own_ab_test_after_conflict(monkeypatch):
     assert _reload(row.id).artifacts["setup"]["test_name"] == (
         f"can_{row.id[:8]}_target"
     )
+
+
+# ─── invoke-hot-path route (provisioning vs live gateway) ────────────────────
+def test_active_route_is_provisioning_form_before_gateway_is_live():
+    # Mirrors the PARTIAL setup act_setup persists before the mint: stable
+    # endpoint stood up, gateway created, but no A/B test / control target yet.
+    _mk_canary(
+        agent_id="agentp",
+        artifacts={
+            "agent_meta": {"id": "agentp", "arn": "arn:agentp"},
+            "edited_spec": {},
+            "setup": {
+                "runtime_id": "agentp-res",
+                "stable_endpoint": "stablep",
+                "v_current": "3",
+                "gateway_id": "gw-p",
+                "gateway_arn": "arn:gw-p",
+                "gateway_url": "https://gw-p",
+            },
+        },
+    )
+    route = canary_svc.active_canary_route("agentp")
+    # provisioning form: no gateway_url / control_target → invoke serves v_current
+    # via the stable endpoint, NEVER DEFAULT (the untested candidate).
+    assert route == {
+        "runtime_id": "agentp-res",
+        "arn": "arn:agentp",
+        "stable_endpoint": "stablep",
+        "v_current": "3",
+    }
+
+
+def test_active_route_is_live_gateway_form_once_ab_test_exists():
+    _mk_canary(
+        agent_id="agentl",
+        artifacts={
+            "agent_meta": {"id": "agentl", "arn": "arn:agentl"},
+            "edited_spec": {},
+            "setup": _setup_artifact(),
+        },
+    )
+    route = canary_svc.active_canary_route("agentl")
+    assert route["gateway_url"] == "https://gateway.example"
+    assert route["control_target"] == "cancontrol"
+    assert route["stable_endpoint"] == "stablecan"
+    assert route["arn"] == "arn:agentl"
+    assert route["runtime_id"] == "subject-abcdefghij"
+
+
+def test_active_route_none_without_stable_endpoint():
+    _mk_canary(
+        agent_id="agentn",
+        artifacts={
+            "agent_meta": {"id": "agentn", "arn": "arn:agentn"},
+            "edited_spec": {},
+            "rounds": [],
+        },
+    )
+    assert canary_svc.active_canary_route("agentn") is None
 
 
 # ─── verdict policy ──────────────────────────────────────────────────────────
@@ -832,6 +900,71 @@ def test_rollback_rolls_forward_current_spec(monkeypatch):
     assert _reload(row.id).status == "rolled_back"
     # DEFAULT (production truth) now serves the restored version
     assert _reload_agent(agent_id).version == "9"
+
+
+def test_rollback_allowed_and_rolls_forward_on_partial_setup(monkeypatch):
+    # A setup that failed AFTER standing up the stable endpoint but BEFORE the A/B
+    # test: rollback must still be allowed (safety valve) and must roll production
+    # forward off any minted candidate without trying to stop a non-existent test.
+    full_spec = AgentSpec(
+        name="subject", method="zip_runtime", system_prompt="orig"
+    ).model_dump()
+    (agent_id,) = _persist_agents(_agent("subject", spec=full_spec))
+    row = _mk_canary(
+        agent_id=agent_id,
+        artifacts={
+            "agent_meta": {"id": agent_id},
+            "edited_spec": {},
+            "setup": {
+                "runtime_id": "subject-res",
+                "stable_endpoint": "stablecan",
+                "v_current": "1",
+                "gateway_id": "gw-1",
+            },
+            "rounds": [],
+        },
+    )
+    # rollback is the safety valve — allowed even with only a partial setup
+    assert canary_svc.stage_not_ready_reason(row, "rollback") is None
+
+    stop_calls: list = []
+    monkeypatch.setattr(canary_svc, "control_client", MagicMock)
+    monkeypatch.setattr(canary_svc, "data_client", MagicMock)
+    monkeypatch.setattr(
+        exp_svc,
+        "_stop_ab_test",
+        lambda *a, **k: stop_calls.append(True) or {"executionStatus": "STOPPED"},
+    )
+    minted: dict = {}
+
+    def fake_mint(*, agent, edited_spec, control_client, log):
+        minted["spec"] = edited_spec
+        return ("1", "5")
+
+    monkeypatch.setattr(canary_svc.canary_infra, "mint_candidate_version", fake_mint)
+
+    result = canary_svc.act_rollback(row.id, lambda message: None)
+
+    # no A/B test in the partial setup → _stop_ab_test is never called
+    assert stop_calls == []
+    assert result["ab_test_status"] is None
+    # roll-forward re-publishes the agent's CURRENT (unchanged) spec → v_current
+    assert minted["spec"].system_prompt == "orig"
+    assert result["restored_version"] == "5"
+    assert _reload(row.id).status == "rolled_back"
+    assert _reload_agent(agent_id).version == "5"
+
+
+def test_second_concurrent_canary_for_same_agent_is_rejected(client):
+    (agent_id,) = _persist_agents(_agent("subject"))
+    _mk_canary(agent_id=agent_id, status="running")
+
+    res = client.post(
+        "/api/runtime-canaries",
+        json={"agent_id": agent_id, "candidate": {"system_prompt": "new"}},
+    )
+    assert res.status_code == 409
+    assert res.json()["code"] == "canary.already_running"
 
 
 def test_cleanup_deletes_dedicated_gateway_and_both_endpoints(monkeypatch):

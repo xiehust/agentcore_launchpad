@@ -187,14 +187,35 @@ def create_canary_gateway(
     settings = get_settings()
     name = f"lp-canary-{canary_id}"
     log(f"creating dedicated canary gateway {name}…")
-    gateway = control_client.create_gateway(
-        name=name,
-        description=f"Launchpad canary gateway ({canary_id})",
-        authorizerType="AWS_IAM",
-        roleArn=settings.resources["gateway_role_arn"],
-        clientToken=str(uuid.uuid4()),
-    )
-    gateway_id = gateway["gatewayId"]
+    try:
+        gateway = control_client.create_gateway(
+            name=name,
+            description=f"Launchpad canary gateway ({canary_id})",
+            authorizerType="AWS_IAM",
+            roleArn=settings.resources["gateway_role_arn"],
+            clientToken=str(uuid.uuid4()),
+        )
+        gateway_id = gateway["gatewayId"]
+    except Exception as exc:
+        # A prior setup attempt already created this canary's uniquely named
+        # gateway — adopt it (mirror service.ensure_experiment_gateway's
+        # conflict-adopt) instead of failing the retry.
+        if not _is_conflict(exc):
+            raise
+        log(f"canary gateway {name} already exists — adopting…")
+        summary = next(
+            (
+                item
+                for item in control_client.list_gateways(maxResults=100).get(
+                    "items", []
+                )
+                if item.get("name") == name
+            ),
+            None,
+        )
+        if summary is None:
+            raise
+        gateway_id = summary["gatewayId"]
     log("waiting for canary gateway READY…")
     for _ in range(30):
         detail = control_client.get_gateway(gatewayIdentifier=gateway_id)
@@ -239,6 +260,31 @@ def _ensure_endpoint(
         )
 
 
+def ensure_endpoint_ready(
+    control_client: Any,
+    *,
+    runtime_id: str,
+    endpoint_name: str,
+    version: int | str,
+    log: Log = _noop,
+) -> dict[str, Any]:
+    """Ensure ONE named endpoint is pinned to ``version`` and READY.
+
+    Idempotent (re-points an existing endpoint on retry). Setup uses this to
+    stand up the stable endpoint (→ v_current) BEFORE the candidate mint and the
+    treatment endpoint (→ v_candidate) after it, so production is never routed to
+    the untested candidate during the setup window.
+    """
+    _ensure_endpoint(
+        control_client, runtime_id=runtime_id,
+        endpoint_name=endpoint_name, version=version, log=log,
+    )
+    return rt.wait_endpoint_ready(
+        control_client, runtime_id=runtime_id, endpoint_name=endpoint_name,
+        on_status=lambda s: log(f"endpoint {endpoint_name} status: {s}"),
+    )
+
+
 def ensure_canary_endpoints(
     *,
     control_client: Any,
@@ -254,19 +300,14 @@ def ensure_canary_endpoints(
     Idempotent: an existing endpoint (a retried setup) is re-pointed at the
     intended version rather than failing. Returns the two endpoint names.
     """
-    _ensure_endpoint(
+    ensure_endpoint_ready(
         control_client, runtime_id=runtime_id,
         endpoint_name=stable_name, version=v_current, log=log,
     )
-    _ensure_endpoint(
+    ensure_endpoint_ready(
         control_client, runtime_id=runtime_id,
         endpoint_name=treatment_name, version=v_candidate, log=log,
     )
-    for name in (stable_name, treatment_name):
-        rt.wait_endpoint_ready(
-            control_client, runtime_id=runtime_id, endpoint_name=name,
-            on_status=lambda s, n=name: log(f"endpoint {n} status: {s}"),
-        )
     return {"stable": stable_name, "treatment": treatment_name}
 
 

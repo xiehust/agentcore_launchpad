@@ -166,6 +166,31 @@ def test_create_canary_gateway_is_unique_and_iam(monkeypatch):
     assert kwargs["roleArn"] == "arn:role/gw"
 
 
+def test_create_canary_gateway_adopts_on_conflict(monkeypatch):
+    _patch_settings(monkeypatch)
+    control = MagicMock()
+    control.create_gateway.side_effect = ConflictException("already exists")
+    control.list_gateways.return_value = {
+        "items": [
+            {"name": "other", "gatewayId": "gw-other"},
+            {"name": "lp-canary-dupe123456", "gatewayId": "gw-existing"},
+        ]
+    }
+    control.get_gateway.return_value = {
+        "status": "READY",
+        "gatewayArn": "arn:gw",
+        "gatewayUrl": "https://gw",
+    }
+    out = infra.create_canary_gateway(control_client=control, canary_id="dupe123456")
+    # a prior attempt's gateway is adopted by name rather than re-created
+    assert out == {
+        "gateway_id": "gw-existing",
+        "gateway_arn": "arn:gw",
+        "gateway_url": "https://gw",
+    }
+    control.get_gateway.assert_called_with(gatewayIdentifier="gw-existing")
+
+
 def test_delete_canary_gateway():
     control = MagicMock()
     infra.delete_canary_gateway(control, "gw-1")

@@ -86,11 +86,20 @@ def run_action(
 def active_canary_route(agent_id: str) -> dict[str, Any] | None:
     """Cheap invoke-hot-path lookup: is there an active canary fronting this agent?
 
-    Returns the gateway route (control target + control-safe stable-endpoint
-    fallback) when a RuntimeCanary for ``agent_id`` is ``running`` with a
-    completed ``setup`` artifact, else ``None``. ``RuntimeCanary.champion_agent_id``
-    is indexed, so this is one indexed SELECT and no AWS call — safe to call on
-    every invocation with no cache.
+    Returns ``None`` only when no ``running`` canary has at least a stable
+    endpoint provisioned (``stable_endpoint`` + ``runtime_id`` + agent arn). Two
+    live forms otherwise, so a mid-setup canary never leaks DEFAULT (the untested
+    candidate) into production:
+
+    - **provisioning** — stable endpoint stood up but the gateway A/B is not live
+      yet: ``{runtime_id, arn, stable_endpoint, v_current}``. invoke serves
+      v_current directly via the stable endpoint.
+    - **live gateway** — the above PLUS ``gateway_url`` + ``control_target`` once
+      the A/B test exists. invoke routes real traffic through the gateway.
+
+    Every key is read with ``.get()`` so a PARTIAL setup artifact (from an
+    in-flight or failed setup) can never raise. ``champion_agent_id`` is indexed,
+    so this is one indexed SELECT and no AWS call — safe on every invocation.
     """
     db = SessionLocal()
     try:
@@ -106,15 +115,26 @@ def active_canary_route(agent_id: str) -> dict[str, Any] | None:
         if row is None:
             return None
         artifacts = row.artifacts or {}
-        setup = artifacts.get("setup")
-        if not setup:
+        setup = artifacts.get("setup") or {}
+        arn = (artifacts.get("agent_meta") or {}).get("arn")
+        stable_endpoint = setup.get("stable_endpoint")
+        runtime_id = setup.get("runtime_id")
+        if not (stable_endpoint and runtime_id and arn):
             return None
-        return {
-            "gateway_url": setup["gateway_url"],
-            "control_target": setup["champion"]["target_name"],
-            "stable_endpoint": setup["stable_endpoint"],
-            "arn": (artifacts.get("agent_meta") or {}).get("arn"),
+        route: dict[str, Any] = {
+            "runtime_id": runtime_id,
+            "arn": arn,
+            "stable_endpoint": stable_endpoint,
+            "v_current": setup.get("v_current"),
         }
+        gateway_url = setup.get("gateway_url")
+        control_target = (setup.get("champion") or {}).get("target_name")
+        # "live gateway" form only once the full setup exists (a live A/B test on
+        # the gateway with the control target); otherwise stay in provisioning.
+        if setup.get("ab_test_id") and gateway_url and control_target:
+            route["gateway_url"] = gateway_url
+            route["control_target"] = control_target
+        return route
     finally:
         db.close()
 
@@ -242,10 +262,13 @@ def stage_not_ready_reason(row: RuntimeCanary, action: str) -> str | None:
         return f"canary is already {row.status}"
     if action == "setup":
         return "canary setup is already complete" if setup else None
-    if not setup:
-        return "run canary setup first"
+    # rollback is the safety valve — allowed for ANY running canary, even one whose
+    # setup only partially completed (act_rollback tolerates a partial artifact and
+    # always rolls production forward off any minted candidate).
     if action == "rollback":
         return None
+    if not setup:
+        return "run canary setup first"
 
     _, current = _current_round(row)
     attempts = (current or {}).get("traffic_attempts") or []
@@ -340,26 +363,52 @@ def act_setup(canary_id: str, progress: Progress) -> dict[str, Any]:
     data = data_client()
     runtime_id = meta["resource_id"]
     role_arn = get_settings().resources["execution_role_arn"]
+    stable = f"stable{canary_id[:6]}"
+    treatment = f"treat{canary_id[:6]}"
 
-    progress("minting candidate runtime version…")
-    v_current, v_candidate = canary_infra.mint_candidate_version(
-        agent=agent, edited_spec=spec, control_client=control, log=progress
-    )
+    # (1) Read the LIVE production version BEFORE the mint — UpdateAgentRuntime
+    # auto-rolls DEFAULT to the candidate, so v_current must be captured first.
+    progress("reading current production runtime version…")
+    v_current = canary_infra.current_version(control, runtime_id)
 
+    # (2) Dedicated per-canary gateway.
     gw = canary_infra.create_canary_gateway(
         control_client=control, canary_id=canary_id, log=progress
     )
 
-    stable = f"stable{canary_id[:6]}"
-    treatment = f"treat{canary_id[:6]}"
-    canary_infra.ensure_canary_endpoints(
-        control_client=control,
-        runtime_id=runtime_id,
-        v_current=v_current,
-        v_candidate=v_candidate,
-        stable_name=stable,
-        treatment_name=treatment,
-        log=progress,
+    # (3) Stable endpoint pinned to v_current, READY — created BEFORE the mint so
+    # invoke can serve v_current via this endpoint the moment DEFAULT rolls to the
+    # (untested) candidate.
+    canary_infra.ensure_endpoint_ready(
+        control, runtime_id=runtime_id, endpoint_name=stable,
+        version=v_current, log=progress,
+    )
+
+    # (4) Persist a PARTIAL setup NOW. active_canary_route's "provisioning" form
+    # (stable endpoint present, no live gateway yet) keeps invoke on v_current
+    # during the setup window and on any partial failure below — production never
+    # lands on the untested candidate, and rollback stays available.
+    partial = {
+        "runtime_id": runtime_id,
+        "stable_endpoint": stable,
+        "v_current": v_current,
+        "gateway_id": gw["gateway_id"],
+        "gateway_arn": gw["gateway_arn"],
+        "gateway_url": gw["gateway_url"],
+    }
+    _update(canary_id, stage="setup", artifact={"setup": partial})
+
+    # (5) Mint the candidate (DEFAULT auto-rolls to it; invoke now routes to the
+    # stable endpoint = v_current until the gateway A/B goes live).
+    progress("minting candidate runtime version…")
+    _, v_candidate = canary_infra.mint_candidate_version(
+        agent=agent, edited_spec=spec, control_client=control, log=progress
+    )
+
+    # (6) Treatment endpoint pinned to the candidate, READY.
+    canary_infra.ensure_endpoint_ready(
+        control, runtime_id=runtime_id, endpoint_name=treatment,
+        version=v_candidate, log=progress,
     )
 
     control_target = f"can{canary_id[:6]}c"
@@ -430,10 +479,11 @@ def act_setup(canary_id: str, progress: Progress) -> dict[str, Any]:
         if response is None:
             raise
 
+    # Finalize by merging the live keys onto the partial setup persisted at (4),
+    # so the "provisioning" route (stable-endpoint) becomes the "live gateway"
+    # route (control target + ab_test) atomically.
     result = {
-        "gateway_id": gw["gateway_id"],
-        "gateway_arn": gw["gateway_arn"],
-        "gateway_url": gw["gateway_url"],
+        **partial,
         "test_name": test_name,
         "ab_test_id": response.get("abTestId"),
         # ``champion``/``challenger`` here mean control/treatment TARGETS — the key
@@ -447,11 +497,8 @@ def act_setup(canary_id: str, progress: Progress) -> dict[str, Any]:
         },
         "ramp_stage": 0,
         "weights": {variant["name"]: variant["weight"] for variant in variants},
-        "v_current": v_current,
         "v_candidate": v_candidate,
-        "stable_endpoint": stable,
         "treatment_endpoint": treatment,
-        "runtime_id": runtime_id,
     }
     _update(canary_id, stage="setup", artifact={"setup": result, "rounds": []})
     return result
@@ -629,15 +676,20 @@ def act_rollback(canary_id: str, progress: Progress) -> dict[str, Any]:
     is production truth again.
     """
     row = _get(canary_id)
-    setup = row.artifacts["setup"]
+    setup = row.artifacts.get("setup") or {}
     meta = row.artifacts["agent_meta"]
     control = control_client()
-    stopped = experiment_service._stop_ab_test(
-        data_client(),
-        setup["ab_test_id"],
-        progress,
-        label="Runtime canary A/B test",
-    )
+    # A partial setup (failed mid-way) may have no A/B test yet — only stop one
+    # when it exists; the roll-forward below runs unconditionally so DEFAULT is
+    # restored to v_current whether or not the candidate was ever minted.
+    stopped: dict[str, Any] = {}
+    if setup.get("ab_test_id"):
+        stopped = experiment_service._stop_ab_test(
+            data_client(),
+            setup["ab_test_id"],
+            progress,
+            label="Runtime canary A/B test",
+        )
     db = SessionLocal()
     try:
         agent = db.get(Agent, meta["id"])

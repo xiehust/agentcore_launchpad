@@ -139,6 +139,44 @@ def test_gateway_error_falls_back_to_stable_endpoint(monkeypatch):
     assert out["text"] == "control reply"
 
 
+def test_provisioning_route_invokes_stable_endpoint_directly(monkeypatch):
+    # A canary still setting up exposes the "provisioning" route: stable endpoint
+    # present, but NO live gateway (gateway_url / control_target). invoke must
+    # direct-invoke the stable endpoint (v_current), never DEFAULT or the gateway.
+    provisioning = {
+        "runtime_id": "subject-res",
+        "arn": "arn:agent",
+        "stable_endpoint": "stablecan",
+        "v_current": "3",
+    }
+    monkeypatch.setattr(
+        invoke_mod.canary_service, "active_canary_route", lambda agent_id: provisioning
+    )
+    captured: dict = {}
+
+    def fake_invoke(client, arn, prompt, *, session_id=None, actor_id="default", qualifier=None):
+        captured.update(
+            arn=arn, qualifier=qualifier, session_id=session_id, actor_id=actor_id
+        )
+        return {"text": "control reply", "session_id": session_id or "s"}
+
+    monkeypatch.setattr(invoke_mod.rt, "invoke_runtime_text", fake_invoke)
+    monkeypatch.setattr(invoke_mod, "data_client", lambda: object())
+
+    def _no_gateway(*args, **kwargs):
+        raise AssertionError("provisioning route must not touch the gateway")
+
+    monkeypatch.setattr(invoke_mod.gateway, "sigv4_post", _no_gateway)
+
+    out = invoke_mod.invoke_agent_text(_agent(), "hi", session_id="sess", actor_id="bob")
+
+    assert captured["arn"] == "arn:agent"
+    assert captured["qualifier"] == "stablecan"
+    assert captured["session_id"] == "sess"
+    assert captured["actor_id"] == "bob"
+    assert out["text"] == "control reply"
+
+
 def test_gateway_non_200_falls_back_to_stable_endpoint(monkeypatch):
     monkeypatch.setattr(
         invoke_mod.canary_service, "active_canary_route", lambda agent_id: ROUTE

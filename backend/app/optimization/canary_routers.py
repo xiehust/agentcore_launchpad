@@ -94,6 +94,23 @@ def _eligible_agent(db: Session, agent_id: str) -> Agent:
             {"agent_id": agent_id, "canary_capability": capability},
             status_code=400,
         )
+    # One running canary per agent: a second would mint another candidate version
+    # and stand up a competing gateway route for the same agent's live traffic.
+    existing = (
+        db.query(RuntimeCanary)
+        .filter(
+            RuntimeCanary.champion_agent_id == agent_id,
+            RuntimeCanary.status == "running",
+        )
+        .first()
+    )
+    if existing is not None:
+        raise AppError(
+            "canary.already_running",
+            "a canary is already running for this agent",
+            {"agent_id": agent_id, "canary_id": existing.id},
+            status_code=409,
+        )
     return agent
 
 

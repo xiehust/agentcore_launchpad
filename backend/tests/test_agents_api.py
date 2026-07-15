@@ -53,7 +53,7 @@ def test_agent_api_projects_experiment_and_canary_capabilities(client):
     }
     assert body["canary_capability"] == {
         "eligible": False,
-        "reason": "Canary challengers must be active.",
+        "reason": "Canary agent must be active.",
         "reason_code": "not-active",
     }
 

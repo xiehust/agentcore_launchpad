@@ -33,20 +33,47 @@ def _parse_gateway_text(raw_text: str, session_id: str) -> dict[str, Any]:
     return {"text": str(text), "session_id": session_id}
 
 
+def _invoke_via_stable_endpoint(
+    route: dict[str, Any],
+    prompt: str,
+    session_id: str | None,
+    actor_id: str,
+) -> dict[str, Any]:
+    """Direct-invoke the runtime pinned to the stable endpoint (= v_current).
+
+    Used both as the fail-safe for a gateway error and as the primary path while a
+    canary is still provisioning (stable endpoint stood up, gateway A/B not live
+    yet) — either way production serves the tested control version, never DEFAULT
+    (which the candidate mint already rolled to the untested candidate)."""
+    return rt.invoke_runtime_text(
+        data_client(),
+        route["arn"],
+        prompt,
+        session_id=session_id,
+        actor_id=actor_id,
+        qualifier=route["stable_endpoint"],
+    )
+
+
 def _invoke_via_canary(
     route: dict[str, Any],
     prompt: str,
     session_id: str | None,
     actor_id: str,
 ) -> dict[str, Any]:
-    """Route a real invocation through the active canary's gateway (the front door
-    only while the canary runs). The gateway assigns a variant by sticky session
-    id and splits by weight.
+    """Route a real invocation for an active canary.
 
-    Fail-safe is control-safe (NOT DEFAULT): a gateway error falls back to the
-    stable named endpoint, which is pinned to v_current, so a degraded invoke
-    serves the tested control version rather than DEFAULT (the untested candidate
-    during a canary)."""
+    Two forms (see ``canary_service.active_canary_route``):
+
+    - **live gateway** (``gateway_url`` + ``control_target`` present) — POST
+      through the canary gateway, which assigns a variant by sticky session id and
+      splits by weight. A gateway error is control-safe: fall back to the stable
+      endpoint (v_current), NOT DEFAULT (the untested candidate).
+    - **provisioning** (stable endpoint only, no live gateway yet) — direct-invoke
+      the stable endpoint so production stays on v_current during setup.
+    """
+    if not (route.get("gateway_url") and route.get("control_target")):
+        return _invoke_via_stable_endpoint(route, prompt, session_id, actor_id)
     # Runtime session ids must be ≥33 chars (spike); mint one when absent/short.
     sticky = session_id if (session_id and len(session_id) >= 33) else rt.new_session_id()
     url = f"{route['gateway_url'].rstrip('/')}/{route['control_target']}/invocations"
@@ -64,14 +91,7 @@ def _invoke_via_canary(
             exc,
             route.get("stable_endpoint"),
         )
-        return rt.invoke_runtime_text(
-            data_client(),
-            route["arn"],
-            prompt,
-            session_id=session_id,
-            actor_id=actor_id,
-            qualifier=route["stable_endpoint"],
-        )
+        return _invoke_via_stable_endpoint(route, prompt, session_id, actor_id)
 
 
 def invoke_agent_text(
