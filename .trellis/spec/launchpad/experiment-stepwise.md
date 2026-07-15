@@ -165,10 +165,11 @@ POST /api/experiments/{id}/action {"action": "canary"}
 
 #### Correct
 ```python
-# Configuration A/B ends at promotion/cleanup. Canary gets a separate row.
+# Configuration A/B ends at promotion/cleanup. Canary gets a separate row that
+# rolls a candidate VERSION of the (one) promoted agent — see the canary scenario.
 POST /api/runtime-canaries {
-    "champion_agent_id": promoted_agent_id,
-    "challenger_agent_id": challenger_id,
+    "agent_id": promoted_agent_id,
+    "candidate": {"system_prompt": "...", "tool_description_overrides": {}},
     "source_experiment_id": experiment_id,
 }
 ```
@@ -199,88 +200,118 @@ inputs unwrap exactly as in eval replay. Simulated datasets are rejected —
 they need an actor loop, not a fire-and-forget prompt replay.
 
 > **Warning**: AgentCore permits only one active A/B test per Gateway.
-> Configuration A/B and Runtime Canary therefore share the
-> `experiment.gateway_busy` mutex; neither workflow may stop the other's test
-> to make room.
+> **Configuration A/B** uses the single shared `EXP_GATEWAY_NAME`, so its
+> `gateway` / `abtest` stages run the `experiment.gateway_busy` preflight.
+> **Runtime Canary** does NOT share it — each canary owns a dedicated
+> `lp-canary-{id}` Gateway (conflict-adopt on retry), so canaries run
+> concurrently across agents (bounded only by `canary.already_running`, one per
+> agent). A Configuration A/B test and a Runtime Canary no longer contend.
 
-## Scenario: independent Runtime Canary
+## Scenario: production target-based canary (Runtime Canary)
+
+> **Model 1**: a canary rolls out a CANDIDATE VERSION of ONE agent against its
+> current version, splitting REAL production traffic on a DEDICATED per-canary
+> Gateway, then either promotes (production serves the candidate) or rolls back.
+> This SUPERSEDES the former experiment-only design (no more `experimental_only`,
+> no shared-Gateway mutex, no two-agent compare). Its sibling `CONFIGURATION-BUNDLE
+> A/B` still uses the shared `EXP_GATEWAY_NAME`.
 
 ### 1. Scope / Trigger
 
-- Runtime Canary compares two active HTTP AgentCore Runtime Agents by routing
-  target traffic on the shared experiment Gateway.
-- It is not a configuration-bundle stage and never updates a production
-  Gateway or target.
-- Changes to `canary_routers.py`, `canary_service.py`, `RuntimeCanary`, or
-  `EvaluationRuntimeCanary.tsx` must preserve this separate lifecycle.
+- Cross-layer: `POST /api/runtime-canaries` + `/{id}/action`, **the invoke hot
+  path** (`app/services/invoke.py`), and the AgentCore Runtime named-endpoint +
+  Gateway target-based A/B primitives.
+- Files: `canary_service.py`, `canary_infra.py`, `canary_routers.py`,
+  `app/services/invoke.py`, `agentcore/runtime.py` (endpoint wrappers +
+  `invoke_runtime_text(qualifier=)`), `agentcore/gateway.py` (`sigv4_post`),
+  `EvaluationRuntimeCanary.tsx`.
+- DB: `RuntimeCanary` — `champion_agent_id`/`challenger_agent_id` BOTH hold the
+  single agent id (Model 1); the candidate is `artifacts.edited_spec`.
 
 ### 2. Signatures
 
 ```text
-GET  /api/runtime-canaries
-GET  /api/runtime-canaries/{id}
 POST /api/runtime-canaries
-     {champion_agent_id, challenger_agent_id, source_experiment_id?}
-     -> 201 canary
+     {agent_id, candidate:{system_prompt?,tool_description_overrides?,code?},
+      source_experiment_id?}                              -> 201 canary
 POST /api/runtime-canaries/{id}/action
-     {action, dataset_id?, allow_non_significant?}
-     -> 202 {"canary": canary}
+     {action, dataset_id?, allow_non_significant?}        -> 202 {"canary": canary}
 ```
 
 ```python
-class RuntimeCanary(Base):
-    id: str
-    champion_agent_id: str
-    challenger_agent_id: str
-    source_experiment_id: str | None
-    status: str  # running|completed|rolled_back|cleaned
-    stage: str   # setup|traffic|verdict|ramp|complete|rollback|cleanup
-    artifacts: dict[str, Any]
-    running_action: str | None
-    progress: str | None
-    error: str | None
+canary_capability(agent) -> {"eligible": bool, "reason": str|None, "reason_code": str|None}
+active_canary_route(agent_id) -> None | dict   # invoke hot-path lookup (see §3)
 
-canary_capability(agent) -> {"eligible": bool, "reason": str | None}
-stage_not_ready_reason(canary, action) -> str | None
-assert_verdict_allows(canary, allow_non_significant: bool) -> None
+# canary_infra (AWS building blocks; injected-client, no ledger writes)
+current_version(control, runtime_id) -> str
+mint_candidate_version(*, agent, edited_spec, control_client, ...) -> (v_current, v_candidate)
+create_canary_gateway(*, control_client, canary_id, ...) -> {gateway_id,arn,url}  # conflict-adopt
+ensure_endpoint_ready(control, *, runtime_id, endpoint_name, version, ...)
+promote_stable_endpoint(*, control_client, runtime_id, stable_name, version, ...)
+delete_endpoint_quiet / delete_canary_gateway
+endpoint_log_group(resource_id, endpoint) / endpoint_service_name(runtime_name, endpoint)
+
+# agentcore/runtime.py
+create/update/get/delete_runtime_endpoint + wait_endpoint_ready
+invoke_runtime_text(client, arn, prompt, ..., qualifier: str|None = None)
 ```
 
 ### 3. Contracts
 
-- Create validates both Agents with the backend-owned `canary_capability`,
-  requires distinct active Agents, snapshots both Runtime identities, and
-  writes only the `runtime_canaries` row. Setup remains an explicit action.
-- Optional `source_experiment_id` is valid only when that experiment has a
-  completed production promotion and its Agent is the selected champion.
-  Direct Canary creation does not require any configuration experiment.
-- Every action is asynchronous and uses the Canary row's
-  `running_action/progress/error` fields. Backend startup clears stale action
-  flags into retryable `"<action>: interrupted..."` errors.
-- State machine:
-  `setup(90/10) -> traffic -> verdict -> advance(50/50) -> traffic -> verdict
-  -> advance(1/99) -> traffic -> verdict -> complete`. Each gate is manually
-  triggered; `rollback` is available after setup and `cleanup` is always
-  available.
-- `artifacts.setup` owns the Gateway identity, record-derived A/B test name,
-  A/B test ID, champion/challenger target and online-evaluation IDs,
-  `ramp_stage`, and weights. `artifacts.rounds[]` owns one evidence record per
-  ramp stage.
-- Before every traffic attempt, normalize current A/B metrics and store their
-  aggregate sample count as `baseline_n`. Recording a verdict waits for
-  `sample_n > baseline_n`; otherwise it stores `insufficient-data`. Sending
-  more traffic removes the prior verdict for that stage.
-- Significant `treatment-wins` advances directly. `tie` or any result with
-  `significant=false` requires `allow_non_significant=true`.
-  `control-wins`, `insufficient-data`, and `insufficient-n` cannot be
-  overridden.
-- Setup runs the shared-Gateway active-test preflight before targets are
-  created and again before A/B creation. A conflict returns
-  `experiment.gateway_busy`. A retry may adopt only its own exact
-  `can_<id>_target` test.
-- Complete and rollback stop the Canary A/B test and record
-  `experimental_only=true`; they do not deploy either Agent. Cleanup discovers
-  resources by record-derived names, deletes only Canary-owned A/B tests,
-  evaluator configs, and targets, and always passes `delete_gateway=False`.
+- **Model 1 / candidate mint.** Create takes ONE `agent_id` + a `candidate`
+  edit (≥1 of `system_prompt`/`tool_description_overrides`/`code`), resolves it
+  onto the agent's current spec (mirrors `act_promote`) and stores it as
+  `artifacts.edited_spec`. `act_setup` mints the candidate as a new immutable
+  version via `mint_candidate_version` (reuses the deploy build blocks +
+  `UpdateAgentRuntime`; reads `v_candidate` from the response; **never writes the
+  ledger Agent row**). `container` is not yet supported (mint raises; capability
+  gates it, `reason_code="container-followup"`).
+- **DEFAULT is the single source of production truth.** `UpdateAgentRuntime`
+  auto-rolls DEFAULT to the candidate, so `act_setup` MUST, in order:
+  read `v_current` → create the per-canary Gateway → create the STABLE named
+  endpoint pinned to `v_current` → **persist a PARTIAL `setup`
+  `{runtime_id, stable_endpoint, v_current, gateway_*}` BEFORE the mint** →
+  mint the candidate → create the TREATMENT endpoint (candidate) → create the
+  two `http-runtime` targets (`agentcoreRuntime.qualifier=<endpoint>`) + per-
+  variant online-eval → create the 90/10 A/B test → finalize `setup`
+  (`ab_test_id`, `champion`/`challenger` TARGETS, `v_candidate`,
+  `treatment_endpoint`, `ramp_stage`, `weights`). Persisting the stable endpoint
+  before the mint is load-bearing: it keeps production on `v_current` the instant
+  DEFAULT rolls.
+- **invoke hot path** (`invoke_agent_text` → `active_canary_route(agent.id)`):
+  one indexed `SELECT` (no AWS). Returns `None` (→ unchanged direct-ARN/DEFAULT
+  path), or a **provisioning** route `{runtime_id,arn,stable_endpoint,v_current}`
+  (stable endpoint stood up, gateway A/B not live → invoke serves `v_current`
+  via `invoke_runtime_text(qualifier=stable_endpoint)`), or a **live-gateway**
+  route (adds `gateway_url`+`control_target` once `ab_test_id` exists → SigV4
+  POST `{gateway_url}/{control_target}/invocations` with a sticky ≥33-char
+  `X-Amzn-Bedrock-AgentCore-Runtime-Session-Id`). Every setup key is read with
+  `.get()`. The gateway fail-safe is **CONTROL-SAFE**: any error/non-200 falls
+  back to the stable endpoint (`v_current`), NEVER DEFAULT (the untested
+  candidate). The harness / a2a / no-canary paths are byte-identical.
+- **promote / rollback.** `act_complete` (promote): DEFAULT already = candidate,
+  so just `_stop_ab_test` + update the ledger (`agent.spec=edited_spec`,
+  `agent.version=v_candidate`) — no endpoint repoint. `act_rollback`
+  (roll-forward): `_stop_ab_test` (only if `ab_test_id` present) + re-deploy the
+  agent's CURRENT unchanged spec via `mint_candidate_version` so DEFAULT rolls
+  back to `v_current` behavior. `rollback` is allowed for ANY running canary
+  (safety valve) and tolerates a partial setup.
+- **Dedicated per-canary Gateway.** `create_canary_gateway` (name
+  `lp-canary-{id}`, `AWS_IAM`) is conflict-adopt on retry. There is NO shared-
+  Gateway mutex for canaries (only Configuration A/B keeps `EXP_GATEWAY_NAME`),
+  so canaries run concurrently across agents — but only ONE running canary per
+  agent (`409 canary.already_running`). `act_cleanup` deletes the dedicated
+  gateway + BOTH named endpoints + targets + online-eval + A/B test
+  (`delete_gateway=False` passed to `ac.cleanup_resources`; the gateway is
+  deleted explicitly). It tolerates a partial setup.
+- **Verified AWS shapes.** Named-endpoint content-log group =
+  `/aws/bedrock-agentcore/runtimes/{resource_id}-{endpoint}` (created at
+  endpoint-create). `create_agent_runtime_endpoint` pins via `agentRuntimeVersion`;
+  get-detail exposes `liveVersion`; invoke selects an endpoint via `qualifier`
+  (session id min length 33). One RUNNING A/B test per gateway.
+- Verdict/ramp policy is UNCHANGED from the prior design: `baseline_n` fresh-
+  evidence gate; `treatment-wins` advances; `tie`/non-significant needs
+  `allow_non_significant`; `control-wins`/`insufficient-*` cannot be overridden.
 
 ### 4. Validation & Error Matrix
 
@@ -288,61 +319,77 @@ assert_verdict_allows(canary, allow_non_significant: bool) -> None
 |---|---|
 | Canary not found | 404 `canary.not_found` |
 | Agent missing or inactive | 400 `canary.agent_not_active` |
-| Harness, A2A, missing Runtime ARN, or unsupported method | 400 `canary.agent_unsupported`, with role and `canary_capability` |
-| champion equals challenger | 400 `canary.same_agent` |
+| Harness, A2A, container, missing Runtime ARN | 400 `canary.agent_unsupported`, with `canary_capability` (container → `reason_code=container-followup`) |
+| candidate has no non-empty edit | 400 `canary.candidate_empty` |
+| a running canary already exists for this agent | 409 `canary.already_running` |
 | invalid/incomplete source experiment | 400 `canary.source_experiment_invalid` |
-| source experiment Agent is not champion | 400 `canary.source_champion_mismatch` |
+| source experiment Agent is not this agent | 400 `canary.source_champion_mismatch` |
 | action already running | 409 `canary.action_in_flight` |
-| setup/traffic/verdict/ramp prerequisite missing | 409 `canary.stage_not_ready` |
+| setup/traffic/verdict/advance prerequisite missing | 409 `canary.stage_not_ready` (NOT rollback — always allowed) |
 | simulated or unusable traffic dataset | 422 `canary.dataset_unsupported` |
-| foreign active test on shared Gateway | 409 `experiment.gateway_busy` before setup mutation |
 | tie/non-significant without explicit override | 409 `canary.override_required` |
 | control win or insufficient evidence | 409 `canary.verdict_blocked` |
 
 ### 5. Good/Base/Bad Cases
 
-- **Good**: create directly -> setup 90/10 -> fresh traffic/verdict at all
-  three stages -> treatment wins -> complete -> cleanup. Completion records a
-  challenger winner but performs no production update.
-- **Base**: promoted configuration experiment opens
-  `mode=canary&canary=new&champion=<agent>&sourceExp=<experiment>`; create
-  validates the linkage and starts a separate record.
-- **Bad**: an unrelated configuration A/B test is active; setup returns
-  `experiment.gateway_busy` before creating Canary targets or evaluators.
+- **Good**: create `{agent_id, candidate:{system_prompt}}` → setup mints the
+  candidate + stands up the dedicated gateway/endpoints/A-B (real traffic splits
+  90/10) → fresh traffic/verdict at 90/10, 50/50, 1/99 → treatment wins →
+  **promote** (DEFAULT already serves the candidate; ledger updated to it) →
+  cleanup (dedicated gateway + both endpoints torn down; production on DEFAULT =
+  candidate).
+- **Base — partial-setup safety**: setup fails after the mint (e.g. gateway
+  timeout); the partial `setup` (stable endpoint, no `ab_test_id`) makes
+  `active_canary_route` return the **provisioning** form, so invoke serves
+  `v_current` via the stable endpoint (NOT the untested candidate), and
+  `rollback` is allowed and roll-forwards DEFAULT back to `v_current`.
+- **Bad — rollback**: `rollback` stops the test (if any) and re-deploys the
+  current spec; DEFAULT returns to `v_current` behavior; production never lands
+  on the rejected candidate.
 
 ### 6. Tests Required
 
-- API create: direct record, optional valid source, source mismatch,
-  same/inactive/unsupported Agents, and no AWS mutation.
-- Setup: shared-Gateway conflict before mutation, exact-name idempotent retry,
-  90/10 artifact ownership, and no Gateway deletion.
-- Every ramp: traffic required before verdict; fresh sample growth required
-  after the latest baseline; prior-stage evidence cannot unlock the next gate.
-- Verdict policy: treatment win, tie, non-significant, control win,
-  insufficient-data, and insufficient-n, including explicit override behavior.
-- Terminal actions: complete/rollback stop only the Canary A/B test; cleanup
-  discovers partial resources, is retryable, and never deletes the Gateway.
-- Browser: direct create, promotion handoff, disabled capability reasons,
-  every gate/override/blocked state, EN/ZH, and desktop/mobile overflow.
+- API create: single-agent record (both columns = agent id; `edited_spec`
+  stored); empty candidate → 400; inactive/container/harness/a2a ineligible;
+  duplicate running canary → 409; source-experiment linkage; no ledger mutation
+  at create.
+- Setup: reorder — stable endpoint + partial setup persisted BEFORE the mint;
+  two targets pin `qualifier=stable`/`treatment`; per-variant online-eval on the
+  named-endpoint log groups; gateway conflict-adopt.
+- invoke routing: no-canary → direct invoke, no qualifier (byte-identical);
+  provisioning route → `invoke_runtime_text(qualifier=stable_endpoint)`; live
+  route → gateway POST; gateway error/non-200 → fail-safe to stable endpoint.
+- promote → ledger `spec==edited_spec`, `version==v_candidate`, no endpoint
+  repoint. rollback → re-mints the CURRENT spec, `version` updated, allowed on
+  partial setup. cleanup → both endpoints + dedicated gateway deleted.
+- Ramp/verdict policy unchanged (treatment/tie/non-sig/control/insufficient +
+  override). Browser: single-agent + candidate-edit form, live-traffic copy,
+  disabled/ineligible reasons, EN/ZH.
 
 ### 7. Wrong vs Correct
 
 #### Wrong
 
 ```python
-# Treat completion as production promotion or reuse an old verdict.
-update_production_target(challenger)
-round_1["verdict"] = round_0["verdict"]
+# Mint the candidate first, write setup last, and route invoke off DEFAULT —
+# a setup failure then strands production on the untested candidate.
+mint_candidate_version(...)          # DEFAULT now = candidate
+gw = create_canary_gateway(...)      # if this fails, no setup artifact exists
+# ...and complete just flips A/B weights / records experimental_only=True
 ```
 
 #### Correct
 
 ```python
-baseline_n = metric_sample_count(current_metrics)
-send_gateway_traffic(...)
-assert metric_sample_count(next_metrics) > baseline_n
-stop_canary_ab_test()
-record_complete(winner="challenger", experimental_only=True)
+v_current = current_version(control, runtime_id)
+gw = create_canary_gateway(...)
+ensure_endpoint_ready(stable → v_current)
+_update(canary, artifact={"setup": partial})   # BEFORE the mint → invoke safe
+_, v_candidate = mint_candidate_version(...)    # DEFAULT rolls; invoke → stable
+ensure_endpoint_ready(treatment → v_candidate)
+# targets(qualifier=stable/treatment) + per-variant eval + 90/10 A/B, then finalize
+# promote: _stop_ab_test + ledger(spec=edited_spec, version=v_candidate)
+# rollback: _stop_ab_test + re-mint the current spec (roll DEFAULT forward)
 ```
 
 ## Scenario: official AgentCore production promotion
