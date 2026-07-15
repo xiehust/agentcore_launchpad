@@ -70,11 +70,14 @@ AgentCore registry, memory, gateway and policy engine once, and writes
 ### 3. Run locally
 
 ```bash
-make dev    # backend :8000 + frontend :5173 (auto-shifts to :5174 if taken)
+./start.py          # background development servers with auto-reload
+./start.py --prod   # build the platform frontend, then run the local production preview
+./stop.sh           # stop only processes owned by start.py
 ```
 
-Open the console at `http://localhost:5173`. Interactive API docs live at
-`http://localhost:8000/api/docs`.
+Open the console at `http://localhost:5173`; API docs are proxied at
+`http://localhost:5173/api/docs`. Use `make dev` when you want the same stack
+attached to the current terminal.
 
 ### 4. Create your first agent
 
@@ -117,6 +120,53 @@ curl -s -X POST localhost:8000/v1/agents/<AGENT_ID>/invoke \
 
 Full API reference (sync + SSE streaming, Python): [docs/api.md](docs/api.md).
 
+## Start and stop
+
+The root lifecycle scripts manage the platform backend and frontend as one
+local stack. The standalone vendored Studio is not part of this lifecycle; the
+platform's native Studio experience is available at `/create/studio`.
+
+### Background development mode
+
+```bash
+./start.py
+```
+
+This starts the stack in the background with backend auto-reload. Development
+servers bind to `127.0.0.1` by default.
+
+### Local production mode
+
+```bash
+./start.py --prod
+```
+
+Production mode builds the platform frontend, serves its optimized bundle, and
+runs the backend without auto-reload. Both the UI and API servers bind to
+`0.0.0.0`.
+
+| Service | Default URL | Port override |
+|---|---|---|
+| Platform console | `http://localhost:5173` | `PLATFORM_UI_PORT` |
+| Platform API | `http://localhost:8000` | `PLATFORM_API_PORT` |
+
+Override UI and API bindings with `LAUNCHPAD_HOST` and
+`LAUNCHPAD_API_HOST`. The launcher fails before starting if a configured port
+is already occupied.
+
+### Stop the stack
+
+```bash
+./stop.sh
+```
+
+`start.py` records process ownership and per-service logs under `.run/`.
+`stop.sh` gracefully terminates only those recorded process groups, so it does
+not kill unrelated services that happen to use similar commands. Re-running
+`start.py` while its stack is healthy is idempotent and prints the active URLs.
+
+For terminal-attached development, use `make dev` and stop it with `Ctrl+C`.
+
 ## Repo layout
 
 | Path | What lives here |
@@ -127,6 +177,7 @@ Full API reference (sync + SSE streaming, Python): [docs/api.md](docs/api.md).
 | `frontend/` | React console (Vite) — Overview, Create Agent, Registry, Chat, Observability, Evaluation, Governance |
 | `infra/` | AWS CDK app — the `launchpad-base` shared stack |
 | `apps/studio/` | Vendored Strands Studio sub-app (方式C), rewired to the platform pipeline |
+| `start.py`, `stop.sh` | Background local-stack lifecycle, health checks, PID ownership and logs |
 | `scripts/` | `bootstrap.py`, `teardown.py`, `dev.sh`, `verify.sh`, `i18n_check.py` |
 | `config/` | `launchpad.example.yaml` (committed); `launchpad.yaml` (generated, gitignored) |
 | `docs/` | Setup, API, architecture, troubleshooting, teardown, Studio integration |

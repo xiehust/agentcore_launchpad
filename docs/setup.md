@@ -42,8 +42,12 @@ Demo user passwords are generated and stored in `config/launchpad.yaml`
 ## Run locally / 本地运行
 
 ```bash
-make dev    # backend :8000 + frontend :5173 (auto-shifts if the port is taken)
+./start.py          # detached development mode
+./start.py --prod   # build and run the local production preview
+./stop.sh
 ```
+
+Use `make dev` for the foreground, terminal-attached development stack.
 
 ## Teardown / 资源清理
 

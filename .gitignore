@@ -3,6 +3,7 @@
 /.codegraph/
 /.supergoal/
 /.mcp.json
+/.run/
 
 # --- python ---
 __pycache__/

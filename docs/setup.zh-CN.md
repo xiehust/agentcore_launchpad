@@ -45,8 +45,12 @@ make bootstrap          # = cd backend && uv run python ../scripts/bootstrap.py
 ## 本地运行
 
 ```bash
-make dev    # 后端 :8000 + 前端 :5173(端口被占用时自动切换)
+./start.py          # 后台开发模式
+./start.py --prod   # 构建并运行本地生产预览
+./stop.sh
 ```
+
+需要绑定当前终端的前台开发栈时,使用 `make dev`。
 
 ## 资源清理
 

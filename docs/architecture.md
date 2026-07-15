@@ -198,16 +198,23 @@ AWS; the ledger holds identifiers and derived progress only.
 
 ## Local process topology
 
-`bash scripts/dev.sh` (`make dev`) starts up to four processes; ports are
-overridable via environment variables.
+`./start.py` starts the two platform processes, waits for every HTTP health
+check, and records process ownership plus logs under `.run/`. `./stop.sh`
+gracefully stops only those recorded process groups. The default uses
+development servers; `./start.py --prod` builds the platform frontend and
+serves its production bundle without backend auto-reload. `bash scripts/dev.sh`
+(`make dev`) remains the foreground, terminal-attached alternative.
 
 | Service | Port | Override |
 |---|---|---|
 | platform backend | 8000 | `PLATFORM_API_PORT` |
-| platform frontend | 5173 (auto-shifts if taken) | `PLATFORM_UI_PORT` |
-| studio backend | 8100 | `STUDIO_API_PORT` |
-| studio frontend | 5273 | `STUDIO_UI_PORT` |
+| platform frontend | 5173 | `PLATFORM_UI_PORT` |
 
-Studio's Launchpad deploy section proxies `/launchpad-api` to the platform
-backend's `/api`, so studio-created agents ride the same pipeline, ledger and
-registry. See [studio-integration.md](studio-integration.md).
+The lifecycle script fails fast when a configured port is occupied. Development
+mode binds both services to loopback by default; production mode binds both
+services to `0.0.0.0`. `LAUNCHPAD_HOST` and `LAUNCHPAD_API_HOST` override those
+bindings.
+
+The standalone app under `apps/studio/` is not started by the root lifecycle.
+The platform console provides the supported native canvas at `/create/studio`.
+See [studio-integration.md](studio-integration.md).

@@ -56,10 +56,10 @@ English: [troubleshooting.md](troubleshooting.md)
 ## 本地开发
 
 - **Vite 自动切换前端端口。** 若 `5173` 被占用,平台前端会落到 `5174`(或下一个
-  空闲端口)。设置 `PLATFORM_UI_PORT` 可固定它。后端保持在 `8000`。
-- **Studio 仅在 `apps/studio/` 存在时运行。** `scripts/dev.sh` 有条件地启动
-  studio 后端(`:8100`)与前端(`:5273`);studio 界面本身仅英文(已声明的
-  vendored 应用 i18n 例外)。
+  空闲端口)。设置 `PLATFORM_UI_PORT` 可固定它。后端保持在 `8000`。此行为适用于
+  `make dev`;`start.py` 使用严格端口,任一配置端口被占用时会在启动前失败。
+- **根目录不再启动独立 Studio。** 根目录生命周期在 `/create/studio` 提供原生
+  双语画布;仅在明确需要时,才从 `apps/studio/` 单独运行 vendored 应用。
 
 ## 治理
 

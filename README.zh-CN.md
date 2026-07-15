@@ -65,11 +65,14 @@ memory、gateway 与 policy engine,并写出 `config/launchpad.yaml`。该步骤
 ### 3. 本地运行
 
 ```bash
-make dev    # 后端 :8000 + 前端 :5173(若端口被占用自动切到 :5174)
+./start.py          # 后台开发服务器,支持自动重载
+./start.py --prod   # 构建平台前端并运行本地生产预览
+./stop.sh           # 只停止 start.py 所属的进程
 ```
 
-在 `http://localhost:5173` 打开控制台。交互式 API 文档位于
-`http://localhost:8000/api/docs`。
+在 `http://localhost:5173` 打开控制台;API 文档通过代理访问
+`http://localhost:5173/api/docs`。需要将同一套开发栈绑定到当前终端时,
+使用 `make dev`。
 
 ### 4. 创建第一个 Agent
 
@@ -111,6 +114,49 @@ curl -s -X POST localhost:8000/v1/agents/<AGENT_ID>/invoke \
 
 完整 API 参考(同步 + SSE 流式、Python):[docs/api.zh-CN.md](docs/api.zh-CN.md)。
 
+## 启动与停止
+
+根目录的生命周期脚本把平台后端与前端作为一套本地服务统一管理。独立的
+vendored Studio 不属于该生命周期;平台内置的 Studio 位于 `/create/studio`。
+
+### 后台开发模式
+
+```bash
+./start.py
+```
+
+该命令在后台启动整套服务,后端支持自动重载。开发服务器默认绑定到
+`127.0.0.1`。
+
+### 本地生产模式
+
+```bash
+./start.py --prod
+```
+
+生产模式会构建平台前端、提供优化后的静态资源,并关闭后端自动重载。UI 与 API
+服务都绑定到 `0.0.0.0`。
+
+| 服务 | 默认地址 | 端口覆盖变量 |
+|---|---|---|
+| 平台控制台 | `http://localhost:5173` | `PLATFORM_UI_PORT` |
+| 平台 API | `http://localhost:8000` | `PLATFORM_API_PORT` |
+
+可通过 `LAUNCHPAD_HOST` 和 `LAUNCHPAD_API_HOST` 覆盖 UI 与 API 的绑定地址。
+若任一配置端口已被占用,启动器会在创建进程前失败。
+
+### 停止服务
+
+```bash
+./stop.sh
+```
+
+`start.py` 把进程归属信息和每个服务的日志记录在 `.run/` 下。`stop.sh` 只会
+优雅终止这些已记录的进程组,不会误杀使用相似命令的无关服务。服务健康时重复
+运行 `start.py` 是幂等的,只会打印当前访问地址。
+
+需要绑定当前终端的前台开发模式时,使用 `make dev`,并通过 `Ctrl+C` 停止。
+
 ## 仓库结构
 
 | 路径 | 内容 |
@@ -121,6 +167,7 @@ curl -s -X POST localhost:8000/v1/agents/<AGENT_ID>/invoke \
 | `frontend/` | React 控制台(Vite)——Overview、Create Agent、Registry、Chat、Governance、Evaluation |
 | `infra/` | AWS CDK 应用——`launchpad-base` 共享栈 |
 | `apps/studio/` | vendored 的 Strands Studio 子应用(方式C),已改接平台管道 |
+| `start.py`、`stop.sh` | 后台本地服务生命周期、健康检查、PID 归属与日志 |
 | `scripts/` | `bootstrap.py`、`teardown.py`、`dev.sh`、`verify.sh`、`i18n_check.py` |
 | `config/` | `launchpad.example.yaml`(已提交);`launchpad.yaml`(生成、gitignored) |
 | `docs/` | 环境搭建、API、架构、故障排查、资源清理、Studio 集成 |

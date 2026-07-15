@@ -64,10 +64,12 @@ entry below was observed during implementation — none is speculative.
 
 - **Vite auto-shifts the frontend port.** If `5173` is taken, the platform
   frontend lands on `5174` (or the next free port). Set `PLATFORM_UI_PORT` to
-  pin it. The backend stays on `8000`.
-- **Studio runs only if `apps/studio/` exists.** `scripts/dev.sh` starts the
-  studio backend (`:8100`) and frontend (`:5273`) conditionally; the studio UI
-  itself is English-only (the declared vendored-app i18n exception).
+  pin it. The backend stays on `8000`. This applies to `make dev`;
+  `start.py` uses strict ports and fails before starting if any configured
+  port is occupied.
+- **Standalone Studio is not root-started.** The root lifecycle serves the
+  native bilingual canvas at `/create/studio`; the vendored `apps/studio/`
+  application must be run separately when explicitly needed.
 
 ## Governance
 

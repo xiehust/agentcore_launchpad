@@ -27,6 +27,16 @@ if [ -d "$ROOT/infra" ]; then
   (cd "$ROOT/infra" && uv run pytest -q); result $? "infra pytest"
 fi
 
+if [ -f "$ROOT/start.py" ] && [ -f "$ROOT/stop.sh" ]; then
+  section "local lifecycle · syntax"
+  (
+    cd "$ROOT/backend" &&
+    uv run ruff check ../start.py &&
+    python3 -m py_compile ../start.py &&
+    bash -n ../stop.sh
+  ); result $? "local lifecycle"
+fi
+
 if [ -d "$ROOT/frontend" ]; then
   section "frontend · eslint"
   (cd "$ROOT/frontend" && npm run --silent lint); result $? "eslint"

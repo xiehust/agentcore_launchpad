@@ -137,14 +137,17 @@ change: skill refs are derived from the generated code, not a new field.
 
 ## Running locally / 本地运行
 
-`bash scripts/dev.sh` starts all four processes:
+The root lifecycle (`./start.py`, `./start.py --prod`, or `make dev`) starts
+only the platform processes:
 
 | Service | Port | Override |
 | --- | --- | --- |
 | platform backend | 8000 | `PLATFORM_API_PORT` |
 | platform frontend | 5173 | `PLATFORM_UI_PORT` |
-| studio backend | 8100 | `STUDIO_API_PORT` |
-| studio frontend | 5273 | `STUDIO_UI_PORT` |
+
+The vendored standalone app under `apps/studio/` is no longer started by the
+root lifecycle. Its former `8100` backend and `5273` frontend are only relevant
+when that application is run explicitly from its own directory.
 
 Cross-navigation: the platform's Create Agent 方式C card links to the NATIVE
 canvas (`/create/studio`, internal route — `VITE_STUDIO_URL` is no longer used
