@@ -1027,3 +1027,48 @@ Separated configuration-bundle experiments from Runtime Canary with independent 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 15: Production-grade target-based A/B canary
+
+**Date**: 2026-07-15
+**Task**: Production-grade target-based A/B canary
+**Package**: lab4-interactive
+**Branch**: `main`
+
+### Summary
+
+Turned the Runtime Canary (target-based A/B) into a real production canary: Model-1 single-agent + candidate version via named-endpoint mint, dedicated per-canary gateway, live-traffic invoke routing (SigV4 through the gateway; provisioning/live route forms; control-safe fail-safe), DEFAULT-as-production-truth with roll-forward rollback, real promote. Phased (spike→P1..P3.5→frontend), adversarially reviewed (fixed a HIGH setup-failure production-safety hole + 4 more), spec'd, and validated end-to-end on real AWS (self-cleaning e2e that also surfaced + fixed teardown eventual-consistency retries). Also this session: /init CLAUDE.md, zh-CN i18n fixes, tab rename to TARGET-BASED/CONFIGURATION-BUNDLE A/B. make verify green (643 backend).
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `84e885e` | (see git log) |
+| `a2e0db2` | (see git log) |
+| `9cd11ec` | (see git log) |
+| `e98e3d9` | (see git log) |
+| `bc8c695` | (see git log) |
+| `47b8a4c` | (see git log) |
+| `8595c9a` | (see git log) |
+| `e88fa8c` | (see git log) |
+| `4a536bd` | (see git log) |
+| `65f1eea` | (see git log) |
+| `67310c9` | (see git log) |
+| `98a4741` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
