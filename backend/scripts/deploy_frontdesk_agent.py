@@ -1,12 +1,12 @@
 """Deploy the front-desk A2A routing demo agent.
 
-Usage: .venv/bin/python scripts/deploy_frontdesk_agent.py [--api http://localhost:8000]
+Usage: uv run python scripts/deploy_frontdesk_agent.py [--api http://localhost:8000]
        [--name front-desk] [--model global.anthropic.claude-sonnet-4-6]
 
 1. Ensures the execution role can search the registry and invoke harnesses
    (inline policy `launchpad-a2a-frontdesk`; InvokeAgentRuntime pre-exists).
-2. POSTs a zip_runtime code_bundle spec (samples/frontdesk_agent/main.py) to
-   the platform API and polls until the agent is active.
+2. Creates or redeploys in place a zip_runtime code_bundle spec
+   (samples/frontdesk_agent/main.py) and polls until the agent is active.
 """
 
 import argparse
@@ -85,13 +85,26 @@ def main() -> None:
             "FRONTDESK_NAME": args.name,
         },
     }
-    res = httpx.post(f"{args.api}/api/agents", json=spec, timeout=60)
-    if res.status_code == 409:
-        print(f"agent '{args.name}' already exists — delete it first or use --name")
-        sys.exit(1)
+    agents_res = httpx.get(f"{args.api}/api/agents", timeout=30)
+    agents_res.raise_for_status()
+    existing = next(
+        (
+            agent
+            for agent in agents_res.json().get("agents", [])
+            if agent["name"] == args.name and agent["status"] != "deleted"
+        ),
+        None,
+    )
+    if existing:
+        endpoint = f"{args.api}/api/agents/{existing['id']}/redeploy"
+        action = "redeploying"
+    else:
+        endpoint = f"{args.api}/api/agents"
+        action = "deploying"
+    res = httpx.post(endpoint, json=spec, timeout=60)
     res.raise_for_status()
     agent_id = res.json()["agent"]["id"]
-    print(f"deploying agent {agent_id} …")
+    print(f"{action} agent {agent_id} …")
     for _ in range(90):
         time.sleep(10)
         agent = httpx.get(f"{args.api}/api/agents/{agent_id}", timeout=30).json()

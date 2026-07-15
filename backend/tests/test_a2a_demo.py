@@ -1,6 +1,7 @@
 """Front-desk A2A demo — endpoint trace passthrough + sample pure helpers."""
 
 import json
+from contextvars import ContextVar
 from pathlib import Path
 
 from app.core.db import SessionLocal
@@ -131,3 +132,34 @@ def test_parse_card_and_a2a_reply_text():
     assert h["_a2a_reply_text"](task) == "ok"
     assert h["_a2a_reply_text"]({"kind": "message",
                                  "parts": [{"kind": "text", "text": "hi"}]}) == "hi"
+
+
+def test_frontdesk_a2a_message_carries_context_and_request_state_is_isolated():
+    h = _load_helpers()
+    payload = h["a2a_message"]("remember this", "session-123")
+    message = payload["params"]["message"]
+    assert message["contextId"] == "session-123"
+    assert message["parts"] == [{"kind": "text", "text": "remember this"}]
+    assert isinstance(h["_TRACE"], ContextVar)
+    assert isinstance(h["_LAST_HITS"], ContextVar)
+    assert isinstance(h["_SESSION_ID"], ContextVar)
+
+
+def test_frontdesk_memory_manager_scopes_actor_and_session():
+    h = _load_helpers()
+    captured = {}
+
+    class FakeManager:
+        def __init__(self, config, region_name=None):
+            captured["config"] = config
+            captured["region_name"] = region_name
+
+    h["MEMORY_ID"] = "memory-123"
+    h["AgentCoreMemorySessionManager"] = FakeManager
+    manager = h["memory_session_manager"]("frontdesk__river", "session-123")
+
+    assert isinstance(manager, FakeManager)
+    assert captured["config"].memory_id == "memory-123"
+    assert captured["config"].actor_id == "frontdesk__river"
+    assert captured["config"].session_id == "session-123"
+    assert captured["region_name"] == "us-west-2"

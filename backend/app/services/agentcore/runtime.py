@@ -381,6 +381,7 @@ def invoke_a2a_text(
             "message": {
                 "role": "user",
                 "messageId": uuid.uuid4().hex,
+                "contextId": session_id,
                 "parts": [{"kind": "text", "text": prompt}],
             }
         },

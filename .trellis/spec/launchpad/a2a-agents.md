@@ -26,6 +26,7 @@ AgentSpec.a2a_skills: list[A2ASkill]                  # {id,name,description,tag
 create_code_runtime(..., protocol=None)   # a2a → protocolConfiguration {serverProtocol: A2A}
 update_code_runtime(..., protocol=None)   # MUST echo protocol on every update (omit=RESET)
 invoke_a2a_text(client, arn, prompt, session_id=None) -> {text, session_id}
+# session_id is both InvokeAgentRuntime.runtimeSessionId and message.contextId
 a2a_result_text(result) -> str            # Task artifacts[].parts[] | Message parts[]
 
 # services/agentcore/registry.py
@@ -36,6 +37,8 @@ build_a2a_card(..., url=None, skills=None, transport="agentcore-http")
 # templates/strands_a2a_agent/__init__.py
 render_a2a_main_py(spec) -> str           # A2AServer(agent_factory=..., serve_at_root=True, skills=...)
 a2a_base_requirements() -> list[str]      # strands-agents[a2a,otel] + fastapi/uvicorn
+# agent_factory(context_id) attaches AgentCoreMemorySessionManager when
+# LAUNCHPAD_MEMORY_ID is present
 ```
 
 ### 3. Load-bearing facts (all probed live 2026-07-13)
@@ -54,6 +57,15 @@ a2a_base_requirements() -> list[str]      # strands-agents[a2a,otel] + fastapi/u
   envelope returns the A2A result unmodified. Task replies carry the final
   text in `result.artifacts[].parts[].text`; `result.history` contains
   STREAMING FRAGMENTS (agent messages split mid-word) — never join history.
+- **A2A conversation identity is `message.contextId`**, not
+  `runtimeSessionId`. Launchpad deliberately uses the same stable platform
+  session value for both fields, but both must be present. Omitting
+  `contextId` causes each `message/send` to enter a fresh Strands context even
+  when AgentCore receives the same `runtimeSessionId`.
+- **A2A context is not an authentication boundary**. The template scopes the
+  shared Memory actor to `<agent-name>__a2a__<context-id>` for short-term
+  isolation; cross-session human identity needs a future authenticated actor
+  envelope.
 - Well-known card fetch: SigV4 GET
   `https://bedrock-agentcore.{region}.amazonaws.com/runtimes/{urlencode(arn)}/invocations/.well-known/agent-card.json`
   (needs `X-Amzn-Bedrock-AgentCore-Runtime-Session-Id` header).
@@ -68,11 +80,16 @@ a2a_base_requirements() -> list[str]      # strands-agents[a2a,otel] + fastapi/u
   must dispatch on protocol too, or A2A runtimes reject the `{prompt}` payload
   with JSON-RPC -32600 (the live eval-run failure that forced this note).
   Users see plain text either way.
-- The A2A template deliberately drops the config-bundle contract and the
-  platform memory envelope (A2A server owns conversation state). Because of
-  that, **experiments reject A2A agents** (400
+- The A2A template deliberately drops the config-bundle contract. It uses the
+  platform-injected `LAUNCHPAD_MEMORY_ID`: `agent_factory(context_id)` creates
+  an `AgentCoreMemorySessionManager` so the context survives A2AServer LRU
+  eviction and Runtime restart. Because config bundles remain unsupported,
+  **experiments reject A2A agents** (400
   `experiment.protocol_unsupported`; UI picker disables with a reason —
   mirrors the harness pattern).
+- `invoke_a2a_text` and the front-desk's `a2a-jsonrpc` branch put the stable
+  session in both `runtimeSessionId` and `message.contextId`. New direct A2A
+  callers must do the same.
 - Register stage publishes a REAL card for A2A agents: `url` = data-plane
   invocations URL, `skills` = spec.a2a_skills, `metadata.launchpad.transport`
   = `a2a-jsonrpc`. HTTP agents keep `agentcore-http` cards (platform invoke).
@@ -92,8 +109,11 @@ a2a_base_requirements() -> list[str]      # strands-agents[a2a,otel] + fastapi/u
 ### 5. Verification
 
 - `backend/tests/test_a2a_agent.py` (validator matrix, template compile,
-  deploy params incl. update-echo, invoke parsing incl. history-fragment
-  guard, card builder, experiment 400).
+  deploy params incl. update-echo, stable contextId/runtimeSessionId, invoke
+  parsing incl. history-fragment guard, memory-session template wiring, card
+  builder, experiment 400).
+- `backend/tests/test_a2a_demo.py` (front-desk context envelope, scoped memory
+  config, request-local ContextVars, routing helpers).
 - Live proof: agent `aurora-faq-a2a` (KEPT — demo specialist for
   07-13-a2a-frontdesk-demo): UI create → card fetch 200 with configured
   skills → chat `17*23 → "391"` → registry record PENDING_APPROVAL with
@@ -123,9 +143,48 @@ a2a_base_requirements() -> list[str]      # strands-agents[a2a,otel] + fastapi/u
 - Demo script: docs/a2a-demo.md (bilingual; governance loop uses
   REJECT/APPROVE — live-proven the routing flips within one question).
 
+### 5c. Stateful conversation validation
+
+#### Validation & error matrix
+
+| Condition | Behavior |
+|---|---|
+| Same platform `session_id` on later call | Same `runtimeSessionId` and `message.contextId`; prior turns restore |
+| Different platform `session_id` | Different A2A context and Memory partition |
+| Missing `LAUNCHPAD_MEMORY_ID` | A2AServer remains usable with in-process context only |
+| Memory API/session-manager failure | Invocation fails; do not claim the turn was persisted |
+| Caller knows another context id | Transport can attach to it; authenticated isolation must be enforced above A2A |
+
+#### Good / base / bad cases
+
+- **Good**: two `message/send` calls carry the same explicit `contextId`; the
+  second call recalls the first after an A2AServer context eviction.
+- **Base**: memory is disabled; repeated calls still share the in-process
+  A2AServer agent while that context remains cached.
+- **Bad**: only `runtimeSessionId` is reused. The transport session is stable,
+  but the A2A server creates a new conversation and loses prior turns.
+
+#### Wrong vs correct
+
+```python
+# Wrong: runtimeSessionId alone does not select an A2A conversation.
+message = {"role": "user", "messageId": mid, "parts": parts}
+
+# Correct: use the platform session at both protocol layers.
+message = {
+    "role": "user",
+    "messageId": mid,
+    "contextId": session_id,
+    "parts": parts,
+}
+client.invoke_agent_runtime(runtimeSessionId=session_id, payload=...)
+```
+
 ### 6. Known gaps / follow-ups
 
 - A2A streaming (`message/stream`) not surfaced in chat (sync only).
+- Authenticated human identity is not carried in direct A2A requests, so
+  persistent memory is context-scoped rather than user-scoped.
 - Sibling task 07-13-a2a-registry-cards generalizes card enrichment
   (skills derivation) for HTTP agents + Registry drawer AGENT CARD panel.
 - OAuth inbound auth unsupported (SigV4 only, platform-mediated).

@@ -59,6 +59,8 @@ def test_a2a_template_renders_compiles_and_carries_skills():
     assert "port=9000" in code
     assert "'id': 'faq'" in code
     assert "AGENTCORE_RUNTIME_URL" in code
+    assert "AgentCoreMemorySessionManager" in code
+    assert 'actor_id=f"{AGENT_NAME}__a2a__{context_id}"' in code
 
 
 def test_http_template_untouched_by_protocol_field():
@@ -140,11 +142,14 @@ def test_invoke_a2a_text_sends_message_send_and_parses_task():
                     {"role": "agent", "parts": [{"kind": "text", "text": "A2"}]},
                     {"role": "agent", "parts": [{"kind": "text", "text": "A OK"}]}],
     }})
-    out = rt.invoke_a2a_text(stub, "arn:rt-1", "ping")
+    session_id = "s" * 40
+    out = rt.invoke_a2a_text(stub, "arn:rt-1", "ping", session_id=session_id)
     assert out["text"] == "A2A OK"
     payload = json.loads(stub.invoked_with["payload"])
     assert payload["method"] == "message/send"
     assert payload["params"]["message"]["parts"] == [{"kind": "text", "text": "ping"}]
+    assert payload["params"]["message"]["contextId"] == session_id
+    assert stub.invoked_with["runtimeSessionId"] == session_id
     assert len(stub.invoked_with["runtimeSessionId"]) >= 16
 
 

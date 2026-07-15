@@ -2,11 +2,11 @@
 
 import importlib.util
 import py_compile
-import sys
 import types
 from pathlib import Path
 
 import pytest
+import strands
 
 from app.schemas.agent import AgentSpec
 from app.templates.strands_agent import base_requirements, render_main_py
@@ -26,6 +26,8 @@ def test_render_replaces_all_placeholders():
     assert "You are a template test agent. Be brief." in code
     assert "get_config_bundle" in code
     assert "BedrockAgentCoreApp" in code
+    assert "AgentCoreMemorySessionManager" in code
+    assert "create_event(" not in code
 
 
 def test_rendered_template_compiles(tmp_path: Path):
@@ -55,10 +57,8 @@ class _FakeTool:
 @pytest.fixture
 def template_module(tmp_path: Path, monkeypatch):
     """Import the rendered template with a stubbed strands module."""
-    fake_strands = types.ModuleType("strands")
-    fake_strands.Agent = lambda **kwargs: types.SimpleNamespace(**kwargs)
-    fake_strands.tool = _FakeTool
-    monkeypatch.setitem(sys.modules, "strands", fake_strands)
+    monkeypatch.setattr(strands, "Agent", lambda **kwargs: types.SimpleNamespace(**kwargs))
+    monkeypatch.setattr(strands, "tool", _FakeTool)
 
     target = tmp_path / "rendered_main.py"
     target.write_text(render_main_py(SPEC), encoding="utf-8")
@@ -119,10 +119,8 @@ def test_promoted_tool_defaults_are_rendered(tmp_path: Path, monkeypatch):
     spec_with_defaults = SPEC.model_copy(update={
         "tool_description_overrides": {"calculator": "promoted description"},
     })
-    fake_strands = types.ModuleType("strands")
-    fake_strands.Agent = lambda **kwargs: types.SimpleNamespace(**kwargs)
-    fake_strands.tool = _FakeTool
-    monkeypatch.setitem(sys.modules, "strands", fake_strands)
+    monkeypatch.setattr(strands, "Agent", lambda **kwargs: types.SimpleNamespace(**kwargs))
+    monkeypatch.setattr(strands, "tool", _FakeTool)
     target = tmp_path / "promoted_main.py"
     target.write_text(render_main_py(spec_with_defaults), encoding="utf-8")
     module_spec = importlib.util.spec_from_file_location("promoted_main", target)
@@ -139,3 +137,30 @@ def test_promoted_tool_defaults_are_rendered(tmp_path: Path, monkeypatch):
 def test_template_tools_work(template_module):
     assert template_module.calculator("2+2*3") == "8"
     assert template_module.current_utc_time().startswith("20")
+
+
+def test_build_agent_omits_session_manager_without_memory(template_module, monkeypatch):
+    monkeypatch.setattr(template_module, "MEMORY_ID", "")
+    agent = template_module.build_agent("agent__river", "session-one")
+    assert not hasattr(agent, "session_manager")
+
+
+def test_build_agent_scopes_memory_to_actor_and_session(template_module, monkeypatch):
+    captured = {}
+
+    class FakeManager:
+        def __init__(self, config, region_name=None):
+            captured["config"] = config
+            captured["region_name"] = region_name
+
+    monkeypatch.setattr(template_module, "MEMORY_ID", "memory-123")
+    monkeypatch.setattr(template_module, "AgentCoreMemorySessionManager", FakeManager)
+    monkeypatch.setenv("AWS_REGION", "us-west-2")
+
+    agent = template_module.build_agent("agent__river", "session-one")
+
+    assert isinstance(agent.session_manager, FakeManager)
+    assert captured["config"].memory_id == "memory-123"
+    assert captured["config"].actor_id == "agent__river"
+    assert captured["config"].session_id == "session-one"
+    assert captured["region_name"] == "us-west-2"

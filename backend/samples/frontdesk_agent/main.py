@@ -16,14 +16,20 @@ import hashlib
 import json
 import os
 import uuid
+from contextvars import ContextVar
 from typing import Any
 from urllib.parse import unquote
 
 import boto3
+from bedrock_agentcore.memory.integrations.strands.config import AgentCoreMemoryConfig
+from bedrock_agentcore.memory.integrations.strands.session_manager import (
+    AgentCoreMemorySessionManager,
+)
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from strands import Agent, tool
 
 REGISTRY_ID = os.environ.get("LAUNCHPAD_REGISTRY_ID", "")
+MEMORY_ID = os.environ.get("LAUNCHPAD_MEMORY_ID", "")
 SELF_NAME = os.environ.get("FRONTDESK_NAME", "front-desk")
 REGION = os.environ.get("AWS_REGION", "us-west-2")
 MODEL_ID = "__FRONTDESK_MODEL_ID__"
@@ -39,9 +45,13 @@ SYSTEM_PROMPT = (
     "domain answers."
 )
 
-TRACE: list[dict[str, Any]] = []
-_LAST_HITS: dict[str, dict[str, Any]] = {}
-_SESSION_ID = ""  # front-desk session of the current request, set by the entrypoint
+_TRACE: ContextVar[list[dict[str, Any]]] = ContextVar("frontdesk_trace")
+_LAST_HITS: ContextVar[dict[str, dict[str, Any]]] = ContextVar("frontdesk_hits")
+_SESSION_ID: ContextVar[str] = ContextVar("frontdesk_session")
+
+
+def new_session_id() -> str:
+    return uuid.uuid4().hex + uuid.uuid4().hex[:8]
 
 
 def derive_session(fd_session: str, agent_name: str) -> str:
@@ -51,8 +61,38 @@ def derive_session(fd_session: str, agent_name: str) -> str:
     located from the front-desk session id. Adhoc calls (no session) fall
     back to a random id; sha256 hex satisfies the ≥16-char constraint."""
     if not fd_session:
-        return uuid.uuid4().hex + uuid.uuid4().hex[:8]
+        return new_session_id()
     return hashlib.sha256(f"{fd_session}:{agent_name}".encode()).hexdigest()
+
+
+def a2a_message(message: str, context_id: str) -> dict[str, Any]:
+    """Build one stateful A2A message/send envelope."""
+    return {
+        "jsonrpc": "2.0",
+        "id": uuid.uuid4().hex,
+        "method": "message/send",
+        "params": {
+            "message": {
+                "role": "user",
+                "messageId": uuid.uuid4().hex,
+                "contextId": context_id,
+                "parts": [{"kind": "text", "text": message}],
+            }
+        },
+    }
+
+
+def memory_session_manager(
+    actor_id: str, session_id: str
+) -> AgentCoreMemorySessionManager | None:
+    if not MEMORY_ID:
+        return None
+    config = AgentCoreMemoryConfig(
+        memory_id=MEMORY_ID,
+        actor_id=actor_id,
+        session_id=session_id,
+    )
+    return AgentCoreMemorySessionManager(config, region_name=REGION)
 
 
 def _client():
@@ -118,8 +158,8 @@ def discover_agents(query: str) -> str:
         if not card or card["name"] == SELF_NAME:
             continue
         hits.append(card)
-        _LAST_HITS[card["name"]] = card
-    TRACE.append({"stage": "discover", "query": query, "hits": hits})
+        _LAST_HITS.get()[card["name"]] = card
+    _TRACE.get().append({"stage": "discover", "query": query, "hits": hits})
     return json.dumps(hits)
 
 
@@ -128,20 +168,16 @@ def call_agent(agent_name: str, message: str, reason: str) -> str:
     """Forward a message to a specialist found via discover_agents and return
     its reply. agent_name must match a discovered card name exactly; reason is
     one sentence on why this specialist was chosen."""
-    card = _LAST_HITS.get(agent_name)
+    card = _LAST_HITS.get().get(agent_name)
     if card is None:
         return f"unknown agent '{agent_name}' — call discover_agents first"
-    session = derive_session(_SESSION_ID, agent_name)
+    session = derive_session(_SESSION_ID.get(), agent_name)
     client = _client()
     transport = card["transport"]
     request_excerpt = message[:300]
     try:
         if transport == "a2a-jsonrpc":
-            payload = {
-                "jsonrpc": "2.0", "id": uuid.uuid4().hex, "method": "message/send",
-                "params": {"message": {"role": "user", "messageId": uuid.uuid4().hex,
-                           "parts": [{"kind": "text", "text": message}]}},
-            }
+            payload = a2a_message(message, session)
             request_excerpt = json.dumps(payload)[:300]
             resp = client.invoke_agent_runtime(
                 agentRuntimeArn=arn_from_url(card["url"]),
@@ -177,7 +213,7 @@ def call_agent(agent_name: str, message: str, reason: str) -> str:
             answer = str(body.get("result", "")) if isinstance(body, dict) else str(body)
     except Exception as exc:  # surfaced to the model — it reports honestly
         answer = f"[specialist call failed: {type(exc).__name__}: {exc}]"
-    TRACE.append({
+    _TRACE.get().append({
         "stage": "invoke", "target": agent_name, "transport": transport,
         "session": session, "reason": reason, "request_excerpt": request_excerpt,
         "response_excerpt": answer[:400],
@@ -190,19 +226,34 @@ app = BedrockAgentCoreApp()
 
 @app.entrypoint
 def invoke(payload: dict[str, Any], context: Any = None) -> dict[str, Any]:
-    global _SESSION_ID
     prompt = str(payload.get("prompt", "")).strip()
     if not prompt:
         return {"error": "payload must include a non-empty 'prompt'"}
-    TRACE.clear()
-    _LAST_HITS.clear()
-    _SESSION_ID = str(
-        getattr(context, "session_id", "") or payload.get("session_id", "") or ""
+    actor_id = str(payload.get("actor_id", "frontdesk"))
+    session_id = str(
+        getattr(context, "session_id", "")
+        or payload.get("session_id", "")
+        or new_session_id()
     )
-    agent = Agent(model=MODEL_ID, system_prompt=SYSTEM_PROMPT,
-                  tools=[discover_agents, call_agent])
-    result = agent(prompt)
-    return {"result": str(result), "a2a_trace": list(TRACE)}
+    trace: list[dict[str, Any]] = []
+    session_token = _SESSION_ID.set(session_id)
+    trace_token = _TRACE.set(trace)
+    hits_token = _LAST_HITS.set({})
+    try:
+        kwargs: dict[str, Any] = {
+            "model": MODEL_ID,
+            "system_prompt": SYSTEM_PROMPT,
+            "tools": [discover_agents, call_agent],
+        }
+        session_manager = memory_session_manager(actor_id, session_id)
+        if session_manager is not None:
+            kwargs["session_manager"] = session_manager
+        result = Agent(**kwargs)(prompt)
+        return {"result": str(result), "a2a_trace": list(trace)}
+    finally:
+        _LAST_HITS.reset(hits_token)
+        _TRACE.reset(trace_token)
+        _SESSION_ID.reset(session_token)
 
 
 if __name__ == "__main__":
