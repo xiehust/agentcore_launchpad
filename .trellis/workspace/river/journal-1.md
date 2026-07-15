@@ -1106,3 +1106,37 @@ Added an optional AWS-independent local operator login with signed HttpOnly sess
 ### Next Steps
 
 - None - task complete
+
+
+## Session 17: Add persistent memory to runtime and A2A agents
+
+**Date**: 2026-07-15
+**Task**: Add persistent memory to runtime and A2A agents
+**Package**: lab4-interactive
+**Branch**: `main`
+
+### Summary
+
+Wired AgentCoreMemorySessionManager into generated HTTP/A2A templates and front-desk, propagated A2A contextId, added regression coverage, passed make verify, and redeployed front-desk v3 with live same-session recall and cross-session isolation.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `603f57c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
