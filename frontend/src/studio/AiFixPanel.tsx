@@ -1,5 +1,5 @@
 // Presentational AI Fix UI (progress log, applied notice, diagnosis card),
-// shared by ExecutionDrawer and ChatDrawer. Launchpad-styled; behavior ported
+// used by ChatDrawer. Launchpad-styled; behavior ported
 // from strands_studio_ui `src/components/ai-fix-progress.tsx` (origin/main).
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";

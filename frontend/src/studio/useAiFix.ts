@@ -1,6 +1,6 @@
 // Shared AI Fix state machine (backend coding agent, POST /api/fix-code/stream).
 // Ported from strands_studio_ui `src/hooks/use-ai-fix.ts` (origin/main), wired
-// to the launchpad debug-client. Consumed by ExecutionDrawer and ChatDrawer.
+// to the launchpad debug-client. Consumed by ChatDrawer.
 import { useCallback, useRef, useState } from "react";
 
 import { fixCodeStream, type FixCodeRequest, type FixDiagnosis } from "./lib/debug-client";

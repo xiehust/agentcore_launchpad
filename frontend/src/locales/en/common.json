@@ -1347,9 +1347,8 @@
       "samples": "Samples",
       "publish": "Publish",
       "rePublish": "Re-publish",
-      "runLocally": "Run locally",
       "localChat": "Local chat",
-      "debugDisabled": "Fix the code generation errors to run locally.",
+      "debugDisabled": "Fix the code generation errors to start local chat.",
       "regen": "Regenerate from flow",
       "regenHint": "Discard the AI-fixed code and regenerate from the canvas."
     },
@@ -1617,19 +1616,7 @@
     },
     "debug": {
       "tabCode": "Code",
-      "tabRun": "Run",
       "tabChat": "Chat"
-    },
-    "exec": {
-      "inputLabel": "Input",
-      "inputPlaceholder": "Optional input passed to the agent…",
-      "run": "Run",
-      "stop": "Stop",
-      "outputEmpty": "Run to stream output here.",
-      "ok": "Completed in {{ms}} ms",
-      "failed": "Failed in {{ms}} ms",
-      "stopped": "Stopped",
-      "fixUnavailable": "AI Fix unavailable"
     },
     "chat": {
       "title": "Local chat",
@@ -1649,6 +1636,9 @@
     },
     "fix": {
       "button": "AI Fix",
+      "unavailable": "AI Fix unavailable",
+      "checking": "Checking AI Fix availability…",
+      "needsChatFailure": "AI Fix activates after a local chat response fails.",
       "fixing": "AI fixing…",
       "failed": "AI fix failed",
       "dismiss": "Dismiss",

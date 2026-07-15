@@ -298,15 +298,17 @@ Styling is launchpad CSS tokens only (namespaced `studio.css`); no Tailwind.
 
 ## Local debug & AI Fix / 本地调试与 AI 修复
 
-The canvas debugs UN-deployed flows locally (ported from upstream PR #31's
-execution/conversation/fix subsystems; task `07-11-studio-local-debug-and-defaults`):
+The canvas debugs UN-deployed flows through one local-chat surface (ported
+from upstream PR #31's conversation/fix subsystems; task
+`07-11-studio-local-debug-and-defaults`):
 
 - **Exec env**: `scripts/setup_exec_env.sh` provisions `data/exec-venv`
   (strands-agents[openai] ≥1.46 + strands-agents-tools[mem0_memory] + mcp +
   bedrock-agentcore). Settings: `studio_exec_python` (both run and chat spawn
   THIS interpreter — upstream's `sys.executable` vs `uv run` split is
   deliberately unified), `execute_timeout_s` (300).
-- **`POST /api/execute[/stream]`**: subprocess in a temp workdir
+- **`POST /api/execute[/stream]`**: backend compatibility endpoint only (not
+  exposed in the native canvas UI); subprocess in a temp workdir
   (process-group kill, `--user-input` flag, referenced registry skills bundled
   into `workdir/skills/` via the same `bundle_skills_into` the deploy zip
   uses). Stream framing: each `\n` becomes an empty `data: ` line; sentinel
@@ -331,9 +333,10 @@ execution/conversation/fix subsystems; task `07-11-studio-local-debug-and-defaul
   ships the ACTIVE code (fixed code publishable, drawer notes the divergence);
   "Regenerate from flow" discards fixes.
 
-画布可在本地调试未部署的流程:`data/exec-venv` 专用解释器运行生成代码
-(`/api/execute[/stream]`,技能目录与部署 zip 同源打包);`/api/conversations*`
-为本地调试对话(内存会话、全量 `--messages` 重放、失败轮成对剔除,与已部署
-agent 的 `/api/chat/*` 完全分离);AI 修复(`/api/fix-code/stream`)由 Bedrock 上
-的 Claude 编码代理诊断并修复失败运行,环境类问题不改代码、校验不过则回滚原码;
-修复后的代码可继续运行/对话/直接发布,"从画布重新生成"随时丢弃修复。
+画布只通过本地对话调试未部署的流程:`data/exec-venv` 专用解释器运行生成代码,
+技能目录与部署 zip 同源打包;`/api/conversations*` 提供内存会话、全量
+`--messages` 重放和失败轮成对剔除,与已部署 agent 的 `/api/chat/*` 完全分离。
+`/api/execute[/stream]` 仅作为后端兼容接口保留,原生画布不再提供独立运行面板。
+AI 修复(`/api/fix-code/stream`)从本地对话失败进入,由 Bedrock 上的 Claude 编码
+代理诊断并修复;环境类问题不改代码、校验不过则回滚原码。修复后的代码可继续
+对话或直接发布,"从画布重新生成"随时丢弃修复。

@@ -9,6 +9,8 @@
 - kb_gateway.sync_agentic_target create/delete + ensure_retrieve_target race
 """
 
+from types import SimpleNamespace
+
 import pytest
 from pydantic import ValidationError
 
@@ -153,6 +155,20 @@ def test_kb_policy_document_no_prefix_has_no_list_condition():
     get_stmt, list_stmt = doc["Statement"]
     assert get_stmt["Resource"] == "arn:aws:s3:::corp-docs/*"
     assert "Condition" not in list_stmt
+
+
+def test_kb_role_name_uses_bootstrapped_role_arn(monkeypatch):
+    settings = SimpleNamespace(
+        resources={"kb_role_arn": "arn:aws:iam::111:role/launchpad-kb-role-us-east-1"}
+    )
+    monkeypatch.setattr(knowledge, "get_settings", lambda: settings)
+    assert knowledge._kb_role_name() == "launchpad-kb-role-us-east-1"
+
+
+def test_kb_role_name_falls_back_before_bootstrap(monkeypatch):
+    settings = SimpleNamespace(resources={})
+    monkeypatch.setattr(knowledge, "get_settings", lambda: settings)
+    assert knowledge._kb_role_name() == "launchpad-kb-role"
 
 
 # ── harness build_create_params: KB prompt + gateway attach ──────────────────

@@ -1347,9 +1347,8 @@
       "samples": "示例",
       "publish": "发布",
       "rePublish": "重新发布",
-      "runLocally": "本地运行",
       "localChat": "本地对话",
-      "debugDisabled": "请先修复代码生成错误再本地运行。",
+      "debugDisabled": "请先修复代码生成错误再开始本地对话。",
       "regen": "从画布重新生成",
       "regenHint": "丢弃 AI 修复的代码,从画布重新生成。"
     },
@@ -1617,19 +1616,7 @@
     },
     "debug": {
       "tabCode": "代码",
-      "tabRun": "运行",
       "tabChat": "对话"
-    },
-    "exec": {
-      "inputLabel": "输入",
-      "inputPlaceholder": "传给 agent 的可选输入…",
-      "run": "运行",
-      "stop": "停止",
-      "outputEmpty": "运行后此处显示流式输出。",
-      "ok": "耗时 {{ms}} 毫秒完成",
-      "failed": "耗时 {{ms}} 毫秒失败",
-      "stopped": "已停止",
-      "fixUnavailable": "AI 修复不可用"
     },
     "chat": {
       "title": "本地对话",
@@ -1649,6 +1636,9 @@
     },
     "fix": {
       "button": "AI 修复",
+      "unavailable": "AI 修复不可用",
+      "checking": "正在检查 AI 修复可用性…",
+      "needsChatFailure": "本地对话响应失败后可使用 AI 修复。",
       "fixing": "AI 修复中…",
       "failed": "AI 修复失败",
       "dismiss": "关闭",

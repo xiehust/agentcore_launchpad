@@ -12,6 +12,7 @@ import { AiFixPanel } from "./AiFixPanel";
 import { useAiFix } from "./useAiFix";
 import {
   createConversationSession,
+  getCodegenStatus,
   sendChatMessageStream,
   updateConversationCode,
   type ChatMessage,
@@ -48,6 +49,9 @@ export function ChatDrawer({
   const [initError, setInitError] = useState<string | null>(null);
   const [lastChatError, setLastChatError] = useState<{ text: string } | null>(null);
   const [fixNotice, setFixNotice] = useState<string | null>(null);
+  const [codegen, setCodegen] = useState<{ available: boolean; reason?: string | null } | null>(
+    null,
+  );
 
   const abortRef = useRef<AbortController | null>(null);
   const sessionCodeRef = useRef(code);
@@ -83,6 +87,22 @@ export function ChatDrawer({
       return applied;
     },
   });
+
+  useEffect(() => {
+    let cancelled = false;
+    getCodegenStatus()
+      .then((status) => {
+        if (!cancelled) {
+          setCodegen({ available: status.available, reason: status.reason });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setCodegen({ available: false });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Create a session the first time the tab is shown (kept until New session or
   // page unload — the backend session is in-memory).
@@ -217,7 +237,7 @@ export function ChatDrawer({
   };
 
   const handleAiFix = () => {
-    if (!lastChatError || aiFix.isFixing) return;
+    if (!codegen?.available || !lastChatError || aiFix.isFixing) return;
     setFixNotice(null);
     aiFix.startFix({
       code,
@@ -228,6 +248,20 @@ export function ChatDrawer({
   };
 
   const stale = !!session && sessionCodeRef.current !== code;
+  const fixEnabled = codegen?.available && !!lastChatError && !aiFix.isFixing;
+  const fixTitle =
+    codegen === null
+      ? t("studio.fix.checking")
+      : !codegen.available
+        ? (codegen.reason ?? t("studio.fix.unavailable"))
+        : !lastChatError
+          ? t("studio.fix.needsChatFailure")
+          : undefined;
+  const showFixPanel =
+    aiFix.isFixing ||
+    aiFix.fixError !== null ||
+    aiFix.fixDiagnosis !== null ||
+    aiFix.fixApplied;
 
   return (
     <div className="studio-chat">
@@ -245,9 +279,21 @@ export function ChatDrawer({
             {t("studio.chat.streaming")}
           </Chip>
         )}
-        <Btn className="studio-chat-new" onClick={newSession} disabled={creating}>
-          <RefreshCw size={12} /> {t("studio.chat.newSession")}
-        </Btn>
+        <div className="studio-chat-actions">
+          <Btn onClick={handleAiFix} disabled={!fixEnabled} title={fixTitle}>
+            {aiFix.isFixing ? (
+              <Loader size={12} className="studio-spin" />
+            ) : (
+              <Sparkles size={12} />
+            )}{" "}
+            {codegen && !codegen.available
+              ? t("studio.fix.unavailable")
+              : t("studio.fix.button")}
+          </Btn>
+          <Btn onClick={newSession} disabled={creating}>
+            <RefreshCw size={12} /> {t("studio.chat.newSession")}
+          </Btn>
+        </div>
       </div>
 
       {stale && (
@@ -309,12 +355,8 @@ export function ChatDrawer({
         <div ref={endRef} />
       </div>
 
-      {lastChatError && (
+      {showFixPanel && (
         <div className="studio-chat-fixrow">
-          <Btn onClick={handleAiFix} disabled={aiFix.isFixing}>
-            {aiFix.isFixing ? <Loader size={12} className="studio-spin" /> : <Sparkles size={12} />}{" "}
-            {t("studio.fix.button")}
-          </Btn>
           <AiFixPanel
             isFixing={aiFix.isFixing}
             fixEvents={aiFix.fixEvents}

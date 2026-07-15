@@ -8,7 +8,6 @@ import type { AgentInfo, AgentSpecInput, DeploymentInfo, JobInfo } from "../lib/
 import { api, ApiError } from "../lib/api";
 import { ChatDrawer } from "../studio/ChatDrawer";
 import { CodePanel } from "../studio/CodePanel";
-import { ExecutionDrawer } from "../studio/ExecutionDrawer";
 import { FlowEditor } from "../studio/FlowEditor";
 import { NodePalette } from "../studio/NodePalette";
 import { PropertyPanel } from "../studio/PropertyPanel";
@@ -39,7 +38,7 @@ interface CodeState {
   flowStale: boolean;
 }
 
-type Drawer = "code" | "run" | "chat" | null;
+type Drawer = "code" | "chat" | null;
 
 // Mirror of the generator's findConnectedAgent: the execution agent is the
 // agent/orchestrator/swarm reached from an input node, else the first one.
@@ -392,8 +391,8 @@ export function CreateAgentStudio() {
   const nameValid = editing || NAME_RE.test(publishName);
   const canPublish = nodes.length > 0;
   const showReadonly = noFlowNotice && nodes.length === 0 && readonlyCode !== null;
-  // Local debug needs a flow that generates valid code (or an already-applied fix).
-  const canRunLocally = !showReadonly && nodes.length > 0 && !publishBlockedByErrors;
+  // Local chat needs a flow that generates valid code (or an already-applied fix).
+  const canChatLocally = !showReadonly && nodes.length > 0 && !publishBlockedByErrors;
 
   // ── launch view (replaces the canvas once a publish is in flight) ──
   if (launch) {
@@ -471,22 +470,13 @@ export function CreateAgentStudio() {
             {drawer === "code" ? t("studio.toolbar.hideCode") : t("studio.toolbar.generateCode")}
           </Btn>
           {!showReadonly && (
-            <>
-              <Btn
-                onClick={() => setDrawer("run")}
-                disabled={!canRunLocally}
-                title={canRunLocally ? undefined : t("studio.toolbar.debugDisabled")}
-              >
-                ▷ {t("studio.toolbar.runLocally")}
-              </Btn>
-              <Btn
-                onClick={() => setDrawer("chat")}
-                disabled={!canRunLocally}
-                title={canRunLocally ? undefined : t("studio.toolbar.debugDisabled")}
-              >
-                ◈ {t("studio.toolbar.localChat")}
-              </Btn>
-            </>
+            <Btn
+              onClick={() => setDrawer("chat")}
+              disabled={!canChatLocally}
+              title={canChatLocally ? undefined : t("studio.toolbar.debugDisabled")}
+            >
+              ◈ {t("studio.toolbar.localChat")}
+            </Btn>
           )}
           {codeState.source === "ai" && (
             <Btn onClick={regenerateFromFlow} title={t("studio.toolbar.regenHint")}>
@@ -559,12 +549,6 @@ export function CreateAgentStudio() {
                     {t("studio.debug.tabCode")}
                   </button>
                   <button
-                    className={`studio-debug-tab${drawer === "run" ? " on" : ""}`}
-                    onClick={() => setDrawer("run")}
-                  >
-                    {t("studio.debug.tabRun")}
-                  </button>
-                  <button
                     className={`studio-debug-tab${drawer === "chat" ? " on" : ""}`}
                     onClick={() => setDrawer("chat")}
                   >
@@ -584,15 +568,6 @@ export function CreateAgentStudio() {
                     errors={genResult.errors}
                     source={codeState.source}
                     flowStale={codeState.flowStale}
-                  />
-                </div>
-                <div className="studio-debug-pane" hidden={drawer !== "run"}>
-                  <ExecutionDrawer
-                    code={codeState.code}
-                    flowData={flowData}
-                    graphMode={graphMode}
-                    apiKeys={debugApiKeys}
-                    onApplyFixedCode={applyFixedCode}
                   />
                 </div>
                 <div className="studio-debug-pane" hidden={drawer !== "chat"}>

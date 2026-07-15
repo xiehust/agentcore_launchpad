@@ -43,6 +43,13 @@ DEMO_USERS = [
     {"username": "demo", "email": "demo@launchpad.local", "group": "hr-analyst"},
 ]
 
+LEGACY_REGION = "us-west-2"
+
+
+def regional_role_name(base_name: str, region: str) -> str:
+    """Keep the existing west stack stable while isolating new regional stacks."""
+    return base_name if region == LEGACY_REGION else f"{base_name}-{region}"
+
 
 class LaunchpadBaseStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
@@ -173,7 +180,7 @@ class LaunchpadBaseStack(Stack):
         exec_role = iam.Role(
             self,
             "AgentExecutionRole",
-            role_name="launchpad-agent-execution-role",
+            role_name=regional_role_name("launchpad-agent-execution-role", self.region),
             assumed_by=iam.ServicePrincipal(
                 "bedrock-agentcore.amazonaws.com",
                 conditions={
@@ -361,7 +368,7 @@ class LaunchpadBaseStack(Stack):
         gateway_role = iam.Role(
             self,
             "GatewayRole",
-            role_name="launchpad-gateway-role",
+            role_name=regional_role_name("launchpad-gateway-role", self.region),
             assumed_by=iam.ServicePrincipal(
                 "bedrock-agentcore.amazonaws.com",
                 conditions={"StringEquals": {"aws:SourceAccount": self.account}},
@@ -453,7 +460,7 @@ class LaunchpadBaseStack(Stack):
         kb_role = iam.Role(
             self,
             "KnowledgeBaseRole",
-            role_name="launchpad-kb-role",
+            role_name=regional_role_name("launchpad-kb-role", self.region),
             assumed_by=iam.ServicePrincipal(
                 "bedrock.amazonaws.com",
                 conditions={"StringEquals": {"aws:SourceAccount": self.account}},

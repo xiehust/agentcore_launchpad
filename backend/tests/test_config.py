@@ -2,7 +2,15 @@ import app.core.config as config_mod
 from app.core.config import Settings, load_yaml_config
 
 
-def test_defaults():
+def test_defaults(tmp_path, monkeypatch):
+    monkeypatch.setattr(config_mod, "CONFIG_FILE", tmp_path / "missing.yaml")
+    for name in (
+        "LAUNCHPAD_REGION",
+        "LAUNCHPAD_AUTH_USERNAME",
+        "LAUNCHPAD_AUTH_PASSWORD",
+        "LAUNCHPAD_AUTH_COOKIE_SECURE",
+    ):
+        monkeypatch.delenv(name, raising=False)
     s = Settings()
     assert s.region == "us-west-2"
     assert s.database_url.startswith("sqlite:///")

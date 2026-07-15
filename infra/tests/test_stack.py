@@ -14,6 +14,15 @@ def template() -> Template:
     return Template.from_stack(stack)
 
 
+@pytest.fixture(scope="module")
+def east_template() -> Template:
+    app = cdk.App()
+    stack = LaunchpadBaseStack(
+        app, "launchpad-base", env=cdk.Environment(account="111111111111", region="us-east-1")
+    )
+    return Template.from_stack(stack)
+
+
 def test_core_resources_present(template: Template):
     template.resource_count_is("AWS::S3::Bucket", 1)
     template.resource_count_is("AWS::ECR::Repository", 1)
@@ -61,6 +70,15 @@ def test_execution_role_trusts_agentcore(template: Template):
             }
         ),
     )
+
+
+def test_non_legacy_region_uses_isolated_role_names(east_template: Template):
+    for role_name in (
+        "launchpad-agent-execution-role-us-east-1",
+        "launchpad-gateway-role-us-east-1",
+        "launchpad-kb-role-us-east-1",
+    ):
+        east_template.has_resource_properties("AWS::IAM::Role", {"RoleName": role_name})
 
 
 def test_execution_role_reads_skill_bundles(template: Template):

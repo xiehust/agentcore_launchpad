@@ -1,9 +1,9 @@
 // Launchpad-authored (NOT a byte-faithful upstream port — unlike the other
 // files in this directory). Typed client for the studio local-debug backend
-// (execute / conversations / fix-code / codegen-status). The SSE decoders are
-// ported from strands_studio_ui `src/lib/api-client.ts` (origin/main): the
-// execute/chat streams use `data:`-framing where an empty `data: ` line means a
-// newline; the fix stream is a JSON `event:`/`data:` stream. All paths are
+// (conversations / fix-code / codegen-status). The SSE decoders are ported
+// from strands_studio_ui `src/lib/api-client.ts` (origin/main): chat streams
+// use `data:`-framing where an empty `data: ` line means a newline; the fix
+// stream is a JSON `event:`/`data:` stream. All paths are
 // relative so Vite's dev proxy (and the same-origin prod build) reach :8000.
 import { ApiError } from "../../lib/api";
 
@@ -17,27 +17,6 @@ export interface FlowData {
 export interface DebugApiKeys {
   openai_api_key?: string;
   bedrock_api_key?: string;
-}
-
-/* ── execution ─────────────────────────────────────────────────────────── */
-
-export interface ExecuteRequest extends DebugApiKeys {
-  code: string;
-  input_data?: string;
-}
-
-export interface ExecuteResult {
-  success: boolean;
-  output?: string;
-  error?: string;
-  execution_time_ms: number;
-}
-
-export interface ExecuteStreamCallbacks {
-  onChunk: (chunk: string) => void;
-  onComplete: (finalOutput: string, executionTime?: number) => void;
-  onError: (error: string, partialOutput: string, executionTime?: number) => void;
-  signal?: AbortSignal;
 }
 
 /* ── conversations ─────────────────────────────────────────────────────── */
@@ -146,97 +125,6 @@ async function jsonRequest<T>(path: string, init?: RequestInit): Promise<T> {
 
 function isAbort(error: unknown, signal?: AbortSignal): boolean {
   return !!signal?.aborted || (error instanceof DOMException && error.name === "AbortError");
-}
-
-/* ── execute: one-shot + streaming ─────────────────────────────────────── */
-
-export function executeCode(request: ExecuteRequest): Promise<ExecuteResult> {
-  return jsonRequest<ExecuteResult>("/api/execute", {
-    method: "POST",
-    body: JSON.stringify(request),
-  });
-}
-
-// Streamed execution. Framing (upstream-faithful): SSE events split on \n\n;
-// within an event each `data: <text>` line is concatenated and an empty
-// `data:`/`data: ` line becomes a newline, so multiline stdout survives the
-// `data:` splitting. Sentinels: `[STREAM_COMPLETE]` / `[STREAM_COMPLETE:<sec>]`;
-// an `Error: ` line is held until the completion sentinel so timing is kept.
-export async function executeCodeStream(
-  request: ExecuteRequest,
-  { onChunk, onComplete, onError, signal }: ExecuteStreamCallbacks,
-): Promise<void> {
-  let accumulated = "";
-  try {
-    const response = await fetch("/api/execute/stream", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(request),
-      signal,
-    });
-    if (!response.ok) {
-      throw new Error(`Streaming request failed: ${response.status} ${response.statusText}`);
-    }
-    const reader = response.body?.getReader();
-    if (!reader) throw new Error("Response body is not readable");
-
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let errorMessage: string | null = null;
-
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-
-      const events = buffer.split("\n\n");
-      buffer = events.pop() ?? "";
-
-      for (const event of events) {
-        if (!event.trim()) continue;
-        let eventData = "";
-        const lines = event.split("\n");
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            const chunk = line.substring(6);
-            eventData += chunk === "" ? "\n" : chunk;
-          } else if (line === "data:") {
-            eventData += "\n";
-          }
-        }
-        if (eventData === "" && !lines.some((l) => l === "data:" || l.startsWith("data: "))) {
-          continue;
-        }
-        if (eventData === "[STREAM_COMPLETE]") {
-          if (errorMessage) onError(errorMessage, accumulated);
-          else onComplete(accumulated);
-          return;
-        }
-        if (eventData.startsWith("[STREAM_COMPLETE:")) {
-          const match = eventData.match(/^\[STREAM_COMPLETE:([\d.]+)\]$/);
-          const executionTime = match ? parseFloat(match[1]) : undefined;
-          if (errorMessage) onError(errorMessage, accumulated, executionTime);
-          else onComplete(accumulated, executionTime);
-          return;
-        }
-        if (eventData.startsWith("Error: ")) {
-          errorMessage = eventData.substring(7);
-        } else {
-          accumulated += eventData;
-          onChunk(eventData);
-        }
-      }
-    }
-    // Stream closed without a sentinel.
-    if (errorMessage) onError(errorMessage, accumulated);
-    else onComplete(accumulated);
-  } catch (error) {
-    if (isAbort(error, signal)) {
-      onComplete(accumulated); // Stop button: keep whatever streamed so far.
-      return;
-    }
-    onError(error instanceof Error ? error.message : "Unknown streaming error", accumulated);
-  }
 }
 
 /* ── conversations CRUD ────────────────────────────────────────────────── */

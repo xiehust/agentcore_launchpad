@@ -204,6 +204,11 @@ def _kb_policy_name(kb_id: str) -> str:
     return f"launchpad-kb-{kb_id}"
 
 
+def _kb_role_name() -> str:
+    role_arn = str(get_settings().resources.get("kb_role_arn") or "")
+    return role_arn.rsplit("/", 1)[-1] or KB_ROLE_NAME
+
+
 def _kb_policy_document(bucket: str, prefix: str) -> dict[str, Any]:
     list_stmt: dict[str, Any] = {
         "Effect": "Allow",
@@ -228,7 +233,7 @@ def _kb_policy_document(bucket: str, prefix: str) -> dict[str, Any]:
 def _sync_kb_policy(kb_id: str, bucket: str, prefix: str) -> None:
     iam = boto3.client("iam", region_name=get_settings().region)
     iam.put_role_policy(
-        RoleName=KB_ROLE_NAME,
+        RoleName=_kb_role_name(),
         PolicyName=_kb_policy_name(kb_id),
         PolicyDocument=json.dumps(_kb_policy_document(bucket, prefix)),
     )
@@ -237,7 +242,7 @@ def _sync_kb_policy(kb_id: str, bucket: str, prefix: str) -> None:
 def _delete_kb_policy(kb_id: str) -> None:
     iam = boto3.client("iam", region_name=get_settings().region)
     try:
-        iam.delete_role_policy(RoleName=KB_ROLE_NAME, PolicyName=_kb_policy_name(kb_id))
+        iam.delete_role_policy(RoleName=_kb_role_name(), PolicyName=_kb_policy_name(kb_id))
     except Exception:  # NoSuchEntity / role absent — nothing to clean
         pass
 
