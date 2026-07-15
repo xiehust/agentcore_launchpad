@@ -303,7 +303,14 @@ invoke_runtime_text(client, arn, prompt, ..., qualifier: str|None = None)
   agent (`409 canary.already_running`). `act_cleanup` deletes the dedicated
   gateway + BOTH named endpoints + targets + online-eval + A/B test
   (`delete_gateway=False` passed to `ac.cleanup_resources`; the gateway is
-  deleted explicitly). It tolerates a partial setup.
+  deleted explicitly via `canary_infra.delete_canary_gateway`). It tolerates a
+  partial setup. **Teardown gotcha (verified live):** AgentCore rejects
+  `delete_gateway` / `delete_online_evaluation_config` while the async-deleting
+  A/B test is still propagating — for MINUTES *after* `list_ab_tests` /
+  `list_gateway_targets` already report it gone, so draining the lists is not a
+  reliable signal. Both `cleanup_resources` and `delete_canary_gateway` therefore
+  **retry the delete until it is accepted** (≤300s) and treat NotFound as success;
+  a single-shot delete leaks the dedicated gateway.
 - **Verified AWS shapes.** Named-endpoint content-log group =
   `/aws/bedrock-agentcore/runtimes/{resource_id}-{endpoint}` (created at
   endpoint-create). `create_agent_runtime_endpoint` pins via `agentRuntimeVersion`;
