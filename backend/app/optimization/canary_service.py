@@ -837,9 +837,9 @@ def act_cleanup(
                 "detail": f"{type(exc).__name__}: {exc}",
             })
     if gateway_id:
-        progress("deleting the dedicated canary gateway…")
+        progress("deleting the dedicated canary gateway (draining A/B test)…")
         try:
-            canary_infra.delete_canary_gateway(control, gateway_id)
+            canary_infra.delete_canary_gateway(control, gateway_id, log=progress)
             results.append({"category": f"gateway:{gateway_id}", "status": "deleted", "detail": ""})
         except Exception as exc:
             results.append({

@@ -197,6 +197,42 @@ def test_delete_canary_gateway():
     control.delete_gateway.assert_called_once_with(gatewayIdentifier="gw-1")
 
 
+def test_delete_canary_gateway_retries_until_ab_test_drains(monkeypatch):
+    """DeleteGateway is rejected for minutes while the async-deleting A/B test
+    drains (real-AWS e2e finding) — retry until it takes, don't leak."""
+    monkeypatch.setattr(infra, "_sleep", lambda *_a, **_k: None)
+    control = MagicMock()
+    control.delete_gateway.side_effect = [
+        RuntimeError("gateway has an associated A/B test"),
+        RuntimeError("gateway has an associated A/B test"),
+        None,
+    ]
+    infra.delete_canary_gateway(control, "gw-1", interval_s=0)
+    assert control.delete_gateway.call_count == 3
+
+
+def test_delete_canary_gateway_treats_not_found_as_deleted(monkeypatch):
+    monkeypatch.setattr(infra, "_sleep", lambda *_a, **_k: None)
+    control = MagicMock()
+
+    class ResourceNotFoundException(Exception):
+        pass
+
+    control.delete_gateway.side_effect = ResourceNotFoundException("gone")
+    infra.delete_canary_gateway(control, "gw-1")
+    assert control.delete_gateway.call_count == 1  # already gone == success
+
+
+def test_delete_canary_gateway_raises_after_budget(monkeypatch):
+    """If the delete never takes within the budget, raise so the caller records
+    the skip rather than hanging forever."""
+    monkeypatch.setattr(infra, "_sleep", lambda *_a, **_k: None)
+    control = MagicMock()
+    control.delete_gateway.side_effect = RuntimeError("still busy")
+    with pytest.raises(RuntimeError):
+        infra.delete_canary_gateway(control, "gw-1", timeout_s=0.0, interval_s=0)
+
+
 # ─── stable / treatment endpoints ────────────────────────────────────────────
 def test_ensure_canary_endpoints_pins_and_waits_both():
     control = MagicMock()

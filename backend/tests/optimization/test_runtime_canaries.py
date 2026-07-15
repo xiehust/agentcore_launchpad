@@ -991,7 +991,7 @@ def test_cleanup_deletes_dedicated_gateway_and_both_endpoints(monkeypatch):
     monkeypatch.setattr(
         canary_svc.canary_infra,
         "delete_canary_gateway",
-        lambda control, gateway_id: deleted_gateways.append(gateway_id),
+        lambda control, gateway_id, **kw: deleted_gateways.append(gateway_id),
     )
     deleted_endpoints: list[str] = []
     monkeypatch.setattr(

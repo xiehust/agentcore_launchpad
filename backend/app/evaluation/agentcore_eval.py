@@ -593,6 +593,13 @@ def normalize_ab_results(result: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 # ─── Cleanup fan-out ─────────────────────────────────────────────────────────
+_sleep = time.sleep  # injectable for tests
+# Deleting a resource can fail transiently while a dependency (the async A/B-test
+# delete, an online-eval still referenced by it, etc.) is still propagating —
+# retry those categories with backoff instead of leaking them.
+_NOT_FOUND = {"ResourceNotFoundException", "NotFoundException"}
+
+
 def cleanup_resources(
     control_client: Any,
     data_client: Any,
@@ -609,24 +616,35 @@ def cleanup_resources(
     delivery_id: str | None = None,
     logs_client: Any = None,
     iam_client: Any = None,
-    gateway_wait_interval: float = 3.0,
-    gateway_wait_timeout: float = 120.0,
+    gateway_wait_interval: float = 6.0,
+    gateway_wait_timeout: float = 300.0,
 ) -> list[dict[str, str]]:
     """Delete each resource category independently; never abort on one failure."""
     out: list[dict[str, str]] = []
 
-    def _do(category: str, fn: Any) -> None:
-        try:
-            fn()
-            out.append({"category": category, "status": "deleted", "detail": ""})
-        except Exception as exc:  # noqa: BLE001 — per-category tolerance
-            out.append(
-                {
-                    "category": category,
-                    "status": "skipped",
-                    "detail": f"{type(exc).__name__}: {exc}",
-                }
-            )
+    def _do(category: str, fn: Any, *, attempts: int = 1, delay: float = 6.0) -> None:
+        last: Exception | None = None
+        for i in range(attempts):
+            try:
+                fn()
+                out.append({"category": category, "status": "deleted", "detail": ""})
+                return
+            except Exception as exc:  # noqa: BLE001 — per-category tolerance
+                if type(exc).__name__ in _NOT_FOUND:  # already gone == success
+                    out.append(
+                        {"category": category, "status": "deleted", "detail": "already gone"}
+                    )
+                    return
+                last = exc
+                if i < attempts - 1:
+                    _sleep(delay)
+        out.append(
+            {
+                "category": category,
+                "status": "skipped",
+                "detail": f"{type(last).__name__}: {last}",
+            }
+        )
 
     for ab in ab_test_ids or []:
         def _del_ab(ab: str = ab) -> None:
@@ -636,7 +654,8 @@ def cleanup_resources(
                 pass
             data_client.delete_ab_test(abTestId=ab)
 
-        _do(f"abtest:{ab}", _del_ab)
+        # delete_ab_test requires STOPPED (async) — retry while the stop lands.
+        _do(f"abtest:{ab}", _del_ab, attempts=10, delay=6)
 
     for oe in online_eval_ids or []:
         def _del_oe(oe: str = oe) -> None:
@@ -648,7 +667,9 @@ def cleanup_resources(
                 pass
             control_client.delete_online_evaluation_config(onlineEvaluationConfigId=oe)
 
-        _do(f"online-eval:{oe}", _del_oe)
+        # online-eval delete is rejected while the (async-deleting) A/B test
+        # still references it — retry with backoff.
+        _do(f"online-eval:{oe}", _del_oe, attempts=10, delay=6)
 
     for ev in evaluator_ids or []:
         _do(f"evaluator:{ev}", lambda ev=ev: control_client.delete_evaluator(evaluatorId=ev))
@@ -669,22 +690,25 @@ def cleanup_resources(
 
     if gateway_id and delete_gateway:
         def _del_gateway() -> None:
-            # Target deletion is async; DeleteGateway rejects while any target
-            # is still attached. Wait for the target list to drain first.
+            # DeleteGateway is rejected until the gateway's async-deleting A/B
+            # test + targets have fully propagated away — verified live to take
+            # a few MINUTES *after* list_ab_tests / list_gateway_targets already
+            # report them gone, so draining the lists is not a reliable signal.
+            # The only reliable signal is a successful delete: retry until it
+            # takes or the budget is exhausted (→ _do marks it skipped).
             deadline = time.monotonic() + gateway_wait_timeout
-            while time.monotonic() < deadline:
+            while True:
                 try:
-                    left = control_client.list_gateway_targets(
-                        gatewayIdentifier=gateway_id
-                    ).get("items", [])
-                except Exception:  # noqa: BLE001 — gateway may already be gone
-                    break
-                if not left:
-                    break
-                time.sleep(gateway_wait_interval)
-            control_client.delete_gateway(gatewayIdentifier=gateway_id)
+                    control_client.delete_gateway(gatewayIdentifier=gateway_id)
+                    return
+                except Exception as exc:  # noqa: BLE001
+                    if type(exc).__name__ in _NOT_FOUND:
+                        return  # already gone == success
+                    if time.monotonic() >= deadline:
+                        raise
+                    _sleep(gateway_wait_interval)
 
-        _do("gateway", _del_gateway)
+        _do("gateway", _del_gateway)  # _del_gateway owns the retry loop
 
     for r in runtime_ids or []:
         _do(f"runtime:{r}", lambda r=r: control_client.delete_agent_runtime(agentRuntimeId=r))

@@ -229,9 +229,34 @@ def create_canary_gateway(
     raise TimeoutError(f"canary gateway {gateway_id} not READY")
 
 
-def delete_canary_gateway(control_client: Any, gateway_id: str) -> None:
-    """Delete this canary's dedicated gateway (cleanup owns the whole gateway)."""
-    control_client.delete_gateway(gatewayIdentifier=gateway_id)
+def delete_canary_gateway(
+    control_client: Any,
+    gateway_id: str,
+    *,
+    timeout_s: float = 300.0,
+    interval_s: float = 6.0,
+    log: Log = _noop,
+) -> None:
+    """Delete this canary's dedicated gateway (cleanup owns the whole gateway).
+
+    DeleteGateway is REJECTED until the gateway's async-deleting A/B test +
+    targets fully propagate away — verified live to take a few MINUTES *after*
+    list_ab_tests / list_gateway_targets already report them gone, so draining
+    the lists is not a reliable signal. The only reliable signal is a successful
+    delete: retry until it takes (or the budget is exhausted, then raise so the
+    caller records the skip)."""
+    deadline = time.monotonic() + timeout_s
+    while True:
+        try:
+            control_client.delete_gateway(gatewayIdentifier=gateway_id)
+            return
+        except Exception as exc:  # noqa: BLE001
+            if type(exc).__name__ in _NOT_FOUND:
+                return  # already gone == success
+            if time.monotonic() >= deadline:
+                raise
+            log(f"gateway not deletable yet ({type(exc).__name__}); retrying…")
+            _sleep(interval_s)
 
 
 # ─── stable / treatment named endpoints ──────────────────────────────────────
