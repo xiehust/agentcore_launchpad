@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 15
+- **Total Sessions**: 16
 - **Last Active**: 2026-07-15
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1074 | Active |
+| `journal-1.md` | ~1108 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 16 | 2026-07-15 | Local console password login | `849e1dc` | `main` |
 | 15 | 2026-07-15 | Production-grade target-based A/B canary | `84e885e`, `a2e0db2`, `9cd11ec`, `e98e3d9`, `bc8c695`, `47b8a4c`, `8595c9a`, `e88fa8c`, `4a536bd`, `65f1eea`, `67310c9`, `98a4741` | `main` |
 | 14 | 2026-07-14 | Split configuration A/B from Runtime Canary | `ff7756c` | `main` |
 | 13 | 2026-07-14 | Canary challenger eligibility | `4e59e72` | `main` |

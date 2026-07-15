@@ -1072,3 +1072,37 @@ Turned the Runtime Canary (target-based A/B) into a real production canary: Mode
 ### Next Steps
 
 - None - task complete
+
+
+## Session 16: Local console password login
+
+**Date**: 2026-07-15
+**Task**: Local console password login
+**Package**: lab4-interactive
+**Branch**: `main`
+
+### Summary
+
+Added an optional AWS-independent local operator login with signed HttpOnly sessions, protected console APIs, frontend auth gate, tests, docs, browser QA, and passing make verify.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `849e1dc` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
