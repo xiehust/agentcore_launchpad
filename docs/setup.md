@@ -49,6 +49,28 @@ Demo user passwords are generated and stored in `config/launchpad.yaml`
 
 Use `make dev` for the foreground, terminal-attached development stack.
 
+### Optional console login
+
+The console can use a local single-operator login without Cognito or any other
+AWS dependency. Authentication is disabled until a password is configured:
+
+```bash
+export LAUNCHPAD_AUTH_USERNAME=admin
+export LAUNCHPAD_AUTH_PASSWORD='replace-with-a-strong-password'
+./start.py
+```
+
+Sessions use a 12-hour HttpOnly cookie. For an HTTPS deployment, also set:
+
+```bash
+export LAUNCHPAD_AUTH_COOKIE_SECURE=true
+```
+
+The same values may be placed in `config/launchpad.yaml` as `auth_username`,
+`auth_password`, and `auth_cookie_secure`, following the normal configuration
+precedence. Prefer the process environment for the password. Changing the
+credentials and restarting the backend invalidates existing sessions.
+
 ## Teardown / 资源清理
 
 ```bash

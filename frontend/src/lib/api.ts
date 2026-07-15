@@ -227,28 +227,32 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
-    ...init,
-  });
+export const AUTH_UNAUTHORIZED_EVENT = "launchpad-unauthorized";
+
+async function parseResponse<T>(path: string, res: Response): Promise<T> {
   const body = await res.json().catch(() => null);
   if (!res.ok) {
+    if (res.status === 401 && !path.startsWith("/api/auth/")) {
+      window.dispatchEvent(new Event(AUTH_UNAUTHORIZED_EVENT));
+    }
     const env = (body ?? {}) as { code?: string; message?: string; detail?: unknown };
     throw new ApiError(env.code ?? `http.${res.status}`, env.message ?? res.statusText, env.detail);
   }
   return body as T;
 }
 
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(path, {
+    headers: { "Content-Type": "application/json" },
+    ...init,
+  });
+  return parseResponse<T>(path, res);
+}
+
 /** multipart POST — the browser sets the boundary Content-Type itself. */
 async function requestForm<T>(path: string, form: FormData): Promise<T> {
   const res = await fetch(path, { method: "POST", body: form });
-  const body = await res.json().catch(() => null);
-  if (!res.ok) {
-    const env = (body ?? {}) as { code?: string; message?: string; detail?: unknown };
-    throw new ApiError(env.code ?? `http.${res.status}`, env.message ?? res.statusText, env.detail);
-  }
-  return body as T;
+  return parseResponse<T>(path, res);
 }
 
 /* ── observability ─────────────────────────────────────────────────────── */
@@ -461,7 +465,25 @@ export interface OverviewInfo {
   service_detail: Record<string, string>;
 }
 
+export interface AuthStatus {
+  auth_required: boolean;
+  authenticated: boolean;
+  username: string | null;
+}
+
+export interface AuthLoginResult extends AuthStatus {
+  ok: boolean;
+  expires_at: number | null;
+}
+
 export const api = {
+  authStatus: () => request<AuthStatus>("/api/auth/status"),
+  login: (username: string, password: string) =>
+    request<AuthLoginResult>("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    }),
+  logout: () => request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
   createAgent: (spec: AgentSpecInput) =>
     request<{ agent: AgentInfo; job_id: string; deployment_id: string }>("/api/agents", {
       method: "POST",

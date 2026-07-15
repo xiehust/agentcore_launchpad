@@ -16,5 +16,6 @@
 | [Harness → Runtime Conversion](./harness-conversion.md) | `POST /agents/{id}/convert`: agentcore CLI export + mandatory config-bundle graft + AgentSpec.code_bundle multi-file deploy; fidelity policy (memory wired, KB gateway not), SSE flattening for streaming runtimes | Active |
 | [A2A-Protocol Agents](./a2a-agents.md) | `AgentSpec.protocol=a2a` (zip only): A2AServer template + serverProtocol=A2A deploy (Update omit=RESET!), JSON-RPC invoke branch (Task artifacts, never history), real registry cards (a2a-jsonrpc transport), experiment exclusion | Active |
 | [Evaluation Sub-page Interaction](./evaluation-subpage-interaction.md) | Shared table + URL-param selection for experiments/evaluators/datasets, including Configuration/Canary mode and handoff params (`exp`/`canary`/`champion`/`sourceExp`), editor rehydration, read-only variants, and testids | Active |
+| [Console Authentication](./console-auth.md) | Optional local operator credentials, HMAC session-cookie contract, `/api` middleware boundary, `/v1` independence, and frontend expiry handling | Active |
 
 **Language**: All documentation should be written in **English**.

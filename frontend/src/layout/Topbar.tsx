@@ -1,5 +1,7 @@
+import { LogOut } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { useAuth } from "../auth/auth-context";
 import type { HealthInfo } from "./useHealth";
 import { LangSwitcher } from "./LangSwitcher";
 
@@ -10,6 +12,9 @@ interface TopbarProps {
 
 export function Topbar({ crumbKey, health }: TopbarProps) {
   const { t } = useTranslation();
+  const { authRequired, username, logout } = useAuth();
+  const displayName = authRequired ? (username ?? "—") : "river";
+  const initials = displayName.slice(0, 2).toUpperCase();
   return (
     <div className="topbar">
       <div className="brand">
@@ -29,10 +34,24 @@ export function Topbar({ crumbKey, health }: TopbarProps) {
         </div>
         <LangSwitcher />
         <div className="avatar">
-          <div className="pic">RX</div>
+          <div className="pic">{initials}</div>
           <span>
-            river · <b className="role">PLATFORM-ADMIN</b>
+            {displayName} ·{" "}
+            <b className="role">
+              {authRequired ? t("auth.operator") : "PLATFORM-ADMIN"}
+            </b>
           </span>
+          {authRequired ? (
+            <button
+              type="button"
+              className="logout-btn"
+              onClick={() => void logout()}
+              aria-label={t("auth.logout")}
+              title={t("auth.logout")}
+            >
+              <LogOut size={14} aria-hidden="true" />
+            </button>
+          ) : null}
         </div>
       </div>
     </div>

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from pydantic import Field, SecretStr
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -46,6 +47,12 @@ class Settings(BaseSettings):
     region: str = "us-west-2"
     database_url: str = f"sqlite:///{DATA_DIR / 'launchpad.db'}"
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+    # Optional local operator gate for the console. This remains independent
+    # from Cognito demo users and the public /v1 API-key surface.
+    auth_username: str = Field(default="admin", min_length=1, max_length=64)
+    auth_password: SecretStr | None = None
+    auth_cookie_secure: bool = False
 
     # Populated by bootstrap (phase 2+); empty until then.
     account_id: str = ""

@@ -4,6 +4,21 @@
     "allSystemsGo": "ALL SYSTEMS GO",
     "acct": "ACCT"
   },
+  "auth": {
+    "kicker": "// OPERATOR ACCESS",
+    "title": "Sign in",
+    "subtitle": "Enter the local operator credentials for this console.",
+    "username": "USERNAME",
+    "password": "PASSWORD",
+    "signIn": "SIGN IN",
+    "signingIn": "SIGNING IN",
+    "checking": "Checking session",
+    "missingCredentials": "Enter both username and password.",
+    "invalidCredentials": "Username or password is incorrect.",
+    "loginFailed": "Unable to sign in. Check the connection and try again.",
+    "operator": "OPERATOR",
+    "logout": "Sign out"
+  },
   "nav": {
     "platform": "PLATFORM",
     "operate": "OPERATE",

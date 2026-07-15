@@ -23,6 +23,8 @@ from app.optimization.service import clear_stale_running_actions
 from app.routers.agent_skills import router as agent_skills_router
 from app.routers.agents import router as agents_router
 from app.routers.apikeys import router as apikeys_router
+from app.routers.auth import auth_middleware
+from app.routers.auth import router as auth_router
 from app.routers.chat import router as chat_router
 from app.routers.codegen import router as codegen_router
 from app.routers.conversations import router as conversations_router
@@ -55,6 +57,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
         openapi_url="/api/openapi.json",
     )
 
+    app.middleware("http")(auth_middleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
@@ -64,6 +67,7 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
     )
     register_error_handlers(app)
     init_db()
+    app.include_router(auth_router)
     app.include_router(overview_router)
     app.include_router(agents_router)
     app.include_router(agent_skills_router)  # attach-without-registering skill sources

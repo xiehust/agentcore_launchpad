@@ -4,6 +4,21 @@
     "allSystemsGo": "系统运行正常",
     "acct": "账户"
   },
+  "auth": {
+    "kicker": "// 操作员访问",
+    "title": "登录",
+    "subtitle": "请输入此控制台的本地操作员账号和密码。",
+    "username": "用户名",
+    "password": "密码",
+    "signIn": "登录",
+    "signingIn": "正在登录",
+    "checking": "正在检查会话",
+    "missingCredentials": "请输入用户名和密码。",
+    "invalidCredentials": "用户名或密码错误。",
+    "loginFailed": "无法登录，请检查网络后重试。",
+    "operator": "操作员",
+    "logout": "退出登录"
+  },
   "nav": {
     "platform": "平台",
     "operate": "运维",

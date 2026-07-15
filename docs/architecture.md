@@ -117,6 +117,26 @@ public  /v1  ──┘        │
 The public `/v1` surface adds `X-Api-Key` auth (keys stored sha256-hashed);
 everything downstream of the dispatch is identical to the console path.
 
+## Console authentication
+
+The platform console has an optional local operator gate, independent from both
+the Cognito users used by Gateway/Cedar demos and the `/v1` API-key surface.
+Setting `LAUNCHPAD_AUTH_PASSWORD` enables it; the username defaults to `admin`
+and can be changed with `LAUNCHPAD_AUTH_USERNAME`. No AWS call or ledger row is
+involved.
+
+`POST /api/auth/login` verifies the configured credentials and issues a
+12-hour, HMAC-signed HttpOnly cookie. The cookie is stateless, so it survives a
+backend restart; changing the credentials and restarting invalidates all
+existing sessions. When enabled, middleware protects every `/api/*` route,
+including API docs, except `/api/health`, `/api/auth/status`, and
+`/api/auth/login`. The middleware does not guard `/v1/*`, whose existing
+`X-Api-Key` contract remains authoritative.
+
+The default cookie works with the local HTTP stack. HTTPS deployments must set
+`LAUNCHPAD_AUTH_COOKIE_SECURE=true`. Leaving the password unset disables the
+gate, preserving the bootstrap-free local development and test flow.
+
 ## The Observability module (console 05)
 
 `/observability` is a read-only telemetry console over three data sources

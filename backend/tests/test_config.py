@@ -7,6 +7,9 @@ def test_defaults():
     assert s.region == "us-west-2"
     assert s.database_url.startswith("sqlite:///")
     assert s.app_name == "AgentCore Launchpad"
+    assert s.auth_username == "admin"
+    assert s.auth_password is None
+    assert s.auth_cookie_secure is False
 
 
 def test_yaml_source_feeds_settings(tmp_path, monkeypatch):
@@ -28,3 +31,14 @@ def test_env_overrides_yaml(tmp_path, monkeypatch):
     monkeypatch.setattr(config_mod, "CONFIG_FILE", cfg)
     monkeypatch.setenv("LAUNCHPAD_REGION", "ap-southeast-1")
     assert Settings().region == "ap-southeast-1"
+
+
+def test_auth_settings_from_environment(monkeypatch):
+    monkeypatch.setenv("LAUNCHPAD_AUTH_USERNAME", "operator")
+    monkeypatch.setenv("LAUNCHPAD_AUTH_PASSWORD", "s3cret-pass")
+    monkeypatch.setenv("LAUNCHPAD_AUTH_COOKIE_SECURE", "true")
+    settings = Settings()
+    assert settings.auth_username == "operator"
+    assert settings.auth_password is not None
+    assert settings.auth_password.get_secret_value() == "s3cret-pass"
+    assert settings.auth_cookie_secure is True

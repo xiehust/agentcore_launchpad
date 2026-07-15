@@ -5,6 +5,12 @@
 account_id: "123456789012"
 region: us-west-2
 
+# Optional local console login. Prefer LAUNCHPAD_AUTH_PASSWORD in the process
+# environment so the password does not need to be written to this file.
+auth_username: admin
+# auth_password: "<set a strong password to enable console authentication>"
+# auth_cookie_secure: true  # required when the console is served over HTTPS
+
 resources:
   artifacts_bucket: launchpad-artifacts-123456789012-us-west-2
   ecr_repo: launchpad-agents
