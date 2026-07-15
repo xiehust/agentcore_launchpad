@@ -60,8 +60,9 @@ export function RuntimeCanaryView() {
   const [canaries, setCanaries] = useState<RuntimeCanaryInfo[]>([]);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [datasets, setDatasets] = useState<DatasetInfo[]>([]);
-  const [championId, setChampionId] = useState("");
-  const [challengerId, setChallengerId] = useState("");
+  const [agentId, setAgentId] = useState("");
+  const [candidatePrompt, setCandidatePrompt] = useState("");
+  const [candidateCode, setCandidateCode] = useState("");
   const [sourceExperimentId, setSourceExperimentId] = useState("");
   const [trafficDatasetId, setTrafficDatasetId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -95,9 +96,8 @@ export function RuntimeCanaryView() {
 
   useEffect(() => {
     if (creatingNew) {
-      setChampionId(handoffChampionId);
+      setAgentId(handoffChampionId);
       setSourceExperimentId(handoffSourceExperimentId);
-      setChallengerId("");
     }
     setTrafficDatasetId("");
     setCreateError(null);
@@ -116,7 +116,7 @@ export function RuntimeCanaryView() {
         const active = result.agents.filter((agent) => agent.status === "active");
         setAgents(active);
         const firstEligible = active.find((agent) => agent.canary_capability.eligible);
-        setChampionId((current) => current || firstEligible?.id || "");
+        setAgentId((current) => current || firstEligible?.id || "");
       })
       .catch(() => {});
     fetch("/api/eval/datasets")
@@ -136,13 +136,36 @@ export function RuntimeCanaryView() {
     return () => clearInterval(timer);
   }, [refresh, runningAction]);
 
+  const selectedAgent = agents.find((agent) => agent.id === agentId) ?? null;
+  const isStudio = selectedAgent?.method === "studio";
+
+  // Prefill the candidate edit from the selected agent's current spec. Keyed on
+  // the selected-agent object (an agent switch re-seeds) — typing changes
+  // neither agentId nor the agents array, so drafts survive the canary refresh
+  // interval (which never reloads agents).
+  useEffect(() => {
+    if (!creatingNew) return;
+    const spec = (selectedAgent?.spec ?? {}) as {
+      system_prompt?: string;
+      code?: string;
+    };
+    setCandidatePrompt(typeof spec.system_prompt === "string" ? spec.system_prompt : "");
+    setCandidateCode(typeof spec.code === "string" ? spec.code : "");
+  }, [creatingNew, selectedAgent]);
+
+  const candidateHasEdit =
+    !!candidatePrompt.trim() || (!!isStudio && !!candidateCode.trim());
+
   const onCreate = async () => {
     setCreateError(null);
     setBusy(true);
     try {
+      const candidate: { system_prompt?: string; code?: string } = {};
+      if (candidatePrompt.trim()) candidate.system_prompt = candidatePrompt;
+      if (isStudio && candidateCode.trim()) candidate.code = candidateCode;
       const row = await api.createRuntimeCanary({
-        champion_agent_id: championId,
-        challenger_agent_id: challengerId,
+        agent_id: agentId,
+        candidate,
         ...(sourceExperimentId
           ? { source_experiment_id: sourceExperimentId }
           : {}),
@@ -247,22 +270,22 @@ export function RuntimeCanaryView() {
         </div>
       )}
       <div className="field">
-        <label>{t("canaryPage.champion")}</label>
+        <label>{t("canaryPage.agent")}</label>
         <select
           className="input"
-          value={championId}
-          data-testid="canary-champion-select"
+          value={agentId}
+          data-testid="canary-agent-select"
           onChange={(event) => {
-            const nextChampion = event.target.value;
-            setChampionId(nextChampion);
-            if (sourceExperimentId && nextChampion !== handoffChampionId) {
+            const nextAgent = event.target.value;
+            setAgentId(nextAgent);
+            if (sourceExperimentId && nextAgent !== handoffChampionId) {
               setSourceExperimentId("");
             }
           }}
         >
-          <option value="">{t("canaryPage.pickChampion")}</option>
+          <option value="">{t("canaryPage.pickAgent")}</option>
           {eligibleAgents.map((agent) => (
-            <option key={agent.id} value={agent.id} disabled={agent.id === challengerId}>
+            <option key={agent.id} value={agent.id}>
               {agent.name} · {agent.method}
             </option>
           ))}
@@ -272,28 +295,37 @@ export function RuntimeCanaryView() {
             </option>
           ))}
         </select>
+      </div>
+      <div className="note" style={{ marginBottom: 10 }}>
+        <span className="i">[i]</span>
+        <span>{t("canaryPage.candidateHint")}</span>
       </div>
       <div className="field">
-        <label>{t("canaryPage.challenger")}</label>
-        <select
-          className="input"
-          value={challengerId}
-          data-testid="canary-challenger-select"
-          onChange={(event) => setChallengerId(event.target.value)}
-        >
-          <option value="">{t("canaryPage.pickChallenger")}</option>
-          {eligibleAgents.map((agent) => (
-            <option key={agent.id} value={agent.id} disabled={agent.id === championId}>
-              {agent.name} · {agent.method}
-            </option>
-          ))}
-          {unsupportedAgents.map((agent) => (
-            <option key={agent.id} value={agent.id} disabled>
-              {agent.name} · {agent.method} — {capReason(agent.canary_capability)}
-            </option>
-          ))}
-        </select>
+        <label>{t("canaryPage.candidatePrompt")}</label>
+        <textarea
+          className="input mono"
+          rows={7}
+          style={{ fontSize: 11, lineHeight: 1.5, resize: "vertical" }}
+          value={candidatePrompt}
+          data-testid="canary-candidate-prompt"
+          placeholder={t("canaryPage.candidatePromptPlaceholder")}
+          onChange={(event) => setCandidatePrompt(event.target.value)}
+        />
       </div>
+      {isStudio && (
+        <div className="field">
+          <label>{t("canaryPage.candidateCode")}</label>
+          <textarea
+            className="input mono"
+            rows={9}
+            style={{ fontSize: 11, lineHeight: 1.5, resize: "vertical" }}
+            value={candidateCode}
+            data-testid="canary-candidate-code"
+            placeholder={t("canaryPage.candidateCodePlaceholder")}
+            onChange={(event) => setCandidateCode(event.target.value)}
+          />
+        </div>
+      )}
       {unsupportedAgents.length > 0 && (
         <div className="note" style={{ marginBottom: 10 }}>
           <span className="i">[i]</span>
@@ -309,7 +341,7 @@ export function RuntimeCanaryView() {
       <div style={{ display: "flex", justifyContent: "flex-end" }}>
         <Btn
           primary
-          disabled={busy || !championId || !challengerId || championId === challengerId}
+          disabled={busy || !agentId || !candidateHasEdit}
           data-testid="create-runtime-canary"
           onClick={() => void onCreate()}
           style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
@@ -344,8 +376,8 @@ export function RuntimeCanaryView() {
             <thead>
               <tr>
                 <th>{t("canaryPage.list.name")}</th>
-                <th>{t("canaryPage.champion")}</th>
-                <th>{t("canaryPage.challenger")}</th>
+                <th>{t("canaryPage.list.agent")}</th>
+                <th>{t("canaryPage.list.versions")}</th>
                 <th>{t("canaryPage.list.weights")}</th>
                 <th>{t("canaryPage.list.created")}</th>
                 <th>{t("canaryPage.list.status")}</th>
@@ -366,7 +398,12 @@ export function RuntimeCanaryView() {
                 >
                   <td className="pri">{row.name}</td>
                   <td>{row.champion_agent_name}</td>
-                  <td>{row.challenger_agent_name}</td>
+                  <td className="mono dim">
+                    {row.artifacts.setup
+                      ? `v${row.artifacts.setup.v_current} → v${
+                        row.artifacts.setup.v_candidate}`
+                      : "—"}
+                  </td>
                   <td className="mono dim">
                     {row.artifacts.setup
                       ? `${row.artifacts.setup.weights.C}/${
@@ -419,6 +456,16 @@ export function RuntimeCanaryView() {
                 <span className="i">[i]</span>
                 <span>{t("canaryPage.experimentalOnly")}</span>
               </div>
+              {setup && (
+                <div className="note" style={{ marginBottom: 10 }}
+                     data-testid="canary-version-framing">
+                  <span className="i">[⇄]</span>
+                  <span>{t("canaryPage.versionFraming", {
+                    current: setup.v_current,
+                    candidate: setup.v_candidate,
+                  })}</span>
+                </div>
+              )}
               {canary.error && ["advance:", "complete:"]
                 .some((prefix) => canary.error?.startsWith(prefix)) && (
                 <div className="note" style={{ borderColor: "var(--crit)",
@@ -444,6 +491,8 @@ export function RuntimeCanaryView() {
                   })}
                 {setup && (
                   <div className="mono dim" style={{ fontSize: 10 }}>
+                    v{setup.v_current} → v{setup.v_candidate}
+                    <br />
                     gw {setup.gateway_id} · ab {setup.ab_test_id}
                     <br />
                     {setup.champion.target_name} ↔ {setup.challenger.target_name}
@@ -643,14 +692,19 @@ export function RuntimeCanaryView() {
               })}
 
               {(canary.artifacts.complete || canary.artifacts.rollback) && (
-                <div className="note" style={{ marginBottom: 10 }}>
+                <div className="note" style={{ marginBottom: 10 }}
+                     data-testid="canary-terminal-summary">
                   <span className="i">
                     [{canary.artifacts.complete ? "✓" : "!"}]
                   </span>
                   <span>
                     {canary.artifacts.complete
-                      ? t("canaryPage.completedSummary")
-                      : t("canaryPage.rollbackSummary")}
+                      ? t("canaryPage.completedSummary", {
+                        version: canary.artifacts.complete.promoted_version ?? "—",
+                      })
+                      : t("canaryPage.rollbackSummary", {
+                        version: canary.artifacts.rollback?.restored_version ?? "—",
+                      })}
                   </span>
                 </div>
               )}

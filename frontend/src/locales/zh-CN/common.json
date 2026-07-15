@@ -1054,56 +1054,63 @@
   },
   "canaryPage": {
     "reason": {
-      "not-active": "金丝雀挑战者必须处于 active 状态。",
-      "not-runtime": "目标金丝雀的挑战者必须是 AgentCore Runtime Agent。",
+      "not-active": "金丝雀目标 Agent 必须处于 active 状态。",
+      "not-runtime": "基于目标的金丝雀需要 AgentCore Runtime Agent。",
+      "container-followup": "容器 Agent 的候选版本铸造需通过 CodeBuild，属于后续工作。",
       "a2a": "A2A Agent 不兼容 HTTP target-canary 流量。",
-      "no-runtime-arn": "该挑战者尚无已部署的 AgentCore Runtime ARN。"
+      "no-runtime-arn": "该 Agent 尚无已部署的 AgentCore Runtime ARN。"
     },
-    "meta": "Runtime Target 流量 · 共享实验网关",
+    "meta": "真实生产流量 · 候选版本 A/B · 每金丝雀独立网关",
     "modeLabel": "实验流程",
     "mode": {
       "configuration": "基于配置包的 A/B",
       "canary": "基于目标的 A/B"
     },
-    "sub": "冠军与挑战者 · 实验网关流量",
-    "create": "创建运行时金丝雀",
-    "createHint": "选择两个兼容的 Runtime Agent；只有手动触发 Setup 后才会创建 AWS 资源。",
-    "handoff": "启动运行时金丝雀",
-    "handoffSource": "冠军已从配置推广实验 {{id}} 预填。",
-    "champion": "冠军",
-    "challenger": "挑战者",
-    "pickChampion": "选择冠军 Agent……",
-    "pickChallenger": "选择挑战者 Agent……",
-    "eligibilityHint": "只有活跃的 HTTP AgentCore Runtime Agent 可加入运行时金丝雀；禁用原因由后端能力合同统一提供。",
-    "experimentalOnly": "下方权重仅作用于共享实验网关。完成金丝雀不会更新生产 Gateway 或 Target。",
+    "sub": "当前版本与候选版本 · 真实生产流量",
+    "create": "创建目标金丝雀",
+    "createHint": "选择一个符合条件的 Agent，并编辑其候选版本；只有手动触发 Setup 后才会创建 AWS 资源。",
+    "handoff": "启动目标金丝雀",
+    "handoffSource": "Agent 已从配置推广实验 {{id}} 预填。",
+    "agent": "AGENT",
+    "pickAgent": "选择要做金丝雀的 Agent……",
+    "candidatePrompt": "候选版本系统提示词",
+    "candidatePromptPlaceholder": "编辑候选版本的系统提示词……",
+    "candidateCode": "候选版本代码（studio）",
+    "candidateCodePlaceholder": "编辑候选版本的 studio Agent 代码……",
+    "candidateHint": "候选版本会基于该 Agent 当前的 spec 加上你下方的编辑铸造而成；在你执行推广之前，生产始终服务当前版本。",
+    "versionFraming": "当前版本 v{{current}} → 候选版本 v{{candidate}}",
+    "eligibilityHint": "只有活跃的 HTTP AgentCore Runtime Agent 可做金丝雀；禁用原因由后端能力合同统一提供。",
+    "experimentalOnly": "下方权重会通过一个专属金丝雀网关，把该 Agent 的真实生产流量按比例分流。推广与回滚都会真正改变生产所服务的版本。",
     "setup": "设置 90/10",
     "running": "运行中…",
     "retry": "重试",
-    "builtinPrompts": "内置演示提示词（12 条）",
-    "sendTraffic": "发送流量",
-    "sendMoreTraffic": "追加流量",
+    "builtinPrompts": "测试种子 · 内置提示词（12 条）",
+    "sendTraffic": "发送测试流量",
+    "sendMoreTraffic": "追加测试流量",
     "recordVerdict": "记录判定",
     "advance": "进入下一档",
-    "complete": "完成金丝雀",
+    "complete": "推广到生产",
     "rollback": "回滚",
     "cleanup": "清理",
     "notSignificant": "未达统计显著",
-    "experimentalWeights": "实验网关 · 冠军 {{control}}% · 挑战者 {{treatment}}%",
-    "trafficEvidence": "{{attempts}} 次流量 · 成功 {{sent}} · 失败 {{failed}} · 基线 n={{baseline}}",
+    "experimentalWeights": "真实生产流量 · 当前版本 {{control}}% · 候选版本 {{treatment}}%",
+    "trafficEvidence": "{{attempts}} 次测试流量种子 · 成功 {{sent}} · 失败 {{failed}} · 基线 n={{baseline}}",
     "blocked": "{{verdict}} 阻止继续放量。请追加流量或回滚。",
     "overrideHint": "平局或未达统计显著的结果需要操作员显式确认后才能继续。",
-    "completedSummary": "挑战者赢得本次实验金丝雀，A/B 测试已停止；未更改任何生产网关。",
-    "rollbackSummary": "金丝雀已回滚到冠军，A/B 测试已停止。",
+    "completedSummary": "候选版本获胜。生产现已服务 v{{version}}，A/B 测试已停止。",
+    "rollbackSummary": "已回滚到当前版本。生产服务 v{{version}}，A/B 测试已停止。",
     "stage": {
-      "setup": "实验网关设置",
+      "setup": "金丝雀网关与候选版本设置",
       "ramp": "{{control}}/{{treatment}} 流量与判定",
       "locked": "请先完成上一档的流量、判定和放量门禁。"
     },
     "list": {
       "title": "运行时金丝雀列表",
-      "sub": "独立 Target 分流记录 · 最新在前",
+      "sub": "真实流量版本金丝雀 · 最新在前",
       "new": "新建金丝雀",
       "name": "金丝雀",
+      "agent": "AGENT",
+      "versions": "版本",
       "weights": "权重",
       "created": "创建时间",
       "status": "状态",
@@ -1111,25 +1118,25 @@
     },
     "confirmOverride": {
       "title": "覆盖非显著证据门禁",
-      "body": "当前结果为平局或未达统计显著。是否仍进入下一档实验流量？"
+      "body": "当前结果为平局或未达统计显著。是否仍把更多真实生产流量分流到候选版本？"
     },
     "confirmRollback": {
-      "title": "回滚运行时金丝雀",
-      "body": "将停止金丝雀 A/B 测试，并记录冠军获胜。临时资源会保留到执行清理。"
+      "title": "回滚金丝雀",
+      "body": "将停止金丝雀 A/B 测试，并把生产前滚回到当前版本。临时资源会保留到执行清理。"
     },
     "confirmCleanup": {
-      "title": "清理运行时金丝雀",
-      "body": "只删除本金丝雀的 A/B 测试、在线评估器和临时 Target；共享实验网关会保留。"
+      "title": "清理金丝雀",
+      "body": "将删除本金丝雀的专属网关、A/B 测试、在线评估器、Target 以及 treatment 端点。"
     },
     "how": {
-      "title": "运行时金丝雀门禁",
+      "title": "目标金丝雀门禁",
       "sub": "每一档流量都需要手动证据门禁",
-      "setup": "SETUP——创建两个临时 Runtime Target，并从 90/10 开始",
-      "ramp90": "90/10——发送流量，然后记录本档的新判定",
+      "setup": "SETUP——铸造候选版本、创建专属网关，并从 90/10 开始",
+      "ramp90": "90/10——10% 的真实生产流量进入候选版本，然后记录本档的新判定",
       "ramp50": "50/50——只有上一档判定允许时才能进入",
-      "ramp99": "1/99——最终实验档；AgentCore 权重下限为 1",
-      "finish": "FINISH——Treatment 获胜后完成，或回滚并清理",
-      "note": "Treatment 显著获胜可直接继续；平局或未达显著需显式覆盖；Control 获胜或证据不足会继续阻断。"
+      "ramp99": "1/99——最终档；AgentCore 权重下限为 1",
+      "finish": "FINISH——把候选版本推广到生产，或回滚并清理",
+      "note": "候选版本显著获胜可直接继续；平局或未达显著需显式覆盖；当前版本获胜或证据不足会继续阻断。"
     }
   },
   "obs": {

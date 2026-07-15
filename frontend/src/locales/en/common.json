@@ -1054,56 +1054,63 @@
   },
   "canaryPage": {
     "reason": {
-      "not-active": "Canary challengers must be active.",
-      "not-runtime": "Target canaries require an AgentCore Runtime challenger.",
+      "not-active": "The canary subject agent must be active.",
+      "not-runtime": "Target canaries require an AgentCore Runtime agent.",
+      "container-followup": "Container canary candidate minting via CodeBuild is a follow-up.",
       "a2a": "A2A agents are not compatible with HTTP target-canary traffic.",
-      "no-runtime-arn": "The challenger has no deployed AgentCore Runtime ARN."
+      "no-runtime-arn": "This agent has no deployed AgentCore Runtime ARN."
     },
-    "meta": "Runtime target traffic · shared experiment gateway",
+    "meta": "Live production traffic · candidate-version A/B · per-canary gateway",
     "modeLabel": "Experiment workflow",
     "mode": {
       "configuration": "CONFIGURATION-BUNDLE A/B",
       "canary": "TARGET-BASED A/B"
     },
-    "sub": "champion vs challenger · experimental gateway traffic",
-    "create": "CREATE RUNTIME CANARY",
-    "createHint": "Choose two compatible Runtime Agents; AWS setup starts only on command.",
-    "handoff": "START RUNTIME CANARY",
-    "handoffSource": "Champion prefilled from promoted configuration experiment {{id}}.",
-    "champion": "CHAMPION",
-    "challenger": "CHALLENGER",
-    "pickChampion": "pick champion agent…",
-    "pickChallenger": "pick challenger agent…",
-    "eligibilityHint": "Only active HTTP AgentCore Runtime agents can join a Runtime Canary. Disabled reasons come from the backend capability contract.",
-    "experimentalOnly": "All weights below apply only to the shared experiment Gateway. Completion does not update a production Gateway or target.",
+    "sub": "current vs candidate version · live production traffic",
+    "create": "CREATE TARGET CANARY",
+    "createHint": "Pick one eligible agent and edit its candidate version; the AWS setup starts only on command.",
+    "handoff": "START TARGET CANARY",
+    "handoffSource": "Agent prefilled from promoted configuration experiment {{id}}.",
+    "agent": "AGENT",
+    "pickAgent": "pick an agent to canary…",
+    "candidatePrompt": "CANDIDATE SYSTEM PROMPT",
+    "candidatePromptPlaceholder": "Edit the system prompt for the candidate version…",
+    "candidateCode": "CANDIDATE CODE (studio)",
+    "candidateCodePlaceholder": "Edit the studio agent code for the candidate version…",
+    "candidateHint": "The candidate version is minted from this agent's current spec plus your edits below. Production keeps serving the current version until you promote.",
+    "versionFraming": "current v{{current}} → candidate v{{candidate}}",
+    "eligibilityHint": "Only active HTTP AgentCore Runtime agents can be canaried. Disabled reasons come from the backend capability contract.",
+    "experimentalOnly": "The weights below split REAL production traffic for this agent through a dedicated canary gateway. Promote and roll back really change what production serves.",
     "setup": "SET UP 90/10",
     "running": "RUNNING…",
     "retry": "RETRY",
-    "builtinPrompts": "built-in demo prompts (12)",
-    "sendTraffic": "SEND TRAFFIC",
-    "sendMoreTraffic": "SEND MORE TRAFFIC",
+    "builtinPrompts": "test seed · built-in prompts (12)",
+    "sendTraffic": "SEND TEST TRAFFIC",
+    "sendMoreTraffic": "SEND MORE TEST TRAFFIC",
     "recordVerdict": "RECORD VERDICT",
     "advance": "ADVANCE",
-    "complete": "COMPLETE CANARY",
+    "complete": "PROMOTE TO PRODUCTION",
     "rollback": "ROLL BACK",
     "cleanup": "CLEAN UP",
     "notSignificant": "not significant",
-    "experimentalWeights": "experiment Gateway · champion {{control}}% · challenger {{treatment}}%",
-    "trafficEvidence": "{{attempts}} traffic attempt(s) · sent {{sent}} · failed {{failed}} · baseline n={{baseline}}",
+    "experimentalWeights": "live production traffic · current {{control}}% · candidate {{treatment}}%",
+    "trafficEvidence": "{{attempts}} test-traffic seed(s) · sent {{sent}} · failed {{failed}} · baseline n={{baseline}}",
     "blocked": "{{verdict}} blocks advancement. Send more traffic or roll back.",
     "overrideHint": "This tie or non-significant result requires an explicit operator override.",
-    "completedSummary": "The challenger won the experimental canary. Its A/B test is stopped; no production Gateway was changed.",
-    "rollbackSummary": "The canary was rolled back to the champion and its A/B test was stopped.",
+    "completedSummary": "The candidate version won. Production now serves v{{version}} and the A/B test is stopped.",
+    "rollbackSummary": "Rolled back to the current version. Production serves v{{version}} and the A/B test is stopped.",
     "stage": {
-      "setup": "EXPERIMENT GATEWAY SETUP",
+      "setup": "CANARY GATEWAY + CANDIDATE SETUP",
       "ramp": "{{control}}/{{treatment}} TRAFFIC + VERDICT",
       "locked": "Complete the previous stage's traffic, verdict, and advancement gate first."
     },
     "list": {
       "title": "RUNTIME CANARIES",
-      "sub": "independent target-routing records · newest first",
+      "sub": "live-traffic version canaries · newest first",
       "new": "NEW CANARY",
       "name": "CANARY",
+      "agent": "AGENT",
+      "versions": "VERSIONS",
       "weights": "WEIGHTS",
       "created": "CREATED",
       "status": "STATUS",
@@ -1111,25 +1118,25 @@
     },
     "confirmOverride": {
       "title": "Override non-significant evidence",
-      "body": "The current result is tied or not statistically significant. Continue to the next experimental traffic stage anyway?"
+      "body": "The current result is tied or not statistically significant. Continue shifting more live production traffic to the candidate anyway?"
     },
     "confirmRollback": {
-      "title": "Roll back Runtime Canary",
-      "body": "This stops the canary A/B test and records the champion as the winner. Temporary resources remain until cleanup."
+      "title": "Roll back the canary",
+      "body": "This stops the canary A/B test and rolls production forward to the current version. Temporary resources remain until cleanup."
     },
     "confirmCleanup": {
-      "title": "Clean up Runtime Canary",
-      "body": "This deletes only this canary's A/B test, online evaluators, and temporary targets. The shared experiment Gateway is retained."
+      "title": "Clean up the canary",
+      "body": "This deletes this canary's dedicated gateway, A/B test, online evaluators, targets, and treatment endpoint."
     },
     "how": {
-      "title": "RUNTIME CANARY GATES",
+      "title": "TARGET CANARY GATES",
       "sub": "manual evidence gate at every traffic stage",
-      "setup": "SETUP — create two temporary Runtime targets and start at 90/10",
-      "ramp90": "90/10 — send traffic, then record a fresh verdict",
+      "setup": "SETUP — mint the candidate version, stand up a dedicated gateway, and start at 90/10",
+      "ramp90": "90/10 — 10% of live production traffic reaches the candidate; record a fresh verdict",
       "ramp50": "50/50 — advance only after the prior verdict allows it",
-      "ramp99": "1/99 — final experimental stage; AgentCore weights have a floor of one",
-      "finish": "FINISH — complete on a treatment win, or roll back and clean up",
-      "note": "Treatment wins advance directly. Ties and non-significant results require override; control wins and insufficient evidence remain blocked."
+      "ramp99": "1/99 — final stage; AgentCore weights have a floor of one",
+      "finish": "FINISH — promote the candidate to production, or roll back and clean up",
+      "note": "The candidate winning advances directly. Ties and non-significant results require override; the current version winning and insufficient evidence remain blocked."
     }
   },
   "obs": {

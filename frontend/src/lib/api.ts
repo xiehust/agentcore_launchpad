@@ -77,20 +77,14 @@ export interface RuntimeCanaryInfo {
   error: string | null;
   created_at: string | null;
   artifacts: {
-    champion_meta?: {
+    agent_meta?: {
       id: string;
       name: string;
       arn: string;
       resource_id: string;
       runtime_name: string;
     };
-    challenger_meta?: {
-      id: string;
-      name: string;
-      arn: string;
-      resource_id: string;
-      runtime_name: string;
-    };
+    edited_spec?: Record<string, unknown>;
     setup?: {
       gateway_id: string;
       gateway_arn: string;
@@ -99,6 +93,11 @@ export interface RuntimeCanaryInfo {
       ab_test_id: string;
       ramp_stage: number;
       weights: Record<string, number>;
+      v_current: string;
+      v_candidate: string;
+      stable_endpoint: string;
+      treatment_endpoint: string;
+      runtime_id: string;
       champion: {
         target_name: string;
         target_id: string;
@@ -135,13 +134,13 @@ export interface RuntimeCanaryInfo {
       winner: string;
       ab_test_status: string;
       completed_at: string;
-      experimental_only: boolean;
+      promoted_version?: string;
     };
     rollback?: {
       winner: string;
-      ab_test_status: string;
-      rolled_back_at: string;
-      experimental_only: boolean;
+      restored_version?: string;
+      ab_test_status?: string;
+      rolled_back_at?: string;
     };
     cleanup?: { category: string; status: string; detail?: string }[];
   };
@@ -487,8 +486,12 @@ export const api = {
   getRuntimeCanary: (id: string) =>
     request<RuntimeCanaryInfo>(`/api/runtime-canaries/${id}`),
   createRuntimeCanary: (input: {
-    champion_agent_id: string;
-    challenger_agent_id: string;
+    agent_id: string;
+    candidate: {
+      system_prompt?: string;
+      tool_description_overrides?: Record<string, string>;
+      code?: string;
+    };
     source_experiment_id?: string;
   }) =>
     request<RuntimeCanaryInfo>("/api/runtime-canaries", {
