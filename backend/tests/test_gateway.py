@@ -1,6 +1,7 @@
 """Gateway bootstrap idempotency, MCP client parsing, harness gateway mapping."""
 
 import json
+from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -230,3 +231,246 @@ def test_tool_catalog_degrades_when_gateway_credentials_are_rejected(client, mon
     body = response.json()
     assert body["gateway_error"] == "gateway.credentials_rejected"
     assert {tool["name"] for tool in body["tools"]} == {"code-interpreter", "browser"}
+
+
+def test_browser_demo_retains_live_session_until_stopped(client, monkeypatch):
+    class FakeBrowserClient:
+        instances = []
+
+        def __init__(self, region):
+            self.region = region
+            self.session_id = None
+            self.started_with = None
+            self.stopped = False
+            self.instances.append(self)
+
+        def start(self, **kwargs):
+            self.started_with = kwargs
+            self.session_id = "01KXNH955ZJWTEVR5PFHGE827F"
+
+        def generate_ws_headers(self):
+            return "wss://browser.example/automation", {"Authorization": "signed"}
+
+        def generate_live_view_url(self, expires):
+            assert expires == tools_router.BROWSER_DEMO_SESSION_SECONDS
+            return "https://browser.example/live-view?signed=true"
+
+        def stop(self):
+            self.stopped = True
+
+    page = MagicMock()
+    page.title.return_value = "Example Domain"
+    context = SimpleNamespace(pages=[page])
+    remote_browser = SimpleNamespace(contexts=[context])
+    chromium = MagicMock()
+    chromium.connect_over_cdp.return_value = remote_browser
+    playwright = SimpleNamespace(chromium=chromium)
+
+    monkeypatch.setattr("bedrock_agentcore.tools.BrowserClient", FakeBrowserClient)
+    monkeypatch.setattr(
+        "playwright.sync_api.sync_playwright",
+        lambda: nullcontext(playwright),
+    )
+
+    response = client.post("/api/demos/browser", json={"url": "https://example.com"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["title"] == "Example Domain"
+    assert body["live_view_url"] == "https://browser.example/live-view?signed=true"
+    assert body["live_view_expires_in"] == 300
+    assert body["viewport"] == {"width": 1280, "height": 720}
+    browser_client = FakeBrowserClient.instances[0]
+    assert browser_client.started_with == {
+        "identifier": "aws.browser.v1",
+        "session_timeout_seconds": 300,
+        "viewport": {"width": 1280, "height": 720},
+    }
+    assert browser_client.stopped is False
+    page.goto.assert_called_once_with(
+        "https://example.com",
+        wait_until="domcontentloaded",
+        timeout=30000,
+    )
+
+    stopped = client.delete(f"/api/demos/browser/{body['session_id']}")
+
+    assert stopped.status_code == 200
+    assert stopped.json()["stopped"] is True
+    assert stopped.json()["profile_saved"] is None
+    assert browser_client.stopped is True
+
+
+def test_browser_demo_options_lists_web_bot_auth_browsers_and_profiles(
+    client,
+    monkeypatch,
+):
+    class FakePaginator:
+        def __init__(self, page):
+            self.page = page
+
+        def paginate(self):
+            yield self.page
+
+    class FakeControlClient:
+        def get_paginator(self, operation):
+            if operation == "list_browsers":
+                return FakePaginator(
+                    {
+                        "browserSummaries": [
+                            {
+                                "browserId": "signed-browser-123",
+                                "name": "signed-browser",
+                                "description": "Web Bot Auth demo",
+                                "status": "READY",
+                            }
+                        ]
+                    }
+                )
+            return FakePaginator(
+                {
+                    "profileSummaries": [
+                        {
+                            "profileId": "demo-profile-abcdefghij",
+                            "name": "demo-profile",
+                            "description": "Persistent demo state",
+                            "status": "READY",
+                            "lastSavedAt": "2026-07-16T12:00:00+00:00",
+                            "lastSavedBrowserId": "signed-browser-123",
+                        }
+                    ]
+                }
+            )
+
+        def get_browser(self, browserId):
+            assert browserId == "signed-browser-123"
+            return {"status": "READY", "browserSigning": {"enabled": True}}
+
+    monkeypatch.setattr(tools_router, "control_client", lambda: FakeControlClient())
+
+    response = client.get("/api/demos/browser/options")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "browsers": [
+            {
+                "identifier": "signed-browser-123",
+                "name": "signed-browser",
+                "description": "Web Bot Auth demo",
+                "status": "READY",
+                "web_bot_auth": True,
+            }
+        ],
+        "profiles": [
+            {
+                "identifier": "demo-profile-abcdefghij",
+                "name": "demo-profile",
+                "description": "Persistent demo state",
+                "status": "READY",
+                "last_saved_at": "2026-07-16T12:00:00+00:00",
+                "last_saved_browser_identifier": "signed-browser-123",
+            }
+        ],
+    }
+
+
+def test_browser_demo_uses_web_bot_auth_browser_and_saves_profile(
+    client,
+    monkeypatch,
+):
+    class FakeControlClient:
+        def get_browser(self, browserId):
+            assert browserId == "signed-browser-123"
+            return {"status": "READY", "browserSigning": {"enabled": True}}
+
+        def get_browser_profile(self, profileId):
+            assert profileId == "demo-profile-abcdefghij"
+            return {"status": "READY"}
+
+    class FakeDataPlaneClient:
+        def __init__(self):
+            self.saved = []
+
+        def save_browser_session_profile(self, **kwargs):
+            self.saved.append(kwargs)
+
+    class FakeBrowserClient:
+        instances = []
+
+        def __init__(self, region):
+            self.region = region
+            self.session_id = None
+            self.started_with = None
+            self.stopped = False
+            self.data_plane_client = FakeDataPlaneClient()
+            self.instances.append(self)
+
+        def start(self, **kwargs):
+            self.started_with = kwargs
+            self.session_id = "01KXNH955ZJWTEVR5PFHGE827F"
+
+        def generate_ws_headers(self):
+            return "wss://browser.example/automation", {"Authorization": "signed"}
+
+        def generate_live_view_url(self, expires):
+            assert expires == tools_router.BROWSER_DEMO_SESSION_SECONDS
+            return "https://browser.example/live-view?signed=true"
+
+        def stop(self):
+            self.stopped = True
+
+    page = MagicMock()
+    page.title.return_value = "Example Domain"
+    context = SimpleNamespace(pages=[page])
+    remote_browser = SimpleNamespace(contexts=[context])
+    chromium = MagicMock()
+    chromium.connect_over_cdp.return_value = remote_browser
+    playwright = SimpleNamespace(chromium=chromium)
+
+    monkeypatch.setattr(tools_router, "control_client", lambda: FakeControlClient())
+    monkeypatch.setattr("bedrock_agentcore.tools.BrowserClient", FakeBrowserClient)
+    monkeypatch.setattr(
+        "playwright.sync_api.sync_playwright",
+        lambda: nullcontext(playwright),
+    )
+
+    response = client.post(
+        "/api/demos/browser",
+        json={
+            "url": "https://example.com/profile-demo",
+            "web_bot_auth": True,
+            "browser_identifier": "signed-browser-123",
+            "profile_identifier": "demo-profile-abcdefghij",
+            "save_profile": True,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["browser_identifier"] == "signed-browser-123"
+    assert body["web_bot_auth"] is True
+    assert body["profile_identifier"] == "demo-profile-abcdefghij"
+    assert body["save_profile"] is True
+    browser_client = FakeBrowserClient.instances[0]
+    assert browser_client.started_with == {
+        "identifier": "signed-browser-123",
+        "session_timeout_seconds": 300,
+        "viewport": {"width": 1280, "height": 720},
+        "profile_configuration": {
+            "profileIdentifier": "demo-profile-abcdefghij"
+        },
+    }
+
+    stopped = client.delete(f"/api/demos/browser/{body['session_id']}")
+
+    assert stopped.status_code == 200
+    assert stopped.json()["stopped"] is True
+    assert stopped.json()["profile_saved"] is True
+    assert browser_client.data_plane_client.saved == [
+        {
+            "browserIdentifier": "signed-browser-123",
+            "sessionId": body["session_id"],
+            "profileIdentifier": "demo-profile-abcdefghij",
+        }
+    ]
+    assert browser_client.stopped is True

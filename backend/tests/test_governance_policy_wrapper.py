@@ -159,3 +159,34 @@ def test_create_policy_is_always_log_only():
         control.create_policy.call_args.kwargs["validationMode"]
         == "FAIL_ON_ANY_FINDINGS"
     )
+
+
+def test_short_client_tokens_are_normalized_for_agentcore():
+    control = MagicMock()
+    short_token = "a" * 32
+    expected = f"launchpad-{short_token}"
+
+    policy.create_policy_engine(
+        control,
+        name="engine",
+        client_token=short_token,
+    )
+    policy.create_policy(
+        control,
+        engine_id="pe-1",
+        name="candidate",
+        statement="permit(principal, action, resource);",
+        client_token=short_token,
+    )
+    policy.start_policy_generation(
+        control,
+        engine_id="pe-1",
+        gateway_arn="arn:aws:bedrock-agentcore:us-west-2:123:gateway/gw-1",
+        name="generated",
+        text="Allow the support tool for the demo principal.",
+        client_token=short_token,
+    )
+
+    assert control.create_policy_engine.call_args.kwargs["clientToken"] == expected
+    assert control.create_policy.call_args.kwargs["clientToken"] == expected
+    assert control.start_policy_generation.call_args.kwargs["clientToken"] == expected

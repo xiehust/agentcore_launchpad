@@ -591,26 +591,6 @@ export interface GovernanceToolCatalog {
   gateway_url: string | null;
 }
 
-export interface LegacyGovernancePolicyInfo {
-  engine: {
-    id: string;
-    name: string;
-    status: string;
-    attached_mode: string | null;
-    attached: boolean;
-  };
-  policies: { id: string; name: string; status: string; statement: string }[];
-}
-
-export interface DemoPolicyDecision {
-  at: string | null;
-  principal: string;
-  tool: string;
-  outcome: "ALLOW" | "DENY";
-  reason: string;
-  source?: "demo";
-}
-
 export interface CodeInterpreterDemoResult {
   stdout: string;
   session_id: string;
@@ -618,9 +598,50 @@ export interface CodeInterpreterDemoResult {
 }
 
 export interface BrowserDemoResult {
+  url: string;
   title: string;
   session_id: string;
   latency_ms: number;
+  live_view_url: string;
+  live_view_expires_in: number;
+  viewport: {
+    width: number;
+    height: number;
+  };
+  browser_identifier: string;
+  web_bot_auth: boolean;
+  profile_identifier: string | null;
+  save_profile: boolean;
+}
+
+export interface BrowserDemoBrowserOption {
+  identifier: string;
+  name: string;
+  description: string;
+  status: string;
+  web_bot_auth: boolean;
+}
+
+export interface BrowserDemoProfileOption {
+  identifier: string;
+  name: string;
+  description: string;
+  status: string;
+  last_saved_at: string | null;
+  last_saved_browser_identifier: string | null;
+}
+
+export interface BrowserDemoOptions {
+  browsers: BrowserDemoBrowserOption[];
+  profiles: BrowserDemoProfileOption[];
+}
+
+export interface BrowserDemoRequest {
+  url: string;
+  web_bot_auth: boolean;
+  browser_identifier: string | null;
+  profile_identifier: string | null;
+  save_profile: boolean;
 }
 
 /* ── observability ─────────────────────────────────────────────────────── */
@@ -1066,29 +1087,27 @@ export const api = {
       `/api/governance/operations/${encodeURIComponent(operationId)}`,
     ).then((result) => result.operation),
   governanceToolCatalog: () => request<GovernanceToolCatalog>("/api/tools"),
-  legacyGovernancePolicies: () =>
-    request<LegacyGovernancePolicyInfo>("/api/governance/policies"),
-  demoGovernanceDecisions: () =>
-    request<{ decisions: DemoPolicyDecision[] }>("/api/governance/decisions"),
-  runGovernancePolicyTest: (username: "river" | "demo") =>
-    request<Record<string, unknown>>("/api/governance/policy-test", {
-      method: "POST",
-      body: JSON.stringify({
-        username,
-        tool: "hr-database___create_payout",
-        arguments: { employee_id: "EMP-1024", amount: 42 },
-      }),
-    }),
   runCodeInterpreterDemo: (code: string) =>
     request<CodeInterpreterDemoResult>("/api/demos/code-interpreter", {
       method: "POST",
       body: JSON.stringify({ code }),
     }),
-  runBrowserDemo: (url: string) =>
+  browserDemoOptions: () =>
+    request<BrowserDemoOptions>("/api/demos/browser/options"),
+  runBrowserDemo: (input: BrowserDemoRequest) =>
     request<BrowserDemoResult>("/api/demos/browser", {
       method: "POST",
-      body: JSON.stringify({ url }),
+      body: JSON.stringify(input),
     }),
+  stopBrowserDemo: (sessionId: string) =>
+    request<{
+      session_id: string;
+      stopped: boolean;
+      profile_saved: boolean | null;
+    }>(
+      `/api/demos/browser/${encodeURIComponent(sessionId)}`,
+      { method: "DELETE" },
+    ),
   obsDashboard: (range: string, force = false) =>
     request<ObsDashboard>(`/api/observability/dashboard?${obsQuery(range, force)}`),
   obsTraces: (range: string, force = false) =>

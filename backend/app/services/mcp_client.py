@@ -48,7 +48,7 @@ def get_cognito_token(username: str = "river") -> str:
         if aws_code == "NotAuthorizedException":
             raise AppError(
                 "gateway.credentials_rejected",
-                "demo user credentials were rejected - run make bootstrap",
+                "configured demo user credentials were rejected by Cognito",
                 {"aws_code": aws_code},
                 status_code=503,
             ) from exc

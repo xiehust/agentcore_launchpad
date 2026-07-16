@@ -1176,7 +1176,92 @@ Added request-local AgentCore Memory restore and persistence to Claude SDK conta
 - None - task complete
 
 
-## Session 19: Fix Claude SDK runtime read timeout
+## Session 19: agent-browser snap Chromium DevToolsActivePort hang
+
+**Date**: 2026-07-16
+**Task**: agent-browser snap Chromium DevToolsActivePort hang
+**Package**: tooling
+**Branch**: `main`
+
+### Summary
+
+Diagnosed agent-browser 0.32.0 hanging on Ubuntu 24 because the default snap Chromium writes DevToolsActivePort into snap's private /tmp; verified the Playwright Chromium plus --no-sandbox workaround and recorded daemon lifecycle and cleanup precautions.
+
+### Main Changes
+
+#### Root cause
+
+- `agent-browser` 0.32.0 (Rust version, upgraded on 2026-07-16) defaults to the system Chromium at `/usr/bin/chromium-browser`.
+- On this Ubuntu 24 host that executable is a snap package. Snap gives Chromium a private `/tmp` mount namespace.
+- The daemon launches Chromium with `--user-data-dir=/tmp/agent-browser-chrome-<uuid>` and polls that host-side directory for `DevToolsActivePort`.
+- Chromium starts successfully inside the snap namespace and writes the profile plus `DevToolsActivePort` under `/tmp/snap-private-tmp/snap.chromium/tmp/agent-browser-chrome-<uuid>/`.
+- The corresponding host-side `/tmp/agent-browser-chrome-<uuid>` remains empty, so the daemon waits forever and the CLI produces no output.
+
+#### Evidence
+
+- `timeout` around `agent-browser --session default get url` produced no output for 15 seconds.
+- The attempt launched a snap Chromium process while the host-side profile directory stayed empty.
+- The snap-private directories contained complete Chromium profiles and `DevToolsActivePort` files.
+- Repeated failed attempts explain the accumulating empty `/tmp/agent-browser-chrome-*` directories.
+- A session created at 07:13 with Playwright Chromium and `--no-sandbox` worked normally.
+
+#### Verified fix
+
+Both environment variables are required:
+
+```bash
+export AGENT_BROWSER_EXECUTABLE_PATH=/home/ubuntu/.cache/ms-playwright/chromium-1223/chrome-linux/chrome
+export AGENT_BROWSER_ARGS=--no-sandbox
+agent-browser --session <name> open <url>
+```
+
+This opened a page in approximately 0.45 seconds. Changing only the executable is insufficient: Ubuntu 24.04 AppArmor user-namespace restrictions cause Chromium to exit immediately with `No usable sandbox!` unless `--no-sandbox` is also supplied.
+
+Put both exports in `~/.bashrc` for this machine.
+
+#### Daemon lifecycle
+
+The environment is captured when the session daemon first starts. For an already stuck session, exporting variables in a later client process has no effect. Close and recreate it with the environment set:
+
+```bash
+agent-browser --session <name> close
+agent-browser --session <name> open <url>
+```
+
+Known affected sessions included `default` and `launchpad-method-qa`.
+
+#### Cleanup precautions
+
+`agent-browser doctor` reported seven stale Node-version daemons from 2026-07-14 through 2026-07-15, each with Chromium processes, plus orphaned snap Chromium processes left by hung starts. Do not clean these indiscriminately because another active QA run may still own a session.
+
+After confirming the sessions are unused, close the known stale sessions and then remove orphan Chromium processes:
+
+```bash
+for s in studio-ai-fix skillopt-coverage studio skillopt-multiskill skillopt-check promotion-states promotion-qa; do
+  agent-browser --session "$s" close
+done
+pkill -f 'agent-browser-chrome-'
+```
+
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 20: Fix Claude SDK runtime read timeout
 
 **Date**: 2026-07-16
 **Task**: Fix Claude SDK runtime read timeout

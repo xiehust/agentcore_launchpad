@@ -735,13 +735,26 @@
     "demos": {
       "ciTitle": "内置 - 代码解释器",
       "brTitle": "内置 - 浏览器工具",
-      "run": "运行"
-    },
-    "policy": {
-      "sub": "launchpad-gw 演示角色测试",
-      "loading": "正在加载策略...",
-      "testAnalyst": "以 HR-ANALYST 测试支付",
-      "testAdmin": "以 PLATFORM-ADMIN 测试支付"
+      "run": "运行",
+      "start": "启动",
+      "stop": "停止",
+      "live": "实时",
+      "idle": "空闲",
+      "connecting": "正在连接实时预览...",
+      "noSession": "当前没有浏览器会话",
+      "stopped": "浏览器会话已停止",
+      "stoppedProfileSaved": "浏览器会话已停止 · Profile 已保存",
+      "profileSaveFailed": "浏览器已停止，但无法保存 Profile。",
+      "pythonCode": "PYTHON 代码",
+      "browserCommand": "浏览器命令",
+      "requestSigning": "请求签名",
+      "webBotAuth": "启用 WEB BOT AUTH",
+      "browserResource": "浏览器资源",
+      "noWebBotAuthBrowser": "没有就绪的 WEB BOT AUTH 浏览器",
+      "browserProfile": "BROWSER PROFILE",
+      "noProfile": "不使用 PROFILE",
+      "profilePersistence": "PROFILE 持久化",
+      "saveProfile": "停止时保存 PROFILE"
     },
     "decisions": {
       "title": "策略决策",
@@ -759,10 +772,7 @@
       "telemetryUnavailable": "AWS 策略遥测不可用",
       "noAwsEvidence": "没有匹配的 AWS 策略决策",
       "cache": "缓存时间 {{age}} 秒",
-      "count": "{{count}} 条决策",
-      "demoTitle": "演示决策日志",
-      "demoSource": "仅包含本地 launchpad-gw 角色测试记录",
-      "empty": "暂无演示决策"
+      "count": "{{count}} 条决策"
     },
     "audit": {
       "title": "策略变更审计",

@@ -735,13 +735,26 @@
     "demos": {
       "ciTitle": "BUILTIN - CODE INTERPRETER",
       "brTitle": "BUILTIN - BROWSER TOOL",
-      "run": "RUN"
-    },
-    "policy": {
-      "sub": "launchpad-gw demo role tests",
-      "loading": "loading policies...",
-      "testAnalyst": "TEST PAYOUT AS HR-ANALYST",
-      "testAdmin": "TEST PAYOUT AS PLATFORM-ADMIN"
+      "run": "RUN",
+      "start": "START",
+      "stop": "STOP",
+      "live": "LIVE",
+      "idle": "IDLE",
+      "connecting": "CONNECTING LIVE VIEW...",
+      "noSession": "NO ACTIVE BROWSER SESSION",
+      "stopped": "browser session stopped",
+      "stoppedProfileSaved": "browser session stopped · profile saved",
+      "profileSaveFailed": "Browser stopped, but the profile could not be saved.",
+      "pythonCode": "PYTHON CODE",
+      "browserCommand": "BROWSER COMMAND",
+      "requestSigning": "REQUEST SIGNING",
+      "webBotAuth": "ENABLE WEB BOT AUTH",
+      "browserResource": "BROWSER RESOURCE",
+      "noWebBotAuthBrowser": "NO READY WEB BOT AUTH BROWSER",
+      "browserProfile": "BROWSER PROFILE",
+      "noProfile": "NO PROFILE",
+      "profilePersistence": "PROFILE PERSISTENCE",
+      "saveProfile": "SAVE PROFILE ON STOP"
     },
     "decisions": {
       "title": "POLICY DECISIONS",
@@ -759,10 +772,7 @@
       "telemetryUnavailable": "AWS POLICY TELEMETRY UNAVAILABLE",
       "noAwsEvidence": "NO MATCHING AWS POLICY DECISIONS",
       "cache": "cache age {{age}}s",
-      "count": "{{count}} decisions",
-      "demoTitle": "DEMO DECISION LOG",
-      "demoSource": "local launchpad-gw role-test rows only",
-      "empty": "NO DEMO DECISIONS YET"
+      "count": "{{count}} decisions"
     },
     "audit": {
       "title": "POLICY CHANGE AUDIT",

@@ -4,7 +4,9 @@
 /.supergoal/
 /.mcp.json
 /.run/
-
+/.cursor/
+/.codex/
+.playwright-cli/
 # --- python ---
 __pycache__/
 *.py[cod]

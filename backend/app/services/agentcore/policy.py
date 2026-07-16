@@ -20,6 +20,13 @@ MANAGED_TAGS = {
     MANAGED_TAG: "true",
     MANAGED_BY_TAG: "agentcore-launchpad",
 }
+_CLIENT_TOKEN_MIN_LENGTH = 33
+
+
+def _client_token(value: str) -> str:
+    if len(value) >= _CLIENT_TOKEN_MIN_LENGTH:
+        return value
+    return f"launchpad-{value}"
 
 _GATEWAY_UPDATE_FIELDS = (
     "description",
@@ -129,7 +136,7 @@ def create_policy_engine(
     if description:
         params["description"] = description
     if client_token:
-        params["clientToken"] = client_token
+        params["clientToken"] = _client_token(client_token)
     return client.create_policy_engine(**params)
 
 
@@ -165,7 +172,7 @@ def create_policy(
     if description:
         params["description"] = description
     if client_token:
-        params["clientToken"] = client_token
+        params["clientToken"] = _client_token(client_token)
     return client.create_policy(**params)
 
 
@@ -247,7 +254,7 @@ def start_policy_generation(
         "name": name,
     }
     if client_token:
-        params["clientToken"] = client_token
+        params["clientToken"] = _client_token(client_token)
     return client.start_policy_generation(**params)
 
 

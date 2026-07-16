@@ -375,6 +375,76 @@ def test_gateway_enforce_requires_evidence_or_audited_override():
         db.close()
 
 
+def test_standalone_policy_promote_can_rollback_from_audit_snapshot():
+    control = FakeControl()
+    iam = FakeIam()
+    db = SessionLocal()
+    try:
+        attach = governance.queue_engine_attach(
+            db,
+            control,
+            "gw-1",
+            EngineRequest(
+                expected_gateway_updated_at=control.gateway["updatedAt"],
+                authorization_model="allowlist",
+            ),
+        )
+        governance.run_policy_change(attach["id"], control=control, iam=iam)
+
+        create = governance.queue_policy_create(
+            db,
+            control,
+            "gw-1",
+            PolicyCreateRequest(
+                expected_gateway_updated_at=control.gateway["updatedAt"],
+                name="allow_payments",
+                statement="permit(principal, action, resource);",
+                authorization_model="allowlist",
+            ),
+        )
+        governance.run_policy_change(create["id"], control=control, iam=iam)
+        policy_id = _refresh(db, create["id"]).after["policy"]["id"]
+
+        promote = governance.queue_policy_transition(
+            db,
+            control,
+            "gw-1",
+            policy_id,
+            PolicyTransitionRequest(
+                expected_gateway_updated_at=control.gateway["updatedAt"],
+                expected_policy_updated_at=control.policies[policy_id]["updatedAt"],
+                confirmation_name="payments-gw",
+                override_reason="approved low-traffic rollout",
+            ),
+            rollback=False,
+            evidence_count=0,
+        )
+        governance.run_policy_change(promote["id"], control=control, iam=iam)
+        assert control.policies[policy_id]["enforcementMode"] == "ACTIVE"
+
+        rollback = governance.queue_policy_transition(
+            db,
+            control,
+            "gw-1",
+            policy_id,
+            PolicyTransitionRequest(
+                expected_gateway_updated_at=control.gateway["updatedAt"],
+                expected_policy_updated_at=control.policies[policy_id]["updatedAt"],
+                audit_id=promote["id"],
+            ),
+            rollback=True,
+            evidence_count=0,
+        )
+        governance.run_policy_change(rollback["id"], control=control, iam=iam)
+
+        row = _refresh(db, rollback["id"])
+        assert row.status == "succeeded"
+        assert row.requested["snapshot_audit_id"] == promote["id"]
+        assert control.policies[policy_id]["enforcementMode"] == "LOG_ONLY"
+    finally:
+        db.close()
+
+
 def test_operation_mutex_conflict_and_audit_snapshot_immutability():
     control = FakeControl()
     db = SessionLocal()

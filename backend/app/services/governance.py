@@ -1118,23 +1118,25 @@ def queue_policy_transition(
             relation_audit_id=relation.id,
         )
     elif rollback:
-        snapshot = (
-            db.query(PolicyChange)
-            .filter(
-                PolicyChange.gateway_id == gateway_id,
-                PolicyChange.policy_id == policy_id,
-                PolicyChange.status.in_(("succeeded", "partial")),
-            )
-            .order_by(PolicyChange.created_at.desc())
-            .first()
+        snapshot_query = db.query(PolicyChange).filter(
+            PolicyChange.gateway_id == gateway_id,
+            PolicyChange.policy_id == policy_id,
+            PolicyChange.status.in_(("succeeded", "partial")),
         )
-        if snapshot is None or not (snapshot.before or {}).get("policy"):
+        if request.audit_id:
+            snapshot_query = snapshot_query.filter(PolicyChange.id == request.audit_id)
+        snapshot = snapshot_query.order_by(PolicyChange.created_at.desc()).first()
+        before = (snapshot.before if snapshot else None) or {}
+        snapshot_policy = before.get("policy") or (before.get("policies") or {}).get(
+            "selected"
+        )
+        if not snapshot_policy:
             raise AppError(
                 "governance.rollback_unavailable",
                 "No audited Policy snapshot is available for rollback",
                 status_code=409,
             )
-        requested["snapshot_policy"] = snapshot.before["policy"]
+        requested["snapshot_policy"] = snapshot_policy
         requested["snapshot_audit_id"] = snapshot.id
     if not rollback:
         _assert_evidence_or_override(gateway, requested)

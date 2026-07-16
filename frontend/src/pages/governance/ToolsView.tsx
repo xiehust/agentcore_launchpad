@@ -1,64 +1,126 @@
-import { Play, RefreshCw, TriangleAlert } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { Monitor, Play, RefreshCw, Square, TriangleAlert } from "lucide-react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Btn, Chip, DataTable, Panel, useToast } from "../../components";
 import {
   api,
-  type DemoPolicyDecision,
+  type BrowserDemoOptions,
+  type BrowserDemoResult,
   type GovernanceToolCatalog,
   type GovernanceToolInfo,
-  type LegacyGovernancePolicyInfo,
 } from "../../lib/api";
-import { governanceError, statusTone } from "./types";
+import { governanceError } from "./types";
 
 const CODE_DEMO = "import math\nprint('sqrt(1764) =', math.isqrt(1764))";
 const BROWSER_DEMO_URL = "https://example.com";
+const BrowserLiveView = lazy(() =>
+  import("bedrock-agentcore/browser/live-view").then((module) => ({
+    default: module.BrowserLiveView,
+  })),
+);
+
+interface DemoSwitchProps {
+  checked: boolean;
+  disabled?: boolean;
+  label: string;
+  onChange: (checked: boolean) => void;
+}
+
+function DemoSwitch({
+  checked,
+  disabled = false,
+  label,
+  onChange,
+}: DemoSwitchProps) {
+  return (
+    <label className={`gov-demo-switch${disabled ? " disabled" : ""}`}>
+      <input
+        type="checkbox"
+        role="switch"
+        checked={checked}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+      <span className="gov-demo-switch-track" aria-hidden="true">
+        <span />
+      </span>
+      <span>{label}</span>
+    </label>
+  );
+}
 
 export function ToolsView() {
   const { t } = useTranslation();
   const toast = useToast();
   const [catalog, setCatalog] = useState<GovernanceToolCatalog | null>(null);
   const [selected, setSelected] = useState<GovernanceToolInfo | null>(null);
-  const [policies, setPolicies] = useState<LegacyGovernancePolicyInfo | null>(null);
-  const [decisions, setDecisions] = useState<DemoPolicyDecision[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [testBusy, setTestBusy] = useState(false);
+  const [code, setCode] = useState(CODE_DEMO);
   const [ciBusy, setCiBusy] = useState(false);
   const [ciOut, setCiOut] = useState("");
+  const [browserUrl, setBrowserUrl] = useState(BROWSER_DEMO_URL);
+  const [browserOptions, setBrowserOptions] = useState<BrowserDemoOptions | null>(
+    null,
+  );
+  const [browserOptionsError, setBrowserOptionsError] = useState<string | null>(
+    null,
+  );
+  const [webBotAuth, setWebBotAuth] = useState(false);
+  const [browserIdentifier, setBrowserIdentifier] = useState("");
+  const [profileIdentifier, setProfileIdentifier] = useState("");
+  const [saveProfile, setSaveProfile] = useState(false);
   const [browserBusy, setBrowserBusy] = useState(false);
   const [browserOut, setBrowserOut] = useState("");
+  const [browserSession, setBrowserSession] = useState<BrowserDemoResult | null>(
+    null,
+  );
+  const browserSessionRef = useRef<string | null>(null);
 
   const load = useCallback(async () => {
     setRefreshing(true);
     setError(null);
-    const [catalogResult, policyResult, decisionResult] = await Promise.allSettled([
+    setBrowserOptionsError(null);
+    const [catalogResult, browserOptionsResult] = await Promise.allSettled([
       api.governanceToolCatalog(),
-      api.legacyGovernancePolicies(),
-      api.demoGovernanceDecisions(),
+      api.browserDemoOptions(),
     ]);
     if (catalogResult.status === "fulfilled") {
-      setCatalog(catalogResult.value);
+      const nextCatalog = catalogResult.value;
+      setCatalog(nextCatalog);
       setSelected((current) => {
-        if (!current) return catalogResult.value.tools[0] ?? null;
+        if (!current) return nextCatalog.tools[0] ?? null;
         return (
-          catalogResult.value.tools.find((tool) => tool.name === current.name) ??
-          catalogResult.value.tools[0] ??
+          nextCatalog.tools.find((tool) => tool.name === current.name) ??
+          nextCatalog.tools[0] ??
           null
         );
       });
     } else {
       setError(governanceError(catalogResult.reason));
     }
-    if (policyResult.status === "fulfilled") setPolicies(policyResult.value);
-    if (decisionResult.status === "fulfilled") {
-      setDecisions(
-        decisionResult.value.decisions.map((decision) => ({
-          ...decision,
-          source: "demo",
-        })),
+    if (browserOptionsResult.status === "fulfilled") {
+      const nextOptions = browserOptionsResult.value;
+      const readySignedBrowsers = nextOptions.browsers.filter(
+        (browser) => browser.status === "READY" && browser.web_bot_auth,
       );
+      setBrowserOptions(nextOptions);
+      setBrowserIdentifier((current) =>
+        readySignedBrowsers.some((browser) => browser.identifier === current)
+          ? current
+          : (readySignedBrowsers[0]?.identifier ?? ""),
+      );
+      setProfileIdentifier((current) =>
+        nextOptions.profiles.some(
+          (profile) =>
+            profile.identifier === current && profile.status === "READY",
+        )
+          ? current
+          : "",
+      );
+    } else {
+      setBrowserOptionsError(governanceError(browserOptionsResult.reason));
     }
     setRefreshing(false);
   }, []);
@@ -67,26 +129,39 @@ export function ToolsView() {
     void load();
   }, [load]);
 
-  const runPolicyTest = async (username: "river" | "demo") => {
-    setTestBusy(true);
-    try {
-      await api.runGovernancePolicyTest(username);
-      const result = await api.demoGovernanceDecisions();
-      setDecisions(
-        result.decisions.map((decision) => ({ ...decision, source: "demo" })),
-      );
-    } catch (testError) {
-      toast(governanceError(testError), "crit");
-    } finally {
-      setTestBusy(false);
-    }
-  };
+  useEffect(() => {
+    const expectedTitle = "AgentCore Launchpad";
+    const titleNode = document.querySelector("title");
+    if (!titleNode) return;
+    const restoreTitle = () => {
+      if (document.title !== expectedTitle) document.title = expectedTitle;
+    };
+    restoreTitle();
+    const observer = new MutationObserver(restoreTitle);
+    observer.observe(titleNode, {
+      childList: true,
+      characterData: true,
+      subtree: true,
+    });
+    return () => {
+      observer.disconnect();
+      restoreTitle();
+    };
+  }, []);
+
+  useEffect(
+    () => () => {
+      const sessionId = browserSessionRef.current;
+      if (sessionId) void api.stopBrowserDemo(sessionId);
+    },
+    [],
+  );
 
   const runCodeDemo = async () => {
     setCiBusy(true);
     setCiOut("");
     try {
-      const result = await api.runCodeInterpreterDemo(CODE_DEMO);
+      const result = await api.runCodeInterpreterDemo(code);
       setCiOut(
         `${result.stdout}\n- session ${result.session_id} - ${result.latency_ms}ms`,
       );
@@ -101,9 +176,30 @@ export function ToolsView() {
     setBrowserBusy(true);
     setBrowserOut("");
     try {
-      const result = await api.runBrowserDemo(BROWSER_DEMO_URL);
+      const previousSessionId = browserSessionRef.current;
+      browserSessionRef.current = null;
+      setBrowserSession(null);
+      if (previousSessionId) await api.stopBrowserDemo(previousSessionId);
+      const result = await api.runBrowserDemo({
+        url: browserUrl.trim(),
+        web_bot_auth: webBotAuth,
+        browser_identifier: webBotAuth ? browserIdentifier : null,
+        profile_identifier: profileIdentifier || null,
+        save_profile: Boolean(profileIdentifier) && saveProfile,
+      });
+      browserSessionRef.current = result.session_id;
+      setBrowserSession(result);
       setBrowserOut(
-        `title: "${result.title}"\n- session ${result.session_id} - ${result.latency_ms}ms`,
+        [
+          `title: "${result.title}"`,
+          `browser: ${result.browser_identifier}`,
+          result.profile_identifier
+            ? `profile: ${result.profile_identifier}`
+            : null,
+          `- session ${result.session_id} - ${result.latency_ms}ms`,
+        ]
+          .filter(Boolean)
+          .join("\n"),
       );
     } catch (demoError) {
       setBrowserOut(governanceError(demoError));
@@ -111,6 +207,41 @@ export function ToolsView() {
       setBrowserBusy(false);
     }
   };
+
+  const stopBrowserDemo = async () => {
+    const sessionId = browserSessionRef.current;
+    if (!sessionId) return;
+    setBrowserBusy(true);
+    try {
+      const result = await api.stopBrowserDemo(sessionId);
+      browserSessionRef.current = null;
+      setBrowserSession(null);
+      setBrowserOut(
+        result.profile_saved
+          ? t("governance.demos.stoppedProfileSaved")
+          : t("governance.demos.stopped"),
+      );
+      if (result.profile_saved === false) {
+        toast(t("governance.demos.profileSaveFailed"), "crit");
+      }
+    } catch (stopError) {
+      toast(governanceError(stopError), "crit");
+    } finally {
+      setBrowserBusy(false);
+    }
+  };
+
+  const webBotAuthBrowsers =
+    browserOptions?.browsers.filter(
+      (browser) => browser.status === "READY" && browser.web_bot_auth,
+    ) ?? [];
+  const readyProfiles =
+    browserOptions?.profiles.filter((profile) => profile.status === "READY") ?? [];
+  const browserConfigLocked = browserBusy || browserSession !== null;
+  const browserStartDisabled =
+    browserBusy ||
+    !browserUrl.trim() ||
+    (webBotAuth && !browserIdentifier);
 
   return (
     <>
@@ -214,107 +345,204 @@ export function ToolsView() {
         </Panel>
       </div>
 
-      <div className="gov-grid">
+      <div className="gov-demo-grid">
         <Panel
           title={t("governance.demos.ciTitle")}
           sub="aws.codeinterpreter.v1"
           end={
-            <Btn primary disabled={ciBusy} onClick={() => void runCodeDemo()}>
-              <Play size={14} aria-hidden="true" />
-              {t("governance.demos.run")}
-            </Btn>
-          }
-        >
-          <div className="code" data-testid="ci-out">
-            <span className="k2">import</span> math{"\n"}
-            <span className="k2">print</span>(&#39;sqrt(1764) =&#39;,
-            math.isqrt(1764))
-            {ciOut ? (
-              <>
-                {"\n\n"}
-                <span className="k1">{ciOut}</span>
-              </>
-            ) : null}
-          </div>
-        </Panel>
-        <Panel
-          title={t("governance.demos.brTitle")}
-          sub="aws.browser.v1"
-          end={
             <Btn
               primary
-              disabled={browserBusy}
-              onClick={() => void runBrowserDemo()}
+              disabled={ciBusy || !code.trim()}
+              onClick={() => void runCodeDemo()}
             >
               <Play size={14} aria-hidden="true" />
               {t("governance.demos.run")}
             </Btn>
           }
         >
-          <div className="code" data-testid="br-out">
-            GET https://example.com -&gt; title?
-            {browserOut ? (
-              <>
-                {"\n\n"}
-                <span className="k1">{browserOut}</span>
-              </>
-            ) : null}
+          <div className="field gov-demo-field">
+            <label htmlFor="governance-code-demo">
+              {t("governance.demos.pythonCode")}
+            </label>
+            <textarea
+              id="governance-code-demo"
+              className="input mono gov-demo-editor"
+              data-testid="ci-code"
+              value={code}
+              maxLength={4000}
+              disabled={ciBusy}
+              spellCheck={false}
+              onChange={(event) => setCode(event.target.value)}
+            />
           </div>
+          {ciOut ? (
+            <pre className="code gov-demo-output" data-testid="ci-out">
+              <span className="k1">{ciOut}</span>
+            </pre>
+          ) : null}
         </Panel>
-      </div>
-
-      <div className="gov-grid">
         <Panel
-          title={`CEDAR - ${policies?.engine.name ?? "launchpad_pe"}`}
-          sub={t("governance.policy.sub")}
+          className="gov-browser-demo"
+          title={t("governance.demos.brTitle")}
+          sub="aws.browser.v1 / DCV"
           end={
-            policies?.engine.attached ? (
-              <Chip tone={statusTone(policies.engine.attached_mode)}>
-                {policies.engine.attached_mode ?? "-"}
+            <div className="gov-live-actions">
+              <Chip tone={browserSession ? "good" : "muted"}>
+                {browserSession
+                  ? t("governance.demos.live")
+                  : t("governance.demos.idle")}
               </Chip>
-            ) : (
-              <Chip tone="muted">-</Chip>
-            )
+              {browserSession ? (
+                <Btn
+                  disabled={browserBusy}
+                  onClick={() => void stopBrowserDemo()}
+                >
+                  <Square size={13} aria-hidden="true" />
+                  {t("governance.demos.stop")}
+                </Btn>
+              ) : (
+                <Btn
+                  primary
+                  disabled={browserStartDisabled}
+                  onClick={() => void runBrowserDemo()}
+                >
+                  <Play size={14} aria-hidden="true" />
+                  {t("governance.demos.start")}
+                </Btn>
+              )}
+            </div>
           }
         >
-          <pre className="code gov-policy-preview">
-            {policies?.policies
-              .map(
-                (policy) =>
-                  `// ${policy.name} / ${policy.status}\n${policy.statement}`,
-              )
-              .join("\n\n") ?? t("governance.policy.loading")}
-          </pre>
-          <div className="gov-actions">
-            <Btn disabled={testBusy} onClick={() => void runPolicyTest("demo")}>
-              <Play size={14} aria-hidden="true" />
-              {t("governance.policy.testAnalyst")}
-            </Btn>
-            <Btn disabled={testBusy} onClick={() => void runPolicyTest("river")}>
-              <Play size={14} aria-hidden="true" />
-              {t("governance.policy.testAdmin")}
-            </Btn>
-          </div>
-        </Panel>
-
-        <Panel
-          className="dlog"
-          title={t("governance.decisions.demoTitle")}
-          sub={t("governance.decisions.demoSource")}
-          pad={false}
-        >
-          {decisions.length === 0 ? (
-            <div className="empty">{t("governance.decisions.empty")}</div>
-          ) : null}
-          {decisions.slice(0, 8).map((decision, index) => (
-            <div className="row" key={`${decision.at ?? "none"}-${index}`}>
-              <span className="t">{decision.at?.slice(11, 19) ?? "-"}</span>
-              <span className="who">{decision.principal}</span>
-              <span className="res">{decision.tool}</span>
-              <Chip tone={statusTone(decision.outcome)}>{decision.outcome}</Chip>
-              <Chip tone="muted">DEMO</Chip>
+          <div className="gov-demo-config">
+            <div className="field gov-demo-field">
+              <label htmlFor="governance-browser-url">
+                {t("governance.demos.browserCommand")}
+              </label>
+              <div className="gov-browser-command">
+                <span>GET</span>
+                <input
+                  id="governance-browser-url"
+                  className="input mono"
+                  data-testid="browser-url"
+                  type="url"
+                  value={browserUrl}
+                  maxLength={2000}
+                  disabled={browserConfigLocked}
+                  spellCheck={false}
+                  onChange={(event) => setBrowserUrl(event.target.value)}
+                />
+              </div>
             </div>
-          ))}
+
+            <div className="gov-demo-options">
+              <div className="field gov-demo-field">
+                <label>{t("governance.demos.requestSigning")}</label>
+                <DemoSwitch
+                  checked={webBotAuth}
+                  disabled={browserConfigLocked}
+                  label={t("governance.demos.webBotAuth")}
+                  onChange={setWebBotAuth}
+                />
+              </div>
+
+              {webBotAuth ? (
+                <div className="field gov-demo-field">
+                  <label htmlFor="governance-browser-resource">
+                    {t("governance.demos.browserResource")}
+                  </label>
+                  <select
+                    id="governance-browser-resource"
+                    className="input mono"
+                    data-testid="browser-resource"
+                    value={browserIdentifier}
+                    disabled={browserConfigLocked || webBotAuthBrowsers.length === 0}
+                    onChange={(event) => setBrowserIdentifier(event.target.value)}
+                  >
+                    {webBotAuthBrowsers.length === 0 ? (
+                      <option value="">
+                        {t("governance.demos.noWebBotAuthBrowser")}
+                      </option>
+                    ) : null}
+                    {webBotAuthBrowsers.map((browser) => (
+                      <option key={browser.identifier} value={browser.identifier}>
+                        {browser.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : null}
+
+              <div className="field gov-demo-field">
+                <label htmlFor="governance-browser-profile">
+                  {t("governance.demos.browserProfile")}
+                </label>
+                <select
+                  id="governance-browser-profile"
+                  className="input mono"
+                  data-testid="browser-profile"
+                  value={profileIdentifier}
+                  disabled={browserConfigLocked}
+                  onChange={(event) => {
+                    setProfileIdentifier(event.target.value);
+                    if (!event.target.value) setSaveProfile(false);
+                  }}
+                >
+                  <option value="">{t("governance.demos.noProfile")}</option>
+                  {readyProfiles.map((profile) => (
+                    <option key={profile.identifier} value={profile.identifier}>
+                      {profile.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="field gov-demo-field">
+                <label>{t("governance.demos.profilePersistence")}</label>
+                <DemoSwitch
+                  checked={saveProfile}
+                  disabled={browserConfigLocked || !profileIdentifier}
+                  label={t("governance.demos.saveProfile")}
+                  onChange={setSaveProfile}
+                />
+              </div>
+            </div>
+            {browserOptionsError ? (
+              <div className="gov-demo-config-error">{browserOptionsError}</div>
+            ) : null}
+          </div>
+          <div className="gov-browser-readout" data-testid="br-out">
+            <span>GET {browserUrl}</span>
+            {browserOut ? <span className="k1">{browserOut}</span> : null}
+          </div>
+          <div className="gov-browser-live" data-testid="browser-live-view">
+            {browserSession ? (
+              <>
+                <div className="gov-browser-placeholder">
+                  {t("governance.demos.connecting")}
+                </div>
+                <div className="gov-browser-stream">
+                  <Suspense
+                    fallback={
+                      <div className="gov-browser-placeholder">
+                        {t("governance.demos.connecting")}
+                      </div>
+                    }
+                  >
+                    <BrowserLiveView
+                      signedUrl={browserSession.live_view_url}
+                      remoteWidth={browserSession.viewport.width}
+                      remoteHeight={browserSession.viewport.height}
+                    />
+                  </Suspense>
+                </div>
+              </>
+            ) : (
+              <div className="gov-browser-empty">
+                <Monitor size={24} aria-hidden="true" />
+                <span>{t("governance.demos.noSession")}</span>
+              </div>
+            )}
+          </div>
         </Panel>
       </div>
     </>

@@ -52,15 +52,53 @@ after insertion.
   catalog-only.
 - Mutations re-read live state and compare
   `expected_gateway_updated_at`/`expected_policy_updated_at`.
+- AgentCore Policy create/generation `clientToken` values are stable per
+  journal operation and must satisfy the preview SDK's 33-character minimum.
+  The AgentCore wrapper prefixes the 32-character `PolicyChange.id`; callers
+  must not change the journal primary-key format to satisfy an SDK constraint.
 - Shared Engine mutations require the complete live
   `acknowledged_gateway_ids` set.
 - New Engine attachments and policies start `LOG_ONLY`.
 - Editing ACTIVE creates a LOG_ONLY candidate. Cutover activates candidate
   first; rollback reactivates original first.
+- Audit rollback refreshes the live Gateway and Policy immediately before the
+  request, then sends those current timestamps with the selected `audit_id`.
+  The backend restores `before.policy` for in-place edits and
+  `before.policies.selected` for standalone promotion; it never substitutes a
+  different audit entry when `audit_id` is present.
 - The Tools catalog treats live `launchpad-gw` discovery as optional. Cognito
   and Gateway SDK failures must be normalized to `AppError`; `GET /api/tools`
   returns builtins plus a stable `gateway_error` instead of failing the whole
   view. Catalog reads never repair or reset AWS credentials implicitly.
+- The Tools view owns only the tool catalog and Builtin Tool demos. It does not
+  render the legacy fixed-`launchpad-gw` Cedar preview or the local demo
+  decision ledger; selected-Gateway Policy state belongs to Policy Editor,
+  Decisions, and Audit.
+- The Browser demo starts a five-minute `1280x720` AgentCore Browser session,
+  returns a server-generated SigV4 Live View URL, and retains the remote
+  session after Playwright automation disconnects. The frontend must render
+  that URL with the official `BrowserLiveView` component using the exact
+  returned viewport. `DELETE /api/demos/browser/{session_id}` stops a retained
+  demo session, and backend expiry is the leak-prevention fallback.
+- The DCV static asset copy must preserve the SDK's `dcv/` and `lib/`
+  subdirectories. Publish the `dcvjs-esm` tree at both the root SDK path and
+  the Governance route-relative SDK path because decoder workers can resolve
+  from the active SPA route; flattening the tree leaves Live View stuck while
+  worker requests return `404`.
+- The Browser demo lists Browser and Browser Profile resources live from the
+  control plane. Enabling Web Bot Auth requires an explicitly selected READY
+  custom Browser whose live `browserSigning.enabled` is true; the backend
+  revalidates that state before starting the session and otherwise uses
+  `aws.browser.v1`. The demo never creates, updates, or deletes Browser
+  resources.
+- Selecting a READY Browser Profile passes its identifier through
+  `profileConfiguration` to restore cookies and local storage. Saving session
+  state back to that Profile is a separate, default-off choice and must happen
+  while the session is active, before stop. A failed save must not leak the
+  Browser session.
+- The Browser navigation URL and Code Interpreter Python source are controlled
+  operator inputs with the existing backend length and URL safety validation;
+  fixed sample values are defaults, not hard-coded execution payloads.
 - Mutation response: `{"operation": GovernanceOperation}`. Polling uses the
   same envelope.
 - Generation start response:
@@ -82,6 +120,8 @@ after insertion.
 | Promotion has no evidence and no typed override | `governance.evidence_required` |
 | Confirmation name differs | `governance.confirmation_mismatch` |
 | Second mutation while one is running | `governance.operation_in_flight` |
+| Live Policy changes after the rollback preflight | `governance.concurrent_change` |
+| Selected audit entry has no compatible Policy snapshot | `governance.rollback_unavailable` |
 
 ### 5. Good/Base/Bad Cases
 
@@ -104,8 +144,19 @@ after insertion.
 - Lifecycle tests assert LOG_ONLY update, ACTIVE candidate, conservative
   cutover/partial retry/rollback, timestamp conflict, mutex, and audit
   immutability.
+- Wrapper tests pass a 32-character journal ID through Engine, Policy, and
+  generation creates and assert an SDK-valid stable `clientToken`.
+- Standalone lifecycle tests assert
+  `LOG_ONLY -> ACTIVE -> audit rollback -> LOG_ONLY` using the promotion
+  operation ID and the live post-promotion Policy timestamp.
 - Tools tests assert Cognito authentication failures become stable domain
   errors and the catalog still returns builtin tools.
+- Browser demo tests assert that the Live View URL and matching viewport are
+  returned, the session remains active after navigation, and explicit stop
+  releases it.
+- Browser configuration tests assert live options mapping, Web Bot Auth
+  eligibility validation, Profile restoration, opt-in Profile save before
+  stop, and managed-browser defaults.
 - Router tests assert operation and generation envelopes match
   `frontend/src/lib/api.ts`.
 - Final validation is `make verify`; real AWS runs use the guarded
@@ -131,3 +182,17 @@ attachments = registry_console.resolve_gateway_attachments(spec.tools)
 
 The same rule applies to Policy state: journal snapshots support audit and
 rollback, but every current view and mutation preflight reads AWS again.
+
+#### Wrong
+
+```python
+# A journal ID is 32 characters and the preview API rejects it client-side.
+client.create_policy_engine(clientToken=change.id, ...)
+```
+
+#### Correct
+
+```python
+# Keep the journal ID stable and normalize only at the AgentCore wrapper.
+client.create_policy_engine(clientToken=f"launchpad-{change.id}", ...)
+```

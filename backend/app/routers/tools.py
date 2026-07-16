@@ -1,6 +1,8 @@
 """Tool catalog (gateway MCP tools + builtins) and builtin-tool demos."""
 
+import threading
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import APIRouter
@@ -9,6 +11,7 @@ from pydantic import BaseModel, Field
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.services import mcp_client
+from app.services.agentcore.client import control_client
 
 router = APIRouter(prefix="/api", tags=["tools"])
 
@@ -38,6 +41,23 @@ BUILTIN_TOOLS = [
 ]
 
 _cache: dict[str, Any] = {"tools": None, "at": 0.0}
+
+BROWSER_DEMO_SESSION_SECONDS = 300
+BROWSER_DEMO_VIEWPORT = {"width": 1280, "height": 720}
+BROWSER_DEMO_DEFAULT_IDENTIFIER = "aws.browser.v1"
+_browser_demo_lock = threading.Lock()
+_browser_demo_timers: dict[str, threading.Timer] = {}
+
+
+@dataclass(slots=True)
+class _BrowserDemoSession:
+    client: Any
+    browser_identifier: str
+    profile_identifier: str | None
+    save_profile: bool
+
+
+_browser_demo_sessions: dict[str, _BrowserDemoSession] = {}
 
 
 @router.get("/tools")
@@ -117,6 +137,18 @@ def demo_code_interpreter(req: CodeDemoRequest) -> dict[str, Any]:
 
 class BrowserDemoRequest(BaseModel):
     url: str = Field(default="https://example.com", max_length=2000)
+    web_bot_auth: bool = False
+    browser_identifier: str | None = Field(
+        default=None,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9._-]+$",
+    )
+    profile_identifier: str | None = Field(
+        default=None,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
+    save_profile: bool = False
 
 
 _BLOCKED_HOSTS = ("localhost", "metadata.google.internal")
@@ -154,34 +186,243 @@ def _validate_demo_url(url: str) -> None:
         raise AppError("tools.url_blocked", f"url not allowed for the browser demo: {url}")
 
 
+def _list_control_resources(operation: str, result_key: str) -> list[dict[str, Any]]:
+    client = control_client()
+    paginator = client.get_paginator(operation)
+    return [
+        item
+        for page in paginator.paginate()
+        for item in page.get(result_key, [])
+    ]
+
+
+@router.get("/demos/browser/options")
+def browser_demo_options() -> dict[str, Any]:
+    try:
+        custom_browsers = []
+        client = control_client()
+        for summary in _list_control_resources("list_browsers", "browserSummaries"):
+            detail = client.get_browser(browserId=summary["browserId"])
+            custom_browsers.append(
+                {
+                    "identifier": summary["browserId"],
+                    "name": summary.get("name") or summary["browserId"],
+                    "description": summary.get("description", ""),
+                    "status": detail.get("status", summary.get("status", "UNKNOWN")),
+                    "web_bot_auth": bool(
+                        detail.get("browserSigning", {}).get("enabled")
+                    ),
+                }
+            )
+        profiles = [
+            {
+                "identifier": summary["profileId"],
+                "name": summary.get("name") or summary["profileId"],
+                "description": summary.get("description", ""),
+                "status": summary.get("status", "UNKNOWN"),
+                "last_saved_at": (
+                    summary["lastSavedAt"].isoformat()
+                    if hasattr(summary.get("lastSavedAt"), "isoformat")
+                    else summary.get("lastSavedAt")
+                ),
+                "last_saved_browser_identifier": summary.get("lastSavedBrowserId"),
+            }
+            for summary in _list_control_resources(
+                "list_browser_profiles",
+                "profileSummaries",
+            )
+        ]
+    except Exception as exc:
+        raise AppError(
+            "tools.browser_options_failed",
+            "failed to list browser demo resources",
+            status_code=502,
+        ) from exc
+    return {
+        "browsers": sorted(custom_browsers, key=lambda item: item["name"].lower()),
+        "profiles": sorted(profiles, key=lambda item: item["name"].lower()),
+    }
+
+
+def _resolve_browser_demo_configuration(
+    req: BrowserDemoRequest,
+) -> tuple[str, str | None]:
+    if req.save_profile and not req.profile_identifier:
+        raise AppError(
+            "tools.browser_profile_required",
+            "select a browser profile before enabling profile save",
+            status_code=422,
+        )
+
+    browser_identifier = BROWSER_DEMO_DEFAULT_IDENTIFIER
+    try:
+        client = control_client()
+        if req.web_bot_auth:
+            if not req.browser_identifier:
+                raise AppError(
+                    "tools.browser_required",
+                    "select a Web Bot Auth browser",
+                    status_code=422,
+                )
+            browser = client.get_browser(browserId=req.browser_identifier)
+            if (
+                browser.get("status") != "READY"
+                or not browser.get("browserSigning", {}).get("enabled")
+            ):
+                raise AppError(
+                    "tools.browser_web_bot_auth_unavailable",
+                    "the selected browser is not READY with Web Bot Auth enabled",
+                    status_code=422,
+                )
+            browser_identifier = req.browser_identifier
+
+        if req.profile_identifier:
+            profile = client.get_browser_profile(profileId=req.profile_identifier)
+            if profile.get("status") != "READY":
+                raise AppError(
+                    "tools.browser_profile_unavailable",
+                    "the selected browser profile is not READY",
+                    status_code=422,
+                )
+    except AppError:
+        raise
+    except Exception as exc:
+        raise AppError(
+            "tools.browser_configuration_failed",
+            "failed to validate browser demo resources",
+            status_code=502,
+        ) from exc
+    return browser_identifier, req.profile_identifier
+
+
+def _stop_browser_demo_session(session_id: str) -> dict[str, bool | None]:
+    with _browser_demo_lock:
+        session = _browser_demo_sessions.pop(session_id, None)
+        timer = _browser_demo_timers.pop(session_id, None)
+    if timer is not None and timer is not threading.current_thread():
+        timer.cancel()
+    if session is None:
+        return {"stopped": False, "profile_saved": None}
+
+    profile_saved: bool | None = None
+    if session.save_profile and session.profile_identifier:
+        try:
+            session.client.data_plane_client.save_browser_session_profile(
+                browserIdentifier=session.browser_identifier,
+                sessionId=session_id,
+                profileIdentifier=session.profile_identifier,
+            )
+            profile_saved = True
+        except Exception:
+            profile_saved = False
+    session.client.stop()
+    return {"stopped": True, "profile_saved": profile_saved}
+
+
+def _expire_browser_demo_session(session_id: str) -> None:
+    try:
+        _stop_browser_demo_session(session_id)
+    except Exception:
+        pass
+
+
+def _retain_browser_demo_session(
+    client: Any,
+    *,
+    browser_identifier: str,
+    profile_identifier: str | None,
+    save_profile: bool,
+) -> None:
+    session_id = client.session_id
+    if not session_id:
+        raise RuntimeError("browser session did not return an id")
+    timer = threading.Timer(
+        BROWSER_DEMO_SESSION_SECONDS,
+        _expire_browser_demo_session,
+        args=(session_id,),
+    )
+    timer.daemon = True
+    with _browser_demo_lock:
+        _browser_demo_sessions[session_id] = _BrowserDemoSession(
+            client=client,
+            browser_identifier=browser_identifier,
+            profile_identifier=profile_identifier,
+            save_profile=save_profile,
+        )
+        _browser_demo_timers[session_id] = timer
+    timer.start()
+
+
 @router.post("/demos/browser")
 def demo_browser(req: BrowserDemoRequest) -> dict[str, Any]:
     from bedrock_agentcore.tools import BrowserClient
     from playwright.sync_api import sync_playwright
 
     _validate_demo_url(req.url)
+    browser_identifier, profile_identifier = _resolve_browser_demo_configuration(req)
     settings = get_settings()
     client = BrowserClient(region=settings.region)
     started = time.monotonic()
+    retained = False
     try:
-        client.start(session_timeout_seconds=300)
+        start_kwargs: dict[str, Any] = {
+            "identifier": browser_identifier,
+            "session_timeout_seconds": BROWSER_DEMO_SESSION_SECONDS,
+            "viewport": BROWSER_DEMO_VIEWPORT,
+        }
+        if profile_identifier:
+            start_kwargs["profile_configuration"] = {
+                "profileIdentifier": profile_identifier
+            }
+        client.start(**start_kwargs)
         ws_url, headers = client.generate_ws_headers()
         with sync_playwright() as pw:
             browser = pw.chromium.connect_over_cdp(ws_url, headers=headers)
-            page = browser.contexts[0].pages[0] if browser.contexts else (
-                browser.new_context().new_page()
-            )
+            context = browser.contexts[0] if browser.contexts else browser.new_context()
+            page = context.pages[0] if context.pages else context.new_page()
             page.goto(req.url, wait_until="domcontentloaded", timeout=30000)
             title = page.title()
-            browser.close()
+            # Exiting Playwright disconnects automation while the AgentCore session
+            # remains alive for the DCV Live View client.
+        live_view_url = client.generate_live_view_url(
+            expires=BROWSER_DEMO_SESSION_SECONDS
+        )
+        _retain_browser_demo_session(
+            client,
+            browser_identifier=browser_identifier,
+            profile_identifier=profile_identifier,
+            save_profile=req.save_profile,
+        )
+        retained = True
         return {
             "url": req.url,
             "title": title,
             "session_id": client.session_id,
             "latency_ms": int((time.monotonic() - started) * 1000),
+            "live_view_url": live_view_url,
+            "live_view_expires_in": BROWSER_DEMO_SESSION_SECONDS,
+            "viewport": BROWSER_DEMO_VIEWPORT,
+            "browser_identifier": browser_identifier,
+            "web_bot_auth": req.web_bot_auth,
+            "profile_identifier": profile_identifier,
+            "save_profile": req.save_profile,
         }
     finally:
-        try:
-            client.stop()
-        except Exception:
-            pass
+        if not retained:
+            try:
+                client.stop()
+            except Exception:
+                pass
+
+
+@router.delete("/demos/browser/{session_id}")
+def stop_demo_browser(session_id: str) -> dict[str, Any]:
+    try:
+        result = _stop_browser_demo_session(session_id)
+    except Exception as exc:
+        raise AppError(
+            "tools.browser_stop_failed",
+            "failed to stop the browser demo session",
+            status_code=502,
+        ) from exc
+    return {"session_id": session_id, **result}

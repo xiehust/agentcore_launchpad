@@ -100,14 +100,25 @@ export function AuditView({ gatewayId, onNavigate }: Props) {
   const rollback = async () => {
     if (!gateway || !selected?.policy_id || !rollbackReady) return;
     try {
+      const [liveGateway, livePolicies] = await Promise.all([
+        api.getGovernanceGateway(gateway.id),
+        api.listGovernancePolicies(gateway.id),
+      ]);
+      const livePolicy = livePolicies.policies.find(
+        (policy) => policy.id === selected.policy_id,
+      );
+      if (!livePolicy) {
+        throw new Error(t("governance.policyEditor.policyNotFound"));
+      }
       const next = await api.rollbackGovernancePolicy(
-        gateway.id,
+        liveGateway.id,
         selected.policy_id,
         {
-          expected_gateway_updated_at: gateway.updated_at,
-          expected_policy_updated_at: selected.expected_updated_at,
-          acknowledged_gateway_ids: needsSharedAck
-            ? gateway.shared_gateways.map((item) => item.id)
+          expected_gateway_updated_at: liveGateway.updated_at,
+          expected_policy_updated_at: livePolicy.updated_at,
+          acknowledged_gateway_ids:
+            liveGateway.shared_gateways.length > 1
+              ? liveGateway.shared_gateways.map((item) => item.id)
             : [],
           confirmation_name: confirmationName,
           evidence_range: "24h",
