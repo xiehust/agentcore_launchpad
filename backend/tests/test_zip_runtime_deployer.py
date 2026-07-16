@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from app.deployer.environment import runtime_environment
 from app.deployer.zip_runtime import build_zip, sanitize_runtime_name
 from app.services.agentcore import runtime as rt
 
@@ -115,6 +116,19 @@ def test_create_code_runtime_payload():
     assert cfg["entryPoint"] == ["opentelemetry-instrument", "main.py"]
     assert stub.created_with["environmentVariables"] == {"FOO": "1"}
     assert stub.created_with["networkConfiguration"] == {"networkMode": "PUBLIC"}
+
+
+def test_update_code_runtime_can_clear_environment():
+    stub = StubRuntimeControl(["READY"])
+    rt.update_code_runtime(
+        stub,
+        runtime_id="rt-1",
+        s3_bucket="bkt",
+        s3_key="agents/a/pkg.zip",
+        role_arn="arn:role",
+        environment={},
+    )
+    assert stub.updated_with["environmentVariables"] == {}
 
 
 def test_wait_runtime_ready_and_failure():
@@ -311,6 +325,7 @@ def test_bundle_skills_noop_for_non_studio_method(tmp_path):
 
 def _fake_settings():
     return SimpleNamespace(
+        account_id="111122223333",
         region="us-west-2",
         resources={
             "memory_id": "platform-mem-id",
@@ -386,3 +401,102 @@ def test_deploy_stage_update_mode_passes_spec_env(monkeypatch):
 
     assert stub.updated_with is not None and stub.created_with is None
     assert stub.updated_with["environmentVariables"] == {"BEDROCK_API_KEY": "bk-user"}
+
+
+def test_runtime_environment_skips_platform_memory_when_disabled():
+    spec = AgentSpec(
+        name="memory-off",
+        method="container",
+        system_prompt="s",
+        env={"FOO": "bar"},
+        memory={"short_term": False, "long_term": False},
+    )
+    assert runtime_environment(spec, _fake_settings().resources) == {"FOO": "bar"}
+
+
+def test_container_update_clears_runtime_environment_when_memory_disabled(monkeypatch):
+    from app.core.db import SessionLocal
+    from app.deployer import container
+    from app.deployer.pipeline import StageContext
+    from app.models.ledger import Agent
+
+    spec = AgentSpec(
+        name="container-memory-disabled",
+        method="container",
+        system_prompt="s",
+        memory={"short_term": False, "long_term": False},
+    )
+    db = SessionLocal()
+    agent = Agent(
+        name=spec.name,
+        method="container",
+        status="active",
+        resource_id="rt-1",
+        arn="arn:rt-1",
+        version="1",
+        spec=spec.model_dump(),
+    )
+    db.add(agent)
+    db.commit()
+    agent_id = agent.id
+    db.close()
+
+    stub = StubRuntimeControl(["READY"])
+    monkeypatch.setattr(container, "control_client", lambda: stub)
+    monkeypatch.setattr(container, "get_settings", _fake_settings)
+
+    ctx = StageContext(agent_id=agent_id, deployment_id="d-disabled", job_id="j-disabled")
+    ctx.scratch["mode"] = "update"
+    db = SessionLocal()
+    agent = db.get(Agent, agent_id)
+    db.close()
+    container._stage_deploy(ctx, agent)
+
+    assert stub.updated_with["environmentVariables"] == {}
+
+
+@pytest.mark.parametrize("mode", ["create", "update"])
+def test_container_deploy_stage_injects_platform_memory(monkeypatch, mode):
+    from app.core.db import SessionLocal
+    from app.deployer import container
+    from app.deployer.pipeline import StageContext
+    from app.models.ledger import Agent
+
+    spec = AgentSpec(
+        name=f"container-memory-{mode}",
+        method="container",
+        system_prompt="s",
+        env={"CUSTOM": "value", "LAUNCHPAD_MEMORY_ID": "user-supplied"},
+        memory={"short_term": False, "long_term": True},
+    )
+    db = SessionLocal()
+    agent = Agent(
+        name=spec.name,
+        method="container",
+        status="active" if mode == "update" else "deploying",
+        resource_id="rt-1" if mode == "update" else None,
+        arn="arn:rt-1" if mode == "update" else None,
+        version="1",
+        spec=spec.model_dump(),
+    )
+    db.add(agent)
+    db.commit()
+    agent_id = agent.id
+    db.close()
+
+    stub = StubRuntimeControl(["READY"])
+    monkeypatch.setattr(container, "control_client", lambda: stub)
+    monkeypatch.setattr(container, "get_settings", _fake_settings)
+
+    ctx = StageContext(agent_id=agent_id, deployment_id="d-container", job_id="j-container")
+    ctx.scratch["mode"] = mode
+    db = SessionLocal()
+    agent = db.get(Agent, agent_id)
+    db.close()
+    container._stage_deploy(ctx, agent)
+
+    request = stub.updated_with if mode == "update" else stub.created_with
+    assert request["environmentVariables"] == {
+        "CUSTOM": "value",
+        "LAUNCHPAD_MEMORY_ID": "platform-mem-id",
+    }

@@ -17,6 +17,7 @@ from typing import Any
 import boto3
 
 from app.core.config import get_settings
+from app.deployer.environment import runtime_environment
 from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
@@ -233,7 +234,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 "container_uri": ctx.scratch.get("image_uri") or f"{registry}/{repo}:{tag}",
                 "role_arn": ctx.scratch.get("execution_role_arn")
                 or settings.resources.get("execution_role_arn", ""),
-                "environment": spec.env or None,
+                "environment": runtime_environment(spec, settings.resources),
                 "filesystem_configurations": _filesystem_configurations(spec) or None,
                 "vpc": _vpc(spec),
             }

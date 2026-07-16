@@ -26,6 +26,7 @@ from typing import Any
 import boto3
 
 from app.core.config import get_settings
+from app.deployer.environment import runtime_environment
 from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
@@ -373,12 +374,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
 
         def _kwargs() -> dict:
             spec = AgentSpec(**row.spec)
-            environment = dict(spec.env)  # user env (studio maps OPENAI/BEDROCK API keys here)
-            if (spec.memory.short_term or spec.memory.long_term) and settings.resources.get(
-                "memory_id"
-            ):
-                # platform-injected keys win over any same-named user env value
-                environment["LAUNCHPAD_MEMORY_ID"] = settings.resources["memory_id"]
+            environment = runtime_environment(spec, settings.resources)
             return {
                 "s3_bucket": ctx.scratch.get("s3_bucket")
                 or settings.resources.get("artifacts_bucket", ""),
@@ -386,7 +382,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
                 or f"agents/{row.name}/deployment_package.zip",
                 "role_arn": ctx.scratch.get("execution_role_arn")
                 or settings.resources.get("execution_role_arn", ""),
-                "environment": environment or None,
+                "environment": environment,
                 # A2A runtimes must echo the protocol on update too —
                 # UpdateAgentRuntime resets an omitted protocolConfiguration
                 "protocol": spec.protocol,

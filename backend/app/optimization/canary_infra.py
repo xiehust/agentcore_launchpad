@@ -26,6 +26,7 @@ from typing import Any
 import boto3
 
 from app.core.config import get_settings
+from app.deployer.environment import runtime_environment
 from app.deployer.zip_runtime import (
     _generate_code,
     _method_requirements,
@@ -146,11 +147,7 @@ def mint_candidate_version(
     (uploader or _default_uploader)(str(zip_path), bucket, s3_key)
     log(f"candidate artifact → s3://{bucket}/{s3_key} · {source}")
 
-    environment = dict(edited_spec.env)
-    if (
-        edited_spec.memory.short_term or edited_spec.memory.long_term
-    ) and settings.resources.get("memory_id"):
-        environment["LAUNCHPAD_MEMORY_ID"] = settings.resources["memory_id"]
+    environment = runtime_environment(edited_spec, settings.resources)
 
     resp = rt.update_code_runtime(
         control_client,
@@ -158,7 +155,7 @@ def mint_candidate_version(
         s3_bucket=bucket,
         s3_key=s3_key,
         role_arn=role_arn,
-        environment=environment or None,
+        environment=environment,
         protocol=edited_spec.protocol,
     )
     v_candidate = str(resp["agentRuntimeVersion"])

@@ -127,7 +127,7 @@ def update_code_runtime(
         "networkConfiguration": {"networkMode": "PUBLIC"},
         "roleArn": role_arn,
     }
-    if environment:
+    if environment is not None:
         params["environmentVariables"] = dict(environment)
     proto = _protocol_configuration(protocol)
     if proto:
@@ -153,7 +153,7 @@ def update_container_runtime(
         "networkConfiguration": _network_configuration(vpc),
         "roleArn": role_arn,
     }
-    if environment:
+    if environment is not None:
         params["environmentVariables"] = dict(environment)
     if filesystem_configurations:
         params["filesystemConfigurations"] = filesystem_configurations

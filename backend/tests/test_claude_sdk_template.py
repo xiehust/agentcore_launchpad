@@ -1,7 +1,12 @@
 """Claude SDK container template: render, build context, codebuild pipeline."""
 
+import asyncio
+import importlib.util
 import py_compile
+import sys
+from contextlib import contextmanager
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -25,6 +30,34 @@ def test_render_replaces_placeholders():
     assert "MAX_TURNS = 7" in code
     # Bedrock switch is baked into the Dockerfile env, never set in code
     assert 'os.environ["CLAUDE_CODE_USE_BEDROCK"]' not in code
+    assert 'MEMORY_SHORT_TERM = "True" == "True"' in code
+    assert 'MEMORY_LONG_TERM = "False" == "True"' in code
+    assert "__LAUNCHPAD_" not in code
+
+
+def test_render_memory_flags():
+    spec = AgentSpec(
+        **{
+            **SPEC.model_dump(),
+            "memory": {"short_term": False, "long_term": True},
+        }
+    )
+    code = render_main_py(spec)
+    assert 'MEMORY_SHORT_TERM = "False" == "True"' in code
+    assert 'MEMORY_LONG_TERM = "True" == "True"' in code
+
+
+def test_raw_memory_placeholders_fail_closed_for_stale_renderer():
+    source = Path("app/templates/claude_sdk_agent/main.py.tmpl").read_text()
+    assignments = "\n".join(
+        line
+        for line in source.splitlines()
+        if line.startswith(("MEMORY_SHORT_TERM =", "MEMORY_LONG_TERM ="))
+    )
+    values: dict = {}
+    exec(assignments, values)
+    assert values["MEMORY_SHORT_TERM"] is False
+    assert values["MEMORY_LONG_TERM"] is False
 
 
 def test_render_parses_mcp_servers_from_env():
@@ -113,6 +146,278 @@ def test_assemble_build_context(tmp_path: Path):
     assert "linux/arm64" in dockerfile
     assert "CLAUDE_CODE_USE_BEDROCK=1" in dockerfile
     assert "@anthropic-ai/claude-code" in dockerfile
+    requirements = (ctx / "requirements.txt").read_text()
+    assert "bedrock-agentcore==1.17.*" in requirements
+
+
+@pytest.fixture
+def rendered_memory_module(tmp_path: Path, monkeypatch):
+    """Import a rendered runtime with tracing replaced by side-effect-free fakes."""
+    tracing = ModuleType("tracing")
+
+    @contextmanager
+    def traced_invocation(_agent_name, _session_id):
+        yield object()
+
+    tracing.traced_invocation = traced_invocation
+    tracing.record_tool_call = lambda **_kwargs: None
+    tracing.record_llm_usage = lambda **_kwargs: None
+    tracing.record_result = lambda *_args, **_kwargs: None
+    monkeypatch.setitem(sys.modules, "tracing", tracing)
+    monkeypatch.setenv("LAUNCHPAD_MEMORY_ID", "memory-123")
+    monkeypatch.setenv("AWS_REGION", "us-west-2")
+
+    spec = AgentSpec(
+        **{
+            **SPEC.model_dump(),
+            "memory": {"short_term": True, "long_term": True},
+        }
+    )
+    target = tmp_path / "rendered_memory_main.py"
+    target.write_text(render_main_py(spec), encoding="utf-8")
+    module_spec = importlib.util.spec_from_file_location(
+        "rendered_claude_memory_main", target
+    )
+    module = importlib.util.module_from_spec(module_spec)
+    monkeypatch.setitem(sys.modules, module_spec.name, module)
+    module_spec.loader.exec_module(module)
+    return module
+
+
+class FakeMemorySession:
+    def __init__(self):
+        self.turns = [
+            [
+                {"role": "USER", "content": {"text": "new question"}},
+                {"role": "ASSISTANT", "content": {"text": "new answer"}},
+            ],
+            [
+                {"role": "USER", "content": {"text": "old question"}},
+                {"role": "ASSISTANT", "content": {"text": "old answer"}},
+            ],
+        ]
+        self.search_calls: list[dict] = []
+        self.saved: list[list] = []
+        self.fail_reads = False
+        self.fail_writes = False
+
+    def get_last_k_turns(self, **kwargs):
+        if self.fail_reads:
+            raise RuntimeError("read failed with secret prompt")
+        assert kwargs == {"k": 5}
+        return self.turns
+
+    def search_long_term_memories(self, **kwargs):
+        if self.fail_reads:
+            raise RuntimeError("read failed with secret prompt")
+        self.search_calls.append(kwargs)
+        namespace = kwargs["namespace"]
+        if namespace.startswith("/facts/"):
+            return [{"content": {"text": "customer has a standing appointment"}}]
+        return [{"content": {"text": "prefers morning meetings"}}]
+
+    def add_turns(self, *, messages):
+        if self.fail_writes:
+            raise RuntimeError("write failed with secret response")
+        self.saved.append(messages)
+        return {"eventId": "event-1"}
+
+
+def _install_fake_memory_manager(module, monkeypatch):
+    sessions: list[tuple[str, str, FakeMemorySession]] = []
+
+    class FakeMemoryManager:
+        def __init__(self, memory_id, region_name=None):
+            assert memory_id == "memory-123"
+            assert region_name == "us-west-2"
+
+        def create_memory_session(self, *, actor_id, session_id):
+            session = FakeMemorySession()
+            sessions.append((actor_id, session_id, session))
+            return session
+
+    monkeypatch.setattr(module, "MemorySessionManager", FakeMemoryManager)
+    return sessions
+
+
+def test_memory_context_restores_history_and_long_term_records(
+    rendered_memory_module, monkeypatch
+):
+    module = rendered_memory_module
+    sessions = _install_fake_memory_manager(module, monkeypatch)
+    memory = module.AgentCoreMemory("memory-123", "agent-a__river", "session-one")
+
+    context = memory.context_for("What do you remember?")
+
+    _, _, session = sessions[0]
+    assert context.index("old question") < context.index("new question")
+    assert "customer has a standing appointment" in context
+    assert "prefers morning meetings" in context
+    assert [call["namespace"] for call in session.search_calls] == [
+        "/facts/agent-a__river",
+        "/preferences/agent-a__river",
+    ]
+    assert all(call["query"] == "What do you remember?" for call in session.search_calls)
+    assert len(context) <= module.MAX_MEMORY_CONTEXT_CHARS
+
+
+def test_memory_scope_uses_exact_actor_and_session(
+    rendered_memory_module, monkeypatch
+):
+    module = rendered_memory_module
+    sessions = _install_fake_memory_manager(module, monkeypatch)
+
+    module.AgentCoreMemory("memory-123", "agent-a__river", "session-one")
+    module.AgentCoreMemory("memory-123", "agent-a__river", "session-two")
+    module.AgentCoreMemory("memory-123", "agent-b__river", "session-one")
+
+    assert [(actor, session) for actor, session, _ in sessions] == [
+        ("agent-a__river", "session-one"),
+        ("agent-a__river", "session-two"),
+        ("agent-b__river", "session-one"),
+    ]
+
+
+def test_user_prompt_hook_returns_additional_context(rendered_memory_module):
+    module = rendered_memory_module
+    prompts: list[str] = []
+    memory = SimpleNamespace(
+        context_for=lambda prompt: prompts.append(prompt) or "remembered context"
+    )
+
+    result = asyncio.run(
+        module._memory_hook(memory)(
+            {"prompt": "original prompt"},
+            None,
+            {},
+        )
+    )
+
+    assert prompts == ["original prompt"]
+    assert result["hookSpecificOutput"] == {
+        "hookEventName": "UserPromptSubmit",
+        "additionalContext": "remembered context",
+    }
+
+
+def test_run_query_wires_request_local_memory_hook(
+    rendered_memory_module, monkeypatch
+):
+    module = rendered_memory_module
+    captured = {}
+    memory = SimpleNamespace(context_for=lambda _prompt: "context")
+
+    async def fake_query(*, prompt, options):
+        captured["prompt"] = prompt
+        captured["options"] = options
+        if False:
+            yield None
+
+    monkeypatch.setattr(module, "query", fake_query)
+    asyncio.run(module.run_query("original prompt", memory))
+
+    assert captured["prompt"] == "original prompt"
+    matcher = captured["options"].hooks["UserPromptSubmit"][0]
+    assert len(matcher.hooks) == 1
+
+
+def test_invoke_persists_completed_turn_once(rendered_memory_module, monkeypatch):
+    module = rendered_memory_module
+    saved: list[tuple[str, str]] = []
+    memory = SimpleNamespace(save_turn=lambda prompt, response: saved.append((prompt, response)))
+    monkeypatch.setattr(module, "_create_memory", lambda actor, session: memory)
+
+    async def fake_run_query(prompt, request_memory):
+        assert prompt == "hello"
+        assert request_memory is memory
+        return module.QueryOutcome(result="hello back", usage={"input_tokens": 2})
+
+    monkeypatch.setattr(module, "run_query", fake_run_query)
+    result = asyncio.run(
+        module.invoke(
+            {"prompt": "hello", "actor_id": "agent-a__river"},
+            SimpleNamespace(session_id="session-one"),
+        )
+    )
+
+    assert result["result"] == "hello back"
+    assert saved == [("hello", "hello back")]
+
+
+def test_save_turn_writes_one_user_assistant_event(
+    rendered_memory_module, monkeypatch
+):
+    module = rendered_memory_module
+    sessions = _install_fake_memory_manager(module, monkeypatch)
+    memory = module.AgentCoreMemory("memory-123", "agent-a__river", "session-one")
+
+    assert memory.save_turn("hello", "hello back") is True
+
+    (messages,) = sessions[0][2].saved
+    assert [(message.text, message.role) for message in messages] == [
+        ("hello", module.MessageRole.USER),
+        ("hello back", module.MessageRole.ASSISTANT),
+    ]
+
+
+def test_query_failure_does_not_persist_turn(rendered_memory_module, monkeypatch):
+    module = rendered_memory_module
+    saved: list[tuple[str, str]] = []
+    memory = SimpleNamespace(save_turn=lambda prompt, response: saved.append((prompt, response)))
+    monkeypatch.setattr(module, "_create_memory", lambda actor, session: memory)
+
+    async def failed_query(_prompt, _memory):
+        raise RuntimeError("claude failed")
+
+    monkeypatch.setattr(module, "run_query", failed_query)
+    with pytest.raises(RuntimeError, match="claude failed"):
+        asyncio.run(
+            module.invoke(
+                {"prompt": "hello", "actor_id": "agent-a__river"},
+                SimpleNamespace(session_id="session-one"),
+            )
+        )
+    assert saved == []
+
+
+def test_memory_failures_warn_without_leaking_content(
+    rendered_memory_module, monkeypatch, caplog
+):
+    module = rendered_memory_module
+    sessions = _install_fake_memory_manager(module, monkeypatch)
+    memory = module.AgentCoreMemory("memory-123", "agent-a__river", "session-one")
+    session = sessions[0][2]
+    session.fail_reads = True
+
+    assert memory.context_for("secret prompt") == ""
+    session.fail_writes = True
+    assert memory.save_turn("secret prompt", "secret response") is False
+
+    assert "short-term retrieval failed for session session-one" in caplog.text
+    assert "long-term retrieval failed for session session-one" in caplog.text
+    assert "persistence failed for session session-one" in caplog.text
+    assert "secret prompt" not in caplog.text
+    assert "secret response" not in caplog.text
+
+
+def test_memory_disabled_or_missing_actor_skips_manager(
+    rendered_memory_module, monkeypatch
+):
+    module = rendered_memory_module
+
+    class UnexpectedManager:
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("memory manager should not be created")
+
+    monkeypatch.setattr(module, "MemorySessionManager", UnexpectedManager)
+    monkeypatch.setattr(module, "MEMORY_SHORT_TERM", False)
+    monkeypatch.setattr(module, "MEMORY_LONG_TERM", False)
+    assert module._create_memory("agent-a__river", "session-one") is None
+
+    monkeypatch.setattr(module, "MEMORY_SHORT_TERM", True)
+    assert module._create_memory("", "session-one") is None
+    monkeypatch.setattr(module, "MEMORY_ID", "")
+    assert module._create_memory("agent-a__river", "session-one") is None
 
 
 class StubCodeBuild:

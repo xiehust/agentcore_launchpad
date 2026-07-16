@@ -14,15 +14,21 @@ auto-instrumentation — tracing.py emits the gen_ai spans/events manually
 query's token usage), parented under the auto-instrumented /invocations span.
 """
 
+import asyncio
 import json
+import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any
 
 import tracing
+from bedrock_agentcore.memory import MemorySessionManager
+from bedrock_agentcore.memory.constants import ConversationalMessage, MessageRole
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
+    HookMatcher,
     ResultMessage,
     TextBlock,
     ToolResultBlock,
@@ -37,11 +43,163 @@ SYSTEM_PROMPT = __LAUNCHPAD_SYSTEM_PROMPT__
 MAX_TURNS = __LAUNCHPAD_MAX_TURNS__
 ALLOWED_TOOLS: list[str] = __LAUNCHPAD_ALLOWED_TOOLS__
 MCP_SERVERS: dict[str, Any] = __LAUNCHPAD_MCP_SERVERS__
+MEMORY_SHORT_TERM = "__LAUNCHPAD_MEMORY_SHORT_TERM__" == "True"
+MEMORY_LONG_TERM = "__LAUNCHPAD_MEMORY_LONG_TERM__" == "True"
+MEMORY_ID = os.environ.get("LAUNCHPAD_MEMORY_ID", "")
+
+SHORT_TERM_TURNS = 5
+LONG_TERM_TOP_K = 3
+MAX_MEMORY_QUERY_CHARS = 900
+MAX_MEMORY_ITEM_CHARS = 1000
+MAX_MEMORY_CONTEXT_CHARS = 6000
+
+logger = logging.getLogger(__name__)
 
 app = BedrockAgentCoreApp()
 
 
-def build_options() -> ClaudeAgentOptions:
+def _memory_warning(operation: str, session_id: str, exc: Exception) -> None:
+    logger.warning(
+        "AgentCore Memory %s failed for session %s (%s)",
+        operation,
+        session_id,
+        type(exc).__name__,
+    )
+
+
+def _text_value(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, dict):
+        return ""
+    for key in ("text", "content", "value"):
+        text = _text_value(value.get(key))
+        if text:
+            return text
+    return ""
+
+
+def _bounded_item(value: Any) -> str:
+    text = _text_value(value).strip()
+    if len(text) <= MAX_MEMORY_ITEM_CHARS:
+        return text
+    return f"{text[: MAX_MEMORY_ITEM_CHARS - 3].rstrip()}..."
+
+
+def _bounded_context(sections: list[str]) -> str:
+    text = "\n\n".join(section for section in sections if section).strip()
+    if len(text) <= MAX_MEMORY_CONTEXT_CHARS:
+        return text
+    return f"{text[: MAX_MEMORY_CONTEXT_CHARS - 3].rstrip()}..."
+
+
+class AgentCoreMemory:
+    """Request-local adapter over the non-thread-safe AgentCore memory manager."""
+
+    def __init__(self, memory_id: str, actor_id: str, session_id: str):
+        self.actor_id = actor_id
+        self.session_id = session_id
+        manager = MemorySessionManager(
+            memory_id=memory_id,
+            region_name=os.environ.get("AWS_REGION"),
+        )
+        self.session = manager.create_memory_session(
+            actor_id=actor_id,
+            session_id=session_id,
+        )
+
+    def context_for(self, prompt: str) -> str:
+        sections: list[str] = []
+        if MEMORY_SHORT_TERM:
+            try:
+                turns = self.session.get_last_k_turns(k=SHORT_TERM_TURNS)
+                lines = ["Recent conversation:"]
+                for turn in reversed(turns):
+                    for message in turn:
+                        role = message.get("role", "")
+                        role = getattr(role, "value", role)
+                        role = str(role).upper()
+                        text = _bounded_item(message.get("content", ""))
+                        if role in {"USER", "ASSISTANT"} and text:
+                            lines.append(f"{role.title()}: {text}")
+                if len(lines) > 1:
+                    sections.append("\n".join(lines))
+            except Exception as exc:
+                _memory_warning("short-term retrieval", self.session_id, exc)
+
+        if MEMORY_LONG_TERM:
+            query_text = prompt[:MAX_MEMORY_QUERY_CHARS] or "user context"
+            for label, namespace in (
+                ("Relevant facts:", f"/facts/{self.actor_id}"),
+                ("User preferences:", f"/preferences/{self.actor_id}"),
+            ):
+                try:
+                    records = self.session.search_long_term_memories(
+                        query=query_text,
+                        namespace=namespace,
+                        top_k=LONG_TERM_TOP_K,
+                        max_results=LONG_TERM_TOP_K,
+                    )
+                    items = [_bounded_item(record.get("content", "")) for record in records]
+                    items = [item for item in items if item]
+                    if items:
+                        sections.append("\n".join([label, *(f"- {item}" for item in items)]))
+                except Exception as exc:
+                    _memory_warning("long-term retrieval", self.session_id, exc)
+
+        if not sections:
+            return ""
+        return _bounded_context(
+            ["AgentCore Memory context (reference only):", *sections]
+        )
+
+    def save_turn(self, prompt: str, response: str) -> bool:
+        try:
+            self.session.add_turns(
+                messages=[
+                    ConversationalMessage(prompt, MessageRole.USER),
+                    ConversationalMessage(response, MessageRole.ASSISTANT),
+                ]
+            )
+            return True
+        except Exception as exc:
+            _memory_warning("persistence", self.session_id, exc)
+            return False
+
+
+def _create_memory(actor_id: str, session_id: str) -> AgentCoreMemory | None:
+    if not (MEMORY_SHORT_TERM or MEMORY_LONG_TERM) or not MEMORY_ID or not actor_id:
+        return None
+    try:
+        return AgentCoreMemory(MEMORY_ID, actor_id, session_id)
+    except Exception as exc:
+        _memory_warning("initialization", session_id, exc)
+        return None
+
+
+def _memory_hook(memory: AgentCoreMemory):
+    async def user_prompt_submit(
+        input_data: dict[str, Any],
+        _tool_use_id: str | None,
+        _context: dict[str, Any],
+    ) -> dict[str, Any]:
+        prompt = str(input_data.get("prompt", "")).strip()
+        if not prompt:
+            return {}
+        context_text = await asyncio.to_thread(memory.context_for, prompt)
+        if not context_text:
+            return {}
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "UserPromptSubmit",
+                "additionalContext": context_text,
+            }
+        }
+
+    return user_prompt_submit
+
+
+def build_options(memory: AgentCoreMemory | None = None) -> ClaudeAgentOptions:
     kwargs: dict[str, Any] = {
         "system_prompt": SYSTEM_PROMPT,
         "model": MODEL_ID,
@@ -54,6 +212,12 @@ def build_options() -> ClaudeAgentOptions:
         kwargs["allowed_tools"] = ALLOWED_TOOLS
     if MCP_SERVERS:
         kwargs["mcp_servers"] = MCP_SERVERS
+    if memory:
+        kwargs["hooks"] = {
+            "UserPromptSubmit": [
+                HookMatcher(matcher=None, hooks=[_memory_hook(memory)]),
+            ]
+        }
     return ClaudeAgentOptions(**kwargs)
 
 
@@ -85,7 +249,9 @@ def _result_text(content: Any) -> str:
     return json.dumps(content) if content is not None else ""
 
 
-async def run_query(prompt: str) -> QueryOutcome:
+async def run_query(
+    prompt: str, memory: AgentCoreMemory | None = None
+) -> QueryOutcome:
     """One SDK query: collect the assistant text, tool calls AND token usage.
 
     Tool use arrives as ToolUseBlock (in AssistantMessage) and its matching
@@ -95,7 +261,7 @@ async def run_query(prompt: str) -> QueryOutcome:
     chunks: list[str] = []
     outcome = QueryOutcome()
     calls: dict[str, ToolCall] = {}
-    async for message in query(prompt=prompt, options=build_options()):
+    async for message in query(prompt=prompt, options=build_options(memory)):
         if isinstance(message, AssistantMessage):
             for block in message.content:
                 if isinstance(block, TextBlock):
@@ -140,9 +306,11 @@ async def invoke(payload: dict[str, Any], context: Any = None) -> dict[str, Any]
     session_id = str(
         getattr(context, "session_id", "") or payload.get("session_id", "") or "adhoc"
     )
+    actor_id = str(payload.get("actor_id", "")).strip()
+    memory = _create_memory(actor_id, session_id)
 
     with tracing.traced_invocation(AGENT_NAME, session_id) as span:
-        outcome = await run_query(prompt)  # unhandled errors mark the span ERROR
+        outcome = await run_query(prompt, memory)  # unhandled errors mark the span ERROR
         for call in outcome.tool_calls:
             tracing.record_tool_call(
                 session_id=session_id,
@@ -166,6 +334,8 @@ async def invoke(payload: dict[str, Any], context: Any = None) -> dict[str, Any]
             output=outcome.result,
             model=MODEL_ID,
         )
+        if memory:
+            await asyncio.to_thread(memory.save_turn, prompt, outcome.result)
     return {"result": outcome.result, "usage": outcome.usage}
 
 

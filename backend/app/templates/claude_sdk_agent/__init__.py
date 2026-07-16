@@ -51,6 +51,8 @@ def render_main_py(spec: AgentSpec) -> str:
         .replace("__LAUNCHPAD_MAX_TURNS__", str(spec.max_iterations))
         .replace("__LAUNCHPAD_ALLOWED_TOOLS__", repr(allowed))
         .replace("__LAUNCHPAD_MCP_SERVERS__", repr(mcp_config))
+        .replace("__LAUNCHPAD_MEMORY_SHORT_TERM__", repr(spec.memory.short_term))
+        .replace("__LAUNCHPAD_MEMORY_LONG_TERM__", repr(spec.memory.long_term))
     )
 
 

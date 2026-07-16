@@ -109,3 +109,15 @@ def test_update_runtime_public_no_fs():
     )
     assert stub.updated_with["networkConfiguration"] == {"networkMode": "PUBLIC"}
     assert "filesystemConfigurations" not in stub.updated_with
+
+
+def test_update_runtime_can_clear_environment():
+    stub = StubControl()
+    rt.update_container_runtime(
+        stub,
+        runtime_id="rt-1",
+        container_uri="img",
+        role_arn="arn:role",
+        environment={},
+    )
+    assert stub.updated_with["environmentVariables"] == {}
