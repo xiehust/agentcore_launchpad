@@ -18,7 +18,7 @@ import asyncio
 import json
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import tracing
@@ -30,7 +30,7 @@ from claude_agent_sdk import (
     ClaudeAgentOptions,
     HookMatcher,
     ResultMessage,
-    TextBlock,
+    StreamEvent,
     ToolResultBlock,
     ToolUseBlock,
     UserMessage,
@@ -207,6 +207,9 @@ def build_options(memory: AgentCoreMemory | None = None) -> ClaudeAgentOptions:
         "cwd": "/app/workspace",
         "permission_mode": "bypassPermissions",
         "setting_sources": ["project"],  # pick up /app/.claude (subagents, skills)
+        # Emit StreamEvent deltas so the entrypoint can stream text token-by-token
+        # instead of only whole TextBlocks (which would arrive as one chunk).
+        "include_partial_messages": True,
     }
     if ALLOWED_TOOLS:
         kwargs["allowed_tools"] = ALLOWED_TOOLS
@@ -232,13 +235,6 @@ class ToolCall:
     is_error: bool = False
 
 
-@dataclass
-class QueryOutcome:
-    result: str = ""
-    usage: dict[str, Any] = field(default_factory=dict)
-    tool_calls: list[ToolCall] = field(default_factory=list)
-
-
 def _result_text(content: Any) -> str:
     """Flatten a ToolResultBlock's content (str or [{type: text, ...}])."""
     if isinstance(content, str):
@@ -249,69 +245,105 @@ def _result_text(content: Any) -> str:
     return json.dumps(content) if content is not None else ""
 
 
-async def run_query(
-    prompt: str, memory: AgentCoreMemory | None = None
-) -> QueryOutcome:
-    """One SDK query: collect the assistant text, tool calls AND token usage.
+def _stream_delta(text: str) -> dict[str, Any]:
+    """A converse-stream text frame, wrapped as BedrockAgentCoreApp serves it."""
+    return {"event": {"contentBlockDelta": {"delta": {"text": text}}}}
 
-    Tool use arrives as ToolUseBlock (in AssistantMessage) and its matching
-    ToolResultBlock (in UserMessage), paired by tool_use_id — captured so
-    telemetry can emit one execute_tool span per call.
-    """
-    chunks: list[str] = []
-    outcome = QueryOutcome()
-    calls: dict[str, ToolCall] = {}
-    async for message in query(prompt=prompt, options=build_options(memory)):
-        if isinstance(message, AssistantMessage):
-            for block in message.content:
-                if isinstance(block, TextBlock):
-                    chunks.append(block.text)
-                elif isinstance(block, ToolUseBlock):
-                    # SDK-MCP tools are namespaced mcp__<server>__<name>;
-                    # Claude Code built-ins (Task, …) pass through unchanged.
-                    name = block.name.split("__")[-1]
-                    calls[block.id] = ToolCall(
-                        call_id=block.id, name=name, input=dict(block.input or {})
-                    )
-        elif isinstance(message, UserMessage):
-            content = message.content if isinstance(message.content, list) else []
-            for block in content:
-                if isinstance(block, ToolResultBlock) and block.tool_use_id in calls:
-                    call = calls[block.tool_use_id]
-                    call.result_text = _result_text(block.content)
-                    call.is_error = bool(block.is_error)
-        elif isinstance(message, ResultMessage):
-            if message.is_error:
-                raise RuntimeError(f"claude query failed: {message.result}")
-            outcome.usage = {
-                **(message.usage or {}),
-                "duration_ms": message.duration_ms,
-                "num_turns": message.num_turns,
-                "total_cost_usd": message.total_cost_usd,
-            }
-            if message.result and not chunks:
-                chunks.append(str(message.result))
-    outcome.result = "\n".join(chunks).strip()
-    outcome.tool_calls = list(calls.values())
-    return outcome
+
+def _stream_tool(name: str, tool_use_id: str) -> dict[str, Any]:
+    """A converse-stream tool-use start frame."""
+    return {"event": {"contentBlockStart": {"start": {
+        "toolUse": {"name": name, "toolUseId": tool_use_id}
+    }}}}
 
 
 @app.entrypoint
-async def invoke(payload: dict[str, Any], context: Any = None) -> dict[str, Any]:
+async def invoke(payload: dict[str, Any], context: Any = None):
+    """Stream one SDK query as converse-stream SSE frames (token-level text +
+    tool-use starts), then persist telemetry + memory once the query finishes.
+
+    Being an async generator makes BedrockAgentCoreApp serve the response as
+    ``text/event-stream``, encoding each yielded dict as ``data: {json}\\n\\n``.
+    The frames use the InvokeHarness/converse shape so the platform's
+    ``flatten_sse_text`` (buffered /v1, evaluation, canary) rejoins the full text
+    and the Chat playground maps ``tool``/``delta`` events — no per-caller change.
+
+    Text streams from ``StreamEvent`` deltas (``include_partial_messages``); tool
+    calls come from the completed ``ToolUseBlock`` (name known, before its result)
+    and double as telemetry. Errors are surfaced as an ``internalServerException``
+    frame — which both ``flatten_sse_text`` and the chat mapper treat as an error
+    — then re-raised so the ``invoke_agent`` span is marked ERROR.
+    """
     if isinstance(payload, (str, bytes)):
         payload = json.loads(payload)
     prompt = str(payload.get("prompt", "")).strip()
     if not prompt:
-        return {"error": "payload must include a non-empty 'prompt'"}
+        yield {"event": {"internalServerException": {
+            "message": "payload must include a non-empty 'prompt'"
+        }}}
+        return
     session_id = str(
         getattr(context, "session_id", "") or payload.get("session_id", "") or "adhoc"
     )
     actor_id = str(payload.get("actor_id", "")).strip()
     memory = _create_memory(actor_id, session_id)
 
+    chunks: list[str] = []
+    calls: dict[str, ToolCall] = {}
+    usage: dict[str, Any] = {}
+
     with tracing.traced_invocation(AGENT_NAME, session_id) as span:
-        outcome = await run_query(prompt, memory)  # unhandled errors mark the span ERROR
-        for call in outcome.tool_calls:
+        try:
+            async for message in query(prompt=prompt, options=build_options(memory)):
+                if isinstance(message, StreamEvent):
+                    event = message.event or {}
+                    if event.get("type") == "content_block_delta":
+                        delta = event.get("delta", {})
+                        text = delta.get("text") if delta.get("type") == "text_delta" else ""
+                        if text:
+                            chunks.append(text)
+                            yield _stream_delta(text)
+                elif isinstance(message, AssistantMessage):
+                    for block in message.content:
+                        if isinstance(block, ToolUseBlock):
+                            # SDK-MCP tools are namespaced mcp__<server>__<name>;
+                            # Claude Code built-ins (Task, …) pass through unchanged.
+                            name = block.name.split("__")[-1]
+                            calls[block.id] = ToolCall(
+                                call_id=block.id, name=name, input=dict(block.input or {})
+                            )
+                            yield _stream_tool(name, block.id)
+                        # TextBlock text already streamed via StreamEvent deltas —
+                        # do not re-emit it here.
+                elif isinstance(message, UserMessage):
+                    content = message.content if isinstance(message.content, list) else []
+                    for block in content:
+                        if isinstance(block, ToolResultBlock) and block.tool_use_id in calls:
+                            call = calls[block.tool_use_id]
+                            call.result_text = _result_text(block.content)
+                            call.is_error = bool(block.is_error)
+                elif isinstance(message, ResultMessage):
+                    if message.is_error:
+                        raise RuntimeError(f"claude query failed: {message.result}")
+                    usage = {
+                        **(message.usage or {}),
+                        "duration_ms": message.duration_ms,
+                        "num_turns": message.num_turns,
+                        "total_cost_usd": message.total_cost_usd,
+                    }
+                    # No streamed deltas (e.g. a tool-only turn): emit the final
+                    # text once so buffered callers still get an answer.
+                    if message.result and not chunks:
+                        chunks.append(str(message.result))
+                        yield _stream_delta(str(message.result))
+        except Exception as exc:
+            yield {"event": {"internalServerException": {
+                "message": f"{type(exc).__name__}: {exc}"
+            }}}
+            raise  # mark the invoke_agent span ERROR
+
+        result = "".join(chunks).strip()
+        for call in calls.values():
             tracing.record_tool_call(
                 session_id=session_id,
                 call_id=call.call_id,
@@ -323,20 +355,19 @@ async def invoke(payload: dict[str, Any], context: Any = None) -> dict[str, Any]
         tracing.record_llm_usage(
             session_id=session_id,
             model=MODEL_ID,
-            usage=outcome.usage,
-            num_turns=outcome.usage.get("num_turns"),
+            usage=usage,
+            num_turns=usage.get("num_turns"),
         )
         tracing.record_result(
             span,
             session_id=session_id,
             system_prompt=SYSTEM_PROMPT,
             prompt=prompt,
-            output=outcome.result,
+            output=result,
             model=MODEL_ID,
         )
         if memory:
-            await asyncio.to_thread(memory.save_turn, prompt, outcome.result)
-    return {"result": outcome.result, "usage": outcome.usage}
+            await asyncio.to_thread(memory.save_turn, prompt, result)
 
 
 if __name__ == "__main__":
