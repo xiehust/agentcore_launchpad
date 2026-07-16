@@ -1174,3 +1174,37 @@ Added request-local AgentCore Memory restore and persistence to Claude SDK conta
 ### Next Steps
 
 - None - task complete
+
+
+## Session 19: Fix Claude SDK runtime read timeout
+
+**Date**: 2026-07-16
+**Task**: Fix Claude SDK runtime read timeout
+**Package**: lab4-interactive
+**Branch**: `fix/claude-sdk-runtime-read-timeout`
+
+### Summary
+
+Diagnosed buffered Claude SDK Runtime invocations hitting botocore's 60-second default read timeout; configured the shared AgentCore data client with an overridable 1000-second timeout, added regression tests and a Launchpad code-spec, and passed make verify.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0fb33dd` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
