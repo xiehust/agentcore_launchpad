@@ -1140,3 +1140,37 @@ Wired AgentCoreMemorySessionManager into generated HTTP/A2A templates and front-
 ### Next Steps
 
 - None - task complete
+
+
+## Session 18: Claude SDK AgentCore memory
+
+**Date**: 2026-07-16
+**Task**: Claude SDK AgentCore memory
+**Package**: lab4-interactive
+**Branch**: `main`
+
+### Summary
+
+Added request-local AgentCore Memory restore and persistence to Claude SDK containers, unified runtime environment injection, fixed stale-renderer startup failure, redeployed aws-knowledge-cc with a valid model profile, and verified a live invocation.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4c87f1f` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
