@@ -2,6 +2,7 @@
 
 import asyncio
 import importlib.util
+import json
 import py_compile
 import sys
 from contextlib import contextmanager
@@ -376,6 +377,33 @@ def test_query_events_stream_text_without_repeating_final_message(
     ]
     assert outcome.result == "hello world"
     assert captured["options"].include_partial_messages is True
+
+
+def test_heartbeat_keeps_pending_query_event_alive(rendered_memory_module):
+    module = rendered_memory_module
+
+    async def exercise():
+        release = asyncio.Event()
+
+        async def delayed_events():
+            await release.wait()
+            yield {"event": "delta", "text": "still running"}
+
+        events = module._events_with_heartbeat(delayed_events(), interval_s=0.001)
+        heartbeat = await anext(events)
+        release.set()
+        delayed = await anext(events)
+        with pytest.raises(StopAsyncIteration):
+            await anext(events)
+        return heartbeat, delayed
+
+    heartbeat, delayed = asyncio.run(exercise())
+
+    assert heartbeat["event"] == "heartbeat"
+    assert isinstance(heartbeat["timestamp"], float)
+    wire_frame = f"data: {json.dumps(heartbeat)}\n\n".encode()
+    assert len(wire_frame) > rt.SSE_READ_CHUNK_BYTES
+    assert delayed == {"event": "delta", "text": "still running"}
 
 
 def test_invoke_persists_completed_turn_once(rendered_memory_module, monkeypatch):

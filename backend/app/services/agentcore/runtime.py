@@ -340,6 +340,8 @@ def _runtime_payload_events(payload: Any) -> Iterator[dict[str, Any]]:
     if isinstance(kind, str):
         if kind == "delta" and payload.get("text"):
             yield {"event": "delta", "data": {"text": str(payload["text"])}}
+        elif kind == "heartbeat":
+            yield {"event": "heartbeat", "data": {}}
         elif kind == "tool":
             yield {
                 "event": "tool",

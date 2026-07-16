@@ -18,8 +18,10 @@ from app.services.invoke import invoke_agent_events
 def chat_stream(
     agent: Agent, prompt: str, session_id: str | None = None, actor_id: str = "river"
 ) -> Iterator[dict[str, Any]]:
-    """Yield SSE-ready events: meta → (tool|delta)* → done. Never raises mid-stream;
-    errors surface as an `error` event."""
+    """Yield SSE-ready events: meta → (heartbeat|tool|delta)* → done.
+
+    Never raises mid-stream; errors surface as an `error` event.
+    """
     session_id = session_id or new_session_id()
     mode = "stream" if agent.method in {"harness", "container"} else "buffered"
     yield {
@@ -73,4 +75,6 @@ def _harness_events(
 
 
 def sse_encode(event: dict[str, Any]) -> str:
+    if event["event"] == "heartbeat":
+        return ": keep-alive\n\n"
     return f"event: {event['event']}\ndata: {json.dumps(event['data'], ensure_ascii=False)}\n\n"

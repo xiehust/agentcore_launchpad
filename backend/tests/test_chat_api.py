@@ -55,6 +55,7 @@ def test_chat_stream_container_forwards_native_events(monkeypatch):
     db.close()
     native = [
         {"event": "delta", "data": {"text": "hello "}},
+        {"event": "heartbeat", "data": {}},
         {"event": "tool", "data": {"name": "search", "id": "tool-1"}},
         {"event": "delta", "data": {"text": "world"}},
     ]
@@ -88,6 +89,11 @@ def test_chat_stream_error_event(monkeypatch):
 def test_sse_encode_format():
     line = sse_encode({"event": "delta", "data": {"text": "hi"}})
     assert line == 'event: delta\ndata: {"text": "hi"}\n\n'
+
+
+def test_sse_encode_heartbeat_as_comment():
+    line = sse_encode({"event": "heartbeat", "data": {}})
+    assert line == ": keep-alive\n\n"
 
 
 def test_api_key_auth_matrix(client):
@@ -140,6 +146,36 @@ def test_chat_endpoint_tracks_session(client, monkeypatch):
     assert "event: meta" in body and "event: delta" in body and "event: done" in body
     sessions = client.get(f"/api/chat/{agent_id}/sessions").json()["sessions"]
     assert len(sessions) == 1 and sessions[0]["turns"] == 1
+
+
+def test_chat_heartbeat_is_not_persisted(client, monkeypatch):
+    agent_id = make_active_agent(method="container", name="chat-heartbeat-agent")
+    monkeypatch.setattr(
+        chat_service,
+        "invoke_agent_events",
+        lambda *args, **kwargs: iter(
+            [
+                {"event": "heartbeat", "data": {}},
+                {"event": "delta", "data": {"text": "done"}},
+            ]
+        ),
+    )
+
+    response = client.post(f"/api/chat/{agent_id}", json={"prompt": "slow task"})
+
+    assert response.status_code == 200
+    assert ": keep-alive\n\n" in response.text
+    assert "event: heartbeat" not in response.text
+    session_id = client.get(f"/api/chat/{agent_id}/sessions").json()["sessions"][0][
+        "session_id"
+    ]
+    history = client.get(
+        f"/api/chat/{agent_id}/history", params={"session_id": session_id}
+    ).json()["messages"]
+    assert [(message["role"], message["text"]) for message in history] == [
+        ("user", "slow task"),
+        ("agent", "done"),
+    ]
 
 
 def test_chat_history_persists_and_replays(client, monkeypatch):

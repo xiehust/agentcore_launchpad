@@ -119,6 +119,8 @@ def test_stream_runtime_events_yields_native_sse_incrementally():
             for line in [
                 b'data: {"event":"delta","text":"hello "}',
                 b"",
+                b'data: {"event":"heartbeat","timestamp":1784210000.0}',
+                b"",
                 b'data: {"event":"tool","name":"search","id":"tool-1"}',
                 b"",
                 b'data: {"event":"delta","text":"world"}',
@@ -141,6 +143,7 @@ def test_stream_runtime_events_yields_native_sse_incrementally():
     assert body.lines_seen == 2
     assert body.chunk_size == 32
     assert list(stream) == [
+        {"event": "heartbeat", "data": {}},
         {"event": "tool", "data": {"name": "search", "id": "tool-1"}},
         {"event": "delta", "data": {"text": "world"}},
     ]

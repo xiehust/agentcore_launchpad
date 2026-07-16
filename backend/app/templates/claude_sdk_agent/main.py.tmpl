@@ -18,7 +18,9 @@ import asyncio
 import json
 import logging
 import os
+import time
 from collections.abc import AsyncIterator
+from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -54,6 +56,7 @@ LONG_TERM_TOP_K = 3
 MAX_MEMORY_QUERY_CHARS = 900
 MAX_MEMORY_ITEM_CHARS = 1000
 MAX_MEMORY_CONTEXT_CHARS = 6000
+SSE_HEARTBEAT_INTERVAL_S = 15.0
 
 logger = logging.getLogger(__name__)
 
@@ -242,6 +245,38 @@ class QueryOutcome:
     tool_calls: list[ToolCall] = field(default_factory=list)
 
 
+async def _events_with_heartbeat(
+    events: AsyncIterator[dict[str, Any]],
+    interval_s: float = SSE_HEARTBEAT_INTERVAL_S,
+) -> AsyncIterator[dict[str, Any]]:
+    """Keep the response active without cancelling a pending SDK event read."""
+    iterator = events.__aiter__()
+    pending: asyncio.Task[dict[str, Any]] | None = None
+    try:
+        while True:
+            pending = asyncio.create_task(anext(iterator))
+            while True:
+                done, _ = await asyncio.wait({pending}, timeout=interval_s)
+                if done:
+                    break
+                # Keep this frame larger than the backend's 32-byte SSE read chunk.
+                yield {"event": "heartbeat", "timestamp": time.time()}
+            try:
+                event = pending.result()
+            except StopAsyncIteration:
+                return
+            pending = None
+            yield event
+    finally:
+        if pending is not None and not pending.done():
+            pending.cancel()
+            with suppress(asyncio.CancelledError):
+                await pending
+        close = getattr(iterator, "aclose", None)
+        if close is not None:
+            await close()
+
+
 def _result_text(content: Any) -> str:
     """Flatten a ToolResultBlock's content (str or [{type: text, ...}])."""
     if isinstance(content, str):
@@ -332,22 +367,12 @@ async def run_query(
     return outcome
 
 
-@app.entrypoint
-async def invoke(
-    payload: dict[str, Any], context: Any = None
+async def _invocation_events(
+    prompt: str,
+    session_id: str,
+    actor_id: str,
 ) -> AsyncIterator[dict[str, Any]]:
-    if isinstance(payload, (str, bytes)):
-        payload = json.loads(payload)
-    prompt = str(payload.get("prompt", "")).strip()
-    if not prompt:
-        yield {"event": "error", "message": "payload must include a non-empty 'prompt'"}
-        return
-    session_id = str(
-        getattr(context, "session_id", "") or payload.get("session_id", "") or "adhoc"
-    )
-    actor_id = str(payload.get("actor_id", "")).strip()
     memory = _create_memory(actor_id, session_id)
-
     with tracing.traced_invocation(AGENT_NAME, session_id) as span:
         outcome = QueryOutcome()
         async for event in _query_events(prompt, memory, outcome):
@@ -378,6 +403,25 @@ async def invoke(
         if memory:
             await asyncio.to_thread(memory.save_turn, prompt, outcome.result)
     yield {"event": "complete", "result": outcome.result, "usage": outcome.usage}
+
+
+@app.entrypoint
+async def invoke(
+    payload: dict[str, Any], context: Any = None
+) -> AsyncIterator[dict[str, Any]]:
+    if isinstance(payload, (str, bytes)):
+        payload = json.loads(payload)
+    prompt = str(payload.get("prompt", "")).strip()
+    if not prompt:
+        yield {"event": "error", "message": "payload must include a non-empty 'prompt'"}
+        return
+    session_id = str(
+        getattr(context, "session_id", "") or payload.get("session_id", "") or "adhoc"
+    )
+    actor_id = str(payload.get("actor_id", "")).strip()
+    events = _invocation_events(prompt, session_id, actor_id)
+    async for event in _events_with_heartbeat(events):
+        yield event
 
 
 if __name__ == "__main__":

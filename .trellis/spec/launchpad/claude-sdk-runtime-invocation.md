@@ -18,6 +18,7 @@ Settings.agentcore_read_timeout_s: int = 1000
 # generated main.py
 build_options(...)  # ClaudeAgentOptions(include_partial_messages=True)
 _query_events(prompt, memory, outcome) -> AsyncIterator[dict[str, Any]]
+_events_with_heartbeat(events, interval_s=15.0) -> AsyncIterator[dict[str, Any]]
 invoke(payload, context) -> AsyncIterator[dict[str, Any]]
 
 # app/services/agentcore/runtime.py
@@ -38,6 +39,7 @@ Runtime SSE data payloads:
 ```json
 {"event": "delta", "text": "..."}
 {"event": "tool", "name": "...", "id": "..."}
+{"event": "heartbeat", "timestamp": 1784210000.0}
 {"event": "complete", "result": "...", "usage": {}}
 {"event": "error", "message": "..."}
 ```
@@ -61,10 +63,19 @@ LAUNCHPAD_AGENTCORE_READ_TIMEOUT_S=<positive integer seconds>
   only after tracing and best-effort Memory persistence finish.
 - The generated `@app.entrypoint` is an async generator. BedrockAgentCoreApp
   serializes each yielded dictionary as one `data: <json>` SSE event.
+- While the invocation is otherwise silent, the generated container emits a
+  `heartbeat` frame every 15 seconds. The heartbeat wrapper keeps one
+  `anext()` task pending across timeout checks; it must not cancel and restart
+  the Claude SDK iterator. The timestamp keeps the serialized frame larger
+  than the backend's 32-byte read chunk.
 - `stream_runtime_events()` checks `contentType`. For
   `text/event-stream`, consume `StreamingBody.iter_lines(chunk_size=32)` and
-  yield normalized `tool` / `delta` events immediately. Never use the
+  yield normalized `heartbeat` / `tool` / `delta` events immediately. Never use the
   1024-byte default or call an unbounded `.read()` first.
+- The shared Chat/public SSE encoder converts the internal heartbeat event to
+  the comment `: keep-alive\n\n`. It is forwarded as bytes but creates no
+  frontend event, transcript row, or response text. Buffered consumers ignore
+  heartbeat events and continue joining only text deltas.
 - The parser also accepts converted-Harness envelopes
   (`{"event":{"contentBlockDelta":...}}`) and legacy buffered
   `application/json` responses.
@@ -92,6 +103,7 @@ LAUNCHPAD_AGENTCORE_READ_TIMEOUT_S=<positive integer seconds>
 | Condition | Behavior |
 |---|---|
 | SDK emits text deltas | forward each delta before query completion |
+| SDK is silent for 15 seconds | emit a heartbeat without cancelling the pending SDK read |
 | SDK emits no partials | emit `AssistantMessage` text once as fallback |
 | runtime emits `complete` after deltas | suppress duplicate full result |
 | runtime returns legacy JSON | emit its `result` as one delta |
@@ -107,6 +119,9 @@ LAUNCHPAD_AGENTCORE_READ_TIMEOUT_S=<positive integer seconds>
 
 - **Good:** the first Claude `text_delta` reaches Chat while the SDK query is
   still running; later deltas append to the same message.
+- **Idle but healthy:** a long model/tool step emits `: keep-alive` comments at
+  the browser boundary until the next real event, preventing proxy idle
+  timeout without changing the rendered thread.
 - **Base:** a zip/studio or pre-republish container returns legacy JSON and the
   compatibility decoder emits one complete delta.
 - **Version-pinned:** a session created before republish continues returning
@@ -123,6 +138,9 @@ LAUNCHPAD_AGENTCORE_READ_TIMEOUT_S=<positive integer seconds>
   and enables `include_partial_messages`.
 - Template tests prove two partial text events are emitted once, the final
   `AssistantMessage` is not duplicated, and `QueryOutcome.result` is complete.
+- Template tests prove a pending SDK event survives at least one heartbeat
+  timeout and the upstream heartbeat frame exceeds the 32-byte Runtime reader
+  chunk.
 - Successful streaming persists one USER/ASSISTANT Memory event after query
   completion; failure persists none.
 - Runtime parser tests prove the first SSE event is yielded before later lines
@@ -130,9 +148,12 @@ LAUNCHPAD_AGENTCORE_READ_TIMEOUT_S=<positive integer seconds>
   `complete.result` is not duplicated.
 - Legacy JSON, converted-Harness SSE, qualifier, and error tests remain green.
 - Chat tests prove container `meta.mode=stream` and native event order is
-  preserved.
+  preserved, and heartbeat comments are not persisted as messages.
 - The canonical `make verify` gate and one real republished-container browser
-  invocation must pass.
+  invocation with more than 120 seconds between business events must pass.
+
+Studio/zip runtime heartbeat support is deferred in
+`docs/issues/2026-07-16-studio-agent-sse-heartbeat.md`.
 
 ### 7. Wrong vs Correct
 
@@ -143,8 +164,20 @@ text = json.loads(raw)["result"]
 for chunk in artificial_chunks(text):
     yield chunk
 
+# WRONG: wait_for cancels the active SDK read whenever the heartbeat fires.
+try:
+    event = await asyncio.wait_for(anext(events), timeout=15)
+except TimeoutError:
+    yield {"event": "heartbeat"}
+
 # CORRECT: parse each SSE event directly from the StreamingBody.
 for line in response["response"].iter_lines(chunk_size=32):
     for event in parse_sse_line(line):
         yield event
+
+# CORRECT: keep one SDK read alive while timeout checks emit heartbeats.
+pending = asyncio.create_task(anext(events))
+done, _ = await asyncio.wait({pending}, timeout=15)
+if not done:
+    yield {"event": "heartbeat", "timestamp": time.time()}
 ```
