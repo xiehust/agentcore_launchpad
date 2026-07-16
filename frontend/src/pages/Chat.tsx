@@ -468,6 +468,8 @@ export function Chat() {
                 {sessionId && (
                   <Link
                     to={`/observability?session=${encodeURIComponent(sessionId)}`}
+                    target="_blank"
+                    rel="noreferrer"
                     className="chip amber"
                     style={{ textDecoration: "none" }}
                     data-testid="open-in-obs"

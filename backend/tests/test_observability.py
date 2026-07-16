@@ -5,7 +5,7 @@ import json
 import pytest
 
 from app.core.db import SessionLocal
-from app.models.ledger import Agent, ChatSession
+from app.models.ledger import Agent, ChatMessage, ChatSession
 from app.services import observability as obs
 
 BASE_NS = 1_700_000_000_000_000_000
@@ -478,6 +478,83 @@ def test_transcript_orders_turns(monkeypatch):
     assert result["available"] is True and result["agent_name"] == "hr-assistant"
     assert [t["text"] for t in result["turns"]] == ["first q", "first a", "second q"]
     assert result["long_term_records"] == 2
+
+
+def test_transcript_reconciles_incomplete_memory_from_chat_ledger(monkeypatch):
+    agent_id = _seed_agent()
+    session_id = "s" * 64
+    db = SessionLocal()
+    db.add(
+        ChatSession(
+            agent_id=agent_id,
+            session_id=session_id,
+            actor_id="runtime-diagnostic",
+        )
+    )
+    db.add_all(
+        [
+            ChatMessage(
+                agent_id=agent_id,
+                session_id=session_id,
+                role="user",
+                text="first question",
+            ),
+            ChatMessage(
+                agent_id=agent_id,
+                session_id=session_id,
+                role="agent",
+                text="first answer",
+            ),
+            ChatMessage(
+                agent_id=agent_id,
+                session_id=session_id,
+                role="user",
+                text="latest question",
+            ),
+            ChatMessage(
+                agent_id=agent_id,
+                session_id=session_id,
+                role="agent",
+                text="latest answer",
+            ),
+        ]
+    )
+    db.commit()
+    monkeypatch.setattr(
+        obs.memory,
+        "list_events",
+        lambda *a, **k: [
+            {
+                "eventTimestamp": "2026-07-10T01:00:00",
+                "payload": [
+                    {
+                        "conversational": {
+                            "role": "USER",
+                            "content": {"text": "first question"},
+                        }
+                    },
+                    {
+                        "conversational": {
+                            "role": "ASSISTANT",
+                            "content": {"text": "first answer"},
+                        }
+                    },
+                ],
+            }
+        ],
+    )
+    monkeypatch.setattr(obs.memory, "list_records", lambda *a, **k: [])
+
+    result = obs.session_transcript(db, session_id)
+    db.close()
+
+    assert result["origin"] == "ledger"
+    assert [turn["text"] for turn in result["turns"]] == [
+        "first question",
+        "first answer",
+        "latest question",
+        "latest answer",
+    ]
 
 
 def test_transcript_falls_back_to_eval_run_session(monkeypatch):

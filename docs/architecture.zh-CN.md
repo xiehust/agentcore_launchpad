@@ -122,7 +122,7 @@ public  /v1  ──┘        │
 |---|---|---|
 | `aws/spans` 日志组(CloudWatch Transaction Search) | 追踪/会话列表、仪表盘计数 + p50/p95 + 分时序列、热门工具、Span 树 | Logs Insights `start_query`,每个视图一组有界查询 |
 | `bedrock-agentcore` 指标命名空间 | 各模型 TOKEN 用量卡片与图表 | `ListMetrics`(发现维度)→ `GetMetricData` 对 `gen_ai.client.token.usage` 求和 |
-| AgentCore Memory `ListEvents` | 会话对话转录 | 通过 ChatSession 台账联结(`session_id → actor_id`);解码 harness 消息信封,丢弃工具结果轮次 |
+| AgentCore Memory `ListEvents` + ChatMessage 台账 | 会话对话转录 | 通过 ChatSession 联结(`session_id → actor_id`);优先读取 Memory,并用精确渲染消息台账修复延迟、不完整或历史 actor 分区漂移;解码 harness 消息信封并丢弃工具结果轮次 |
 
 每个视图都由 **60 秒 TTL 缓存**(按视图 + 时间范围)提供服务 —— Logs Insights
 按扫描量计费 —— `force=true`(⟳ 刷新按钮)可绕过缓存。时间范围为白名单

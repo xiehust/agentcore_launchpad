@@ -24,6 +24,19 @@ class ChatRequest(BaseModel):
     actor_id: str = "river"
 
 
+def _session_actor(
+    db: Session, agent_id: str, session_id: str | None, requested_actor: str
+) -> str:
+    if not session_id:
+        return requested_actor
+    existing = (
+        db.query(ChatSession.actor_id)
+        .filter(ChatSession.agent_id == agent_id, ChatSession.session_id == session_id)
+        .first()
+    )
+    return existing[0] if existing and existing[0] else requested_actor
+
+
 def _get_active_agent(db: Session, agent_id: str) -> Agent:
     agent = db.get(Agent, agent_id)
     if agent is None:
@@ -70,7 +83,8 @@ def chat(agent_id: str, req: ChatRequest, db: Session = Depends(get_db)) -> Stre
     # Memory partitions per agent: the runtime writes short-term events and the
     # extractor lands long-term records under this compound actor. The ledger
     # still records the human actor (req.actor_id) so the sessions list shows it.
-    mem_actor = memory_service.scoped_actor(agent.id, req.actor_id)
+    actor_id = _session_actor(db, agent.id, req.session_id, req.actor_id)
+    mem_actor = memory_service.scoped_actor(agent.id, actor_id)
 
     def generate():
         # Thread items are persisted in event order (int-pk = replay order) so
@@ -81,7 +95,7 @@ def chat(agent_id: str, req: ChatRequest, db: Session = Depends(get_db)) -> Stre
             kind, data = event["event"], event["data"]
             if kind == "meta":
                 session_id = data["session_id"]
-                _track_session(agent.id, session_id, req.actor_id)
+                _track_session(agent.id, session_id, actor_id)
                 _save_message(agent.id, session_id, "user", req.prompt)
             elif kind == "tool" and session_id:
                 if answer_parts:  # a tool call splits the answer bubble live — mirror it
@@ -171,10 +185,16 @@ def session_history(
 
 
 @router.get("/chat/{agent_id}/memory")
-def session_memory(agent_id: str, session_id: str, actor_id: str = "river") -> dict[str, Any]:
+def session_memory(
+    agent_id: str,
+    session_id: str,
+    actor_id: str = "river",
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
     try:
         # Read back the same agent-scoped partition the chat write path uses.
-        mem_actor = memory_service.scoped_actor(agent_id, actor_id)
+        session_actor = _session_actor(db, agent_id, session_id, actor_id)
+        mem_actor = memory_service.scoped_actor(agent_id, session_actor)
         return memory_service.session_memory_summary(mem_actor, session_id)
     except Exception as exc:
         raise AppError(

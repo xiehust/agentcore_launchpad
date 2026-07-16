@@ -147,7 +147,7 @@ gate, preserving the bootstrap-free local development and test flow.
 |---|---|---|
 | `aws/spans` log group (CloudWatch Transaction Search) | trace/session lists, dashboard counts + p50/p95 + hourly series, top tools, span trees | Logs Insights `start_query`, one bounded query set per view |
 | `bedrock-agentcore` metrics namespace | tokens-by-model tile + chart | `ListMetrics` (dimension discovery) → `GetMetricData` sums of `gen_ai.client.token.usage` |
-| AgentCore Memory `ListEvents` | session conversation transcript | ChatSession-ledger join (`session_id → actor_id`); harness message envelopes are decoded, tool-result turns dropped |
+| AgentCore Memory `ListEvents` + ChatMessage ledger | session conversation transcript | ChatSession join (`session_id → actor_id`); Memory is primary, while the exact rendered-message ledger repairs lagging/incomplete or historically split actor partitions; harness envelopes are decoded and tool-result turns dropped |
 
 Every view is served from a **60-second TTL cache** keyed by (view, range) —
 Logs Insights is billed per scan — with `force=true` (the ⟳ REFRESH button)
@@ -183,7 +183,7 @@ input/output messages. The scope name must stay `strands.telemetry.tracer` —
 AgentCore only parses spans/events from supported instrumentation scopes.
 
 Tab IA: **DASHBOARD** (5 stat tiles + traffic/latency/tokens/tools charts) ·
-**SESSIONS** (list → detail with memory transcript + traces-in-session cards) ·
+**SESSIONS** (list → detail with Memory/ledger-reconciled transcript + traces-in-session cards) ·
 **TRACES** (filterable list → waterfall Gantt with span drawer: token usage
 incl. cache read/write, est cost, tool schema, raw attributes). Cross-links:
 deep links `/observability?trace=<id>` / `?session=<id>`; the Chat trace rail

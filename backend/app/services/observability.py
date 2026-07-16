@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.evaluation.models import EvalRun
-from app.models.ledger import Agent, ChatSession
+from app.models.ledger import Agent, ChatMessage, ChatSession
 from app.services import memory
 
 SPANS_LOG_GROUP = "aws/spans"
@@ -1064,6 +1064,30 @@ def _event_iso(value: Any) -> str:
     return str(value or "")
 
 
+def _chat_ledger_turns(
+    db: Session, agent_id: str, session_id: str
+) -> list[dict[str, Any]]:
+    rows = (
+        db.query(ChatMessage)
+        .filter(
+            ChatMessage.agent_id == agent_id,
+            ChatMessage.session_id == session_id,
+            ChatMessage.role.in_(("user", "agent")),
+        )
+        .order_by(ChatMessage.id.asc())
+        .limit(500)
+        .all()
+    )
+    return [
+        {
+            "role": "USER" if message.role == "user" else "ASSISTANT",
+            "text": message.text[:4000],
+            "at": _event_iso(message.created_at),
+        }
+        for message in rows
+    ]
+
+
 def _eval_run_for_session(db: Session, session_id: str) -> EvalRun | None:
     """The eval run that PRODUCED this session, if any. Insights re-runs reuse
     an earlier run's session_ids, so the oldest match is the creator (its
@@ -1218,17 +1242,12 @@ def session_transcript(db: Session, session_id: str) -> dict[str, Any]:
         agent = db.get(Agent, run.agent_id)
         mem_actor = "default"
         agent_id, actor_display = run.agent_id, "default"
+    memory_error = None
     try:
         events = memory.list_events(mem_actor, session_id, max_results=100)
     except Exception as exc:
-        if row is not None:
-            return {
-                "available": False,
-                "reason": "memory_unavailable",
-                "detail": f"{type(exc).__name__}: {exc}"[:200],
-                "actor_id": actor_display,
-            }
-        events = []  # eval sessions can still rebuild from content logs
+        memory_error = exc
+        events = []  # chat may fall back to its ledger; eval may use content logs
     turns = []
     for event in sorted(events, key=lambda e: str(e.get("eventTimestamp", ""))):
         for part in event.get("payload", []):
@@ -1245,9 +1264,26 @@ def session_transcript(db: Session, session_id: str) -> dict[str, Any]:
                     "at": _event_iso(event.get("eventTimestamp")),
                 }
             )
+    origin = "memory"
+    if row is not None:
+        ledger_turns = _chat_ledger_turns(db, row.agent_id, session_id)
+        memory_signature = [(turn["role"], turn["text"]) for turn in turns]
+        ledger_signature = [(turn["role"], turn["text"]) for turn in ledger_turns]
+        if ledger_turns and ledger_signature != memory_signature:
+            # ChatMessage is the exact rendered conversation. Reconcile from it
+            # when eventual consistency or actor drift leaves Memory incomplete.
+            turns = ledger_turns
+            origin = "ledger"
+        elif memory_error is not None:
+            return {
+                "available": False,
+                "reason": "memory_unavailable",
+                "detail": f"{type(memory_error).__name__}: {memory_error}"[:200],
+                "actor_id": actor_display,
+            }
+
     # Runtime-backed agents write no memory events during eval runs — rebuild
     # the conversation from the runtime's OTEL content logs instead.
-    origin = "memory"
     if (
         not turns
         and run is not None

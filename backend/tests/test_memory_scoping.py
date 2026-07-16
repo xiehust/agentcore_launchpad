@@ -61,6 +61,54 @@ def test_chat_write_passes_scoped_actor_but_ledger_keeps_human(client, monkeypat
     assert row is not None and row.actor_id == "river"
 
 
+def test_existing_session_keeps_original_actor_partition(client, monkeypatch):
+    agent_id = make_active_agent(name="mem-existing")
+    session_id = "s" * 40
+    db = SessionLocal()
+    db.add(
+        ChatSession(
+            agent_id=agent_id,
+            session_id=session_id,
+            actor_id="runtime-diagnostic",
+        )
+    )
+    db.commit()
+    db.close()
+    captured: dict[str, str] = {}
+
+    def fake_stream(agent, prompt, session_id=None, actor_id="river"):
+        captured["actor_id"] = actor_id
+        yield {
+            "event": "meta",
+            "data": {"session_id": session_id, "agent": agent.name, "mode": "buffered"},
+        }
+        yield {"event": "done", "data": {"latency_ms": 1}}
+
+    monkeypatch.setattr(chat_router, "chat_stream", fake_stream)
+    response = client.post(
+        f"/api/chat/{agent_id}",
+        json={"prompt": "continue", "session_id": session_id, "actor_id": "river"},
+    )
+
+    assert response.status_code == 200
+    assert captured["actor_id"] == f"{agent_id}__runtime-diagnostic"
+
+    summary_actor: dict[str, str] = {}
+
+    def fake_summary(actor_id, requested_session_id):
+        summary_actor["actor_id"] = actor_id
+        assert requested_session_id == session_id
+        return {"event_count": 0, "events": [], "records": []}
+
+    monkeypatch.setattr(memory_service, "session_memory_summary", fake_summary)
+    memory_response = client.get(
+        f"/api/chat/{agent_id}/memory",
+        params={"session_id": session_id, "actor_id": "river"},
+    )
+    assert memory_response.status_code == 200
+    assert summary_actor["actor_id"] == f"{agent_id}__runtime-diagnostic"
+
+
 def test_session_memory_read_uses_same_scoped_actor(client, monkeypatch):
     agent_id = make_active_agent(name="mem-read")
     captured: dict[str, str] = {}

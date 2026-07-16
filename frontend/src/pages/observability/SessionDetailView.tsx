@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
-import { Btn, Chip, Panel } from "../../components";
+import { Btn, Chip, Markdown, Panel } from "../../components";
 import type { ObsSessionDetail } from "../../lib/api";
 import { api, ApiError } from "../../lib/api";
 import { fmtCost, fmtDuration, fmtInt, shortId } from "./format";
@@ -162,7 +162,9 @@ export function SessionDetailView({ sessionId, range, onOpenTrace }: SessionDeta
                   <div className="who">
                     {isUser ? t("obs.session.user") : agentLabel} · {turnClock(turn.at)}
                   </div>
-                  <div className="msg">{turn.text}</div>
+                  <div className="msg">
+                    <Markdown text={turn.text} />
+                  </div>
                 </div>
               );
             })}

@@ -52,6 +52,11 @@ subclasses. Consume them through `.get(...)`.
 - `payload.actor_id` is already scoped as `<agent>__<human>` by the shared
   invoke chain. Pass it unchanged to
   `create_memory_session(actor_id=..., session_id=...)`; do not scope it again.
+- A console Chat session keeps the bare actor recorded when its `ChatSession`
+  row is first created. When a later request reuses that `session_id`, the
+  router must use the recorded actor for both invocation and Memory-summary
+  reads instead of accepting a different request actor and splitting one
+  session across Memory partitions.
 - Session identity is `context.session_id`, then payload `session_id`, then the
   existing `adhoc` fallback.
 - Construct one `MemorySessionManager` per invocation. It is not thread-safe.
@@ -70,6 +75,12 @@ subclasses. Consume them through `.get(...)`.
 - Initialization, retrieval, and persistence are independently best-effort.
   Warnings contain only operation, session ID, and exception type; they never
   contain prompts, responses, or retrieved memory.
+- Observability reads Chat transcripts from AgentCore Memory first. It compares
+  those USER/ASSISTANT turns with the `ChatMessage` ledger and uses the ledger
+  when Memory is incomplete or differs; this covers eventual consistency and
+  historical actor-partition drift while preserving Memory as the normal
+  source. Eval sessions continue to use Memory or runtime content logs because
+  they have no Chat ledger.
 
 ### Template / renderer synchronization
 
@@ -105,6 +116,8 @@ subclasses. Consume them through `.get(...)`.
 | Claude query failure | exception propagates through existing tracing; no memory write |
 | memory write failure | warning; completed Claude response is returned unchanged |
 | update derives an empty environment | send `environmentVariables={}` to clear old values |
+| existing Chat session requested with another actor | invoke and read Memory with the actor stored on `ChatSession` |
+| Chat Memory events lag or cover only one actor partition | Observability reconciles USER/ASSISTANT turns from `ChatMessage` |
 
 ### 5. Good / Base / Bad Cases
 
@@ -124,6 +137,9 @@ subclasses. Consume them through `.get(...)`.
 - Short-term turns render oldest-to-newest with item/context bounds.
 - Long-term calls use both exact namespaces and the original prompt query.
 - Distinct actor/session pairs create distinct memory sessions.
+- Reusing a Chat session keeps its original actor for invoke and summary reads.
+- Incomplete Chat Memory events are reconciled from the exact rendered-message
+  ledger; matching events remain Memory-origin transcripts.
 - `UserPromptSubmit` exposes restored text only through `additionalContext`.
 - Success writes one event with USER then ASSISTANT; Claude failure writes none.
 - Initialization/read/write failures do not fail the invocation or leak content
