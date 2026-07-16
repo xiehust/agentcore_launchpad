@@ -7,6 +7,7 @@ Explicit-client style (tests inject stubs). Shapes per bedrock-agentcore-control
 import json
 import time
 import uuid
+from collections.abc import Iterator
 from typing import Any
 
 from app.services.agentcore.harness import new_session_id
@@ -340,6 +341,75 @@ def invoke_runtime_text(
         raise RuntimeError(f"runtime returned error: {body['error']}")
     text = body.get("result", "") if isinstance(body, dict) else str(body)
     return {"text": str(text), "session_id": session_id}
+
+
+def stream_runtime_events(
+    client: Any,
+    runtime_arn: str,
+    prompt: str,
+    session_id: str | None = None,
+    actor_id: str = "default",
+    qualifier: str | None = None,
+) -> Iterator[dict[str, Any]]:
+    """Stream a container invocation as converse-stream INNER frames.
+
+    Mirrors ``invoke_runtime_text``'s payload but consumes the response
+    incrementally. Streaming Claude SDK containers answer ``text/event-stream``
+    with ``data: {"event": {...}}`` lines (the InvokeHarness/converse shape);
+    each unwrapped ``event`` dict is yielded. A pre-streaming (buffered) image
+    answers ``application/json`` ``{"result": ...}`` — it is read whole and
+    yielded as ONE ``contentBlockDelta`` text frame so callers re-chunk exactly
+    like the legacy buffered playground path. Both a top-level ``{"error"}``
+    body and an SDK error frame raise ``RuntimeError`` (as ``flatten_sse_text``
+    does), so error handling is identical to the buffered path.
+    """
+    session_id = session_id or new_session_id()
+    params: dict[str, Any] = {
+        "agentRuntimeArn": runtime_arn,
+        "runtimeSessionId": session_id,
+        "payload": json.dumps({"prompt": prompt, "actor_id": actor_id}).encode("utf-8"),
+    }
+    if qualifier:
+        params["qualifier"] = qualifier
+    response = client.invoke_agent_runtime(**params)
+    content_type = str(response.get("contentType", "") or "")
+    body = response["response"]
+
+    if "event-stream" in content_type:
+        for raw in body.iter_lines():
+            if not raw:
+                continue
+            line = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+            line = line.strip()
+            if not line.startswith("data:"):
+                continue
+            try:
+                frame = json.loads(line[len("data:") :].strip())
+            except ValueError:
+                continue
+            if not isinstance(frame, dict):
+                continue
+            # BedrockAgentCoreApp's own mid-stream error fallback is an unwrapped
+            # top-level {"error", "error_type", "message"} frame — surface it.
+            if frame.get("error"):
+                raise RuntimeError(f"runtime returned error: {frame['error']}")
+            inner = frame.get("event")
+            if isinstance(inner, dict):
+                yield inner
+        return
+
+    # Buffered image (pre-streaming main.py): read the whole body and re-chunk it.
+    raw = body.read()
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        decoded = raw.decode("utf-8", errors="replace") if raw else ""
+        parsed = {"result": flatten_sse_text(decoded) or decoded}
+    if isinstance(parsed, dict) and parsed.get("error"):
+        raise RuntimeError(f"runtime returned error: {parsed['error']}")
+    text = parsed.get("result", "") if isinstance(parsed, dict) else str(parsed)
+    if text:
+        yield {"contentBlockDelta": {"delta": {"text": str(text)}}}
 
 
 def a2a_result_text(result: dict[str, Any]) -> str:

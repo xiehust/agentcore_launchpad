@@ -23,6 +23,27 @@ SPEC = AgentSpec(
 )
 
 
+def _drive(agen) -> list:
+    """Run the streaming ``invoke`` async generator to completion, collecting frames."""
+    frames: list = []
+
+    async def run():
+        async for frame in agen:
+            frames.append(frame)
+
+    asyncio.run(run())
+    return frames
+
+
+def _delta_texts(frames: list) -> str:
+    """Concatenate the text of every contentBlockDelta frame (what the client renders)."""
+    return "".join(
+        frame["event"]["contentBlockDelta"]["delta"]["text"]
+        for frame in frames
+        if isinstance(frame.get("event"), dict) and "contentBlockDelta" in frame["event"]
+    )
+
+
 def test_render_replaces_placeholders():
     code = render_main_py(SPEC)
     assert "__LAUNCHPAD_" not in code
@@ -300,12 +321,16 @@ def test_user_prompt_hook_returns_additional_context(rendered_memory_module):
     }
 
 
-def test_run_query_wires_request_local_memory_hook(
+def test_invoke_wires_request_local_memory_hook(
     rendered_memory_module, monkeypatch
 ):
     module = rendered_memory_module
     captured = {}
-    memory = SimpleNamespace(context_for=lambda _prompt: "context")
+    memory = SimpleNamespace(
+        context_for=lambda _prompt: "context",
+        save_turn=lambda *_args: None,
+    )
+    monkeypatch.setattr(module, "_create_memory", lambda actor, session: memory)
 
     async def fake_query(*, prompt, options):
         captured["prompt"] = prompt
@@ -314,34 +339,101 @@ def test_run_query_wires_request_local_memory_hook(
             yield None
 
     monkeypatch.setattr(module, "query", fake_query)
-    asyncio.run(module.run_query("original prompt", memory))
+    _drive(
+        module.invoke(
+            {"prompt": "original prompt", "actor_id": "agent-a__river"},
+            SimpleNamespace(session_id="session-one"),
+        )
+    )
 
     assert captured["prompt"] == "original prompt"
+    assert captured["options"].include_partial_messages is True
     matcher = captured["options"].hooks["UserPromptSubmit"][0]
     assert len(matcher.hooks) == 1
 
 
-def test_invoke_persists_completed_turn_once(rendered_memory_module, monkeypatch):
+def test_invoke_streams_deltas_and_persists_completed_turn_once(
+    rendered_memory_module, monkeypatch
+):
     module = rendered_memory_module
     saved: list[tuple[str, str]] = []
     memory = SimpleNamespace(save_turn=lambda prompt, response: saved.append((prompt, response)))
     monkeypatch.setattr(module, "_create_memory", lambda actor, session: memory)
 
-    async def fake_run_query(prompt, request_memory):
+    async def fake_query(*, prompt, options):
         assert prompt == "hello"
-        assert request_memory is memory
-        return module.QueryOutcome(result="hello back", usage={"input_tokens": 2})
+        for piece in ("hello ", "back"):
+            yield module.StreamEvent(
+                uuid=f"u-{piece}",
+                session_id="session-one",
+                event={
+                    "type": "content_block_delta",
+                    "delta": {"type": "text_delta", "text": piece},
+                },
+            )
+        yield module.ResultMessage(
+            subtype="success",
+            duration_ms=10,
+            duration_api_ms=9,
+            is_error=False,
+            num_turns=1,
+            session_id="session-one",
+            usage={"input_tokens": 2},
+            result="hello back",
+        )
 
-    monkeypatch.setattr(module, "run_query", fake_run_query)
-    result = asyncio.run(
+    monkeypatch.setattr(module, "query", fake_query)
+    frames = _drive(
         module.invoke(
             {"prompt": "hello", "actor_id": "agent-a__river"},
             SimpleNamespace(session_id="session-one"),
         )
     )
 
-    assert result["result"] == "hello back"
+    # text streamed token-by-token, then persisted exactly once (joined verbatim)
+    assert _delta_texts(frames) == "hello back"
     assert saved == [("hello", "hello back")]
+
+
+def test_invoke_streams_tool_use_and_final_text(rendered_memory_module, monkeypatch):
+    module = rendered_memory_module
+    monkeypatch.setattr(module, "_create_memory", lambda actor, session: None)
+
+    async def fake_query(*, prompt, options):
+        yield module.AssistantMessage(
+            content=[module.ToolUseBlock(id="t1", name="mcp__docs__search", input={"q": "x"})],
+            model="m",
+        )
+        yield module.UserMessage(
+            content=[module.ToolResultBlock(tool_use_id="t1", content="found", is_error=False)]
+        )
+        # tool-only turn produced no streamed deltas — final text emitted once
+        yield module.ResultMessage(
+            subtype="success",
+            duration_ms=5,
+            duration_api_ms=4,
+            is_error=False,
+            num_turns=1,
+            session_id="session-one",
+            result="done",
+        )
+
+    monkeypatch.setattr(module, "query", fake_query)
+    frames = _drive(
+        module.invoke(
+            {"prompt": "use a tool"},
+            SimpleNamespace(session_id="session-one"),
+        )
+    )
+
+    tool_frames = [
+        f["event"]["contentBlockStart"]["start"]["toolUse"]
+        for f in frames
+        if isinstance(f.get("event"), dict) and "contentBlockStart" in f["event"]
+    ]
+    # SDK-MCP namespace stripped to the bare tool name for the client
+    assert tool_frames == [{"name": "search", "toolUseId": "t1"}]
+    assert _delta_texts(frames) == "done"
 
 
 def test_save_turn_writes_one_user_assistant_event(
@@ -360,23 +452,37 @@ def test_save_turn_writes_one_user_assistant_event(
     ]
 
 
-def test_query_failure_does_not_persist_turn(rendered_memory_module, monkeypatch):
+def test_query_failure_streams_error_frame_and_skips_persist(
+    rendered_memory_module, monkeypatch
+):
     module = rendered_memory_module
     saved: list[tuple[str, str]] = []
     memory = SimpleNamespace(save_turn=lambda prompt, response: saved.append((prompt, response)))
     monkeypatch.setattr(module, "_create_memory", lambda actor, session: memory)
 
-    async def failed_query(_prompt, _memory):
+    async def failing_query(*, prompt, options):
         raise RuntimeError("claude failed")
+        yield  # noqa: W0101 — makes this an async generator
 
-    monkeypatch.setattr(module, "run_query", failed_query)
+    monkeypatch.setattr(module, "query", failing_query)
+
+    frames: list = []
+
+    async def run():
+        async for frame in module.invoke(
+            {"prompt": "hello", "actor_id": "agent-a__river"},
+            SimpleNamespace(session_id="session-one"),
+        ):
+            frames.append(frame)
+
     with pytest.raises(RuntimeError, match="claude failed"):
-        asyncio.run(
-            module.invoke(
-                {"prompt": "hello", "actor_id": "agent-a__river"},
-                SimpleNamespace(session_id="session-one"),
-            )
-        )
+        asyncio.run(run())
+
+    # an internalServerException frame reaches the caller before the span errors
+    assert any(
+        isinstance(f.get("event"), dict) and "internalServerException" in f["event"]
+        for f in frames
+    )
     assert saved == []
 
 
