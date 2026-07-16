@@ -1293,3 +1293,37 @@ Diagnosed buffered Claude SDK Runtime invocations hitting botocore's 60-second d
 ### Next Steps
 
 - None - task complete
+
+
+## Session 20: 方式A Claude SDK container: token streaming + live tool calls
+
+**Date**: 2026-07-16
+**Task**: 方式A Claude SDK container: token streaming + live tool calls
+**Package**: lab4-interactive
+**Branch**: `worktree-claude-sdk-streaming`
+
+### Summary
+
+Converted 方式A (container) invoke from buffered to token-level SSE streaming. Container entrypoint is now an async generator (include_partial_messages=True) emitting converse-stream {event:{...}} frames (text deltas from StreamEvent, tool starts from ToolUseBlock); telemetry + exactly-once memory preserved, errors yield internalServerException then re-raise. Added rt.stream_runtime_events() (contentType-based streaming vs buffered-image fallback) and chat.py _container_stream_events() + shared _map_converse_frame(); mode=stream for container. Frame shape is flatten_sse_text-compatible so /v1, eval, and canary rejoin full text with no change; frontend unchanged. New hermetic tests (test_container_streaming.py + updated template tests); backend gate green (ruff + 690 pytest). PR #1 opened. Done in isolated worktree branch worktree-claude-sdk-streaming; recovered from an accidental main-dir edit (absolute paths bypassed worktree) without touching the concurrent gateway task. Real-AWS re-publish/playground validation still pending (implement.md Step 6).
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `98c5c38` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
