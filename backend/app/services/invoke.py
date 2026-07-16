@@ -6,6 +6,7 @@ so both consumption paths behave identically.
 
 import json
 import logging
+from collections.abc import Iterator
 from typing import Any
 
 from app.core.errors import AppError
@@ -17,6 +18,7 @@ from app.services.agentcore import runtime as rt
 from app.services.agentcore.client import data_client
 
 logger = logging.getLogger(__name__)
+BUFFERED_CHUNK_CHARS = 60
 
 
 def _parse_gateway_text(raw_text: str, session_id: str) -> dict[str, Any]:
@@ -121,3 +123,37 @@ def invoke_agent_text(
         f"no invoke path for method '{agent.method}'",
         status_code=400,
     )
+
+
+def invoke_agent_events(
+    agent: Agent,
+    prompt: str,
+    session_id: str | None = None,
+    actor_id: str = "default",
+) -> Iterator[dict[str, Any]]:
+    """Yield native container events, with a buffered compatibility fallback."""
+    is_http_container = (
+        agent.method == "container" and (agent.spec or {}).get("protocol", "http") != "a2a"
+    )
+    if is_http_container and canary_service.active_canary_route(agent.id) is None:
+        yield from rt.stream_runtime_events(
+            data_client(),
+            agent.arn,
+            prompt,
+            session_id=session_id,
+            actor_id=actor_id,
+        )
+        return
+
+    result = invoke_agent_text(
+        agent,
+        prompt,
+        session_id=session_id,
+        actor_id=actor_id,
+    )
+    text = result["text"]
+    for index in range(0, len(text), BUFFERED_CHUNK_CHARS):
+        yield {
+            "event": "delta",
+            "data": {"text": text[index : index + BUFFERED_CHUNK_CHARS]},
+        }

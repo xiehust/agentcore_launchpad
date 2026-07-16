@@ -7,11 +7,13 @@ Explicit-client style (tests inject stubs). Shapes per bedrock-agentcore-control
 import json
 import time
 import uuid
+from collections.abc import Iterable, Iterator
 from typing import Any
 
 from app.services.agentcore.harness import new_session_id
 
 TERMINAL_FAILURES = {"CREATE_FAILED", "UPDATE_FAILED"}
+SSE_READ_CHUNK_BYTES = 32
 
 
 def _protocol_configuration(protocol: str | None) -> dict[str, Any] | None:
@@ -282,31 +284,158 @@ def wait_endpoint_ready(
 def flatten_sse_text(raw: str) -> str | None:
     """Join the text deltas of an SSE event stream, or None if raw isn't SSE.
 
-    Streaming runtimes (e.g. harness exports converted to zip agents) answer
-    `data: {"event": {...}}` lines in the InvokeHarness event shape instead
-    of the template's `{"result": ...}` JSON.
+    Supports both converted-Harness event envelopes and Launchpad's native
+    runtime events.
     """
     if not raw.lstrip().startswith("data:"):
         return None
-    parts: list[str] = []
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line.startswith("data:"):
-            continue
-        try:
-            event = json.loads(line[len("data:"):].strip())
-        except ValueError:
-            continue
-        inner = event.get("event") if isinstance(event, dict) else None
-        if not isinstance(inner, dict):
-            continue
-        if "runtimeClientError" in inner or "internalServerException" in inner:
-            detail = inner.get("runtimeClientError") or inner.get("internalServerException")
-            raise RuntimeError(f"runtime returned error: {detail}")
-        delta = inner.get("contentBlockDelta", {}).get("delta", {})
-        if isinstance(delta, dict) and delta.get("text"):
-            parts.append(delta["text"])
+    parts = [
+        event["data"]["text"]
+        for event in _normalized_runtime_events(_sse_payloads(raw.splitlines()))
+        if event["event"] == "delta"
+    ]
     return "".join(parts) or None
+
+
+def _sse_payloads(lines: Iterable[bytes | str]) -> Iterator[Any]:
+    """Decode SSE data fields without buffering beyond one event."""
+    data_lines: list[str] = []
+    for raw_line in lines:
+        line = (
+            raw_line.decode("utf-8", errors="replace")
+            if isinstance(raw_line, bytes)
+            else str(raw_line)
+        ).rstrip("\r\n")
+        if not line:
+            if data_lines:
+                data = "\n".join(data_lines)
+                data_lines.clear()
+                try:
+                    yield json.loads(data)
+                except ValueError:
+                    yield data
+            continue
+        if line.startswith("data:"):
+            data_lines.append(line[len("data:"):].lstrip())
+    if data_lines:
+        data = "\n".join(data_lines)
+        try:
+            yield json.loads(data)
+        except ValueError:
+            yield data
+
+
+def _runtime_payload_events(payload: Any) -> Iterator[dict[str, Any]]:
+    """Normalize one runtime payload to Chat's tool/delta/complete contract."""
+    if not isinstance(payload, dict):
+        text = str(payload)
+        if text:
+            yield {"event": "complete", "data": {"text": text}}
+        return
+
+    if payload.get("error"):
+        raise RuntimeError(f"runtime returned error: {payload['error']}")
+
+    kind = payload.get("event")
+    if isinstance(kind, str):
+        if kind == "delta" and payload.get("text"):
+            yield {"event": "delta", "data": {"text": str(payload["text"])}}
+        elif kind == "tool":
+            yield {
+                "event": "tool",
+                "data": {"name": str(payload.get("name", "")), "id": payload.get("id")},
+            }
+        elif kind == "complete":
+            yield {"event": "complete", "data": {"text": str(payload.get("result", ""))}}
+        elif kind == "error":
+            raise RuntimeError(str(payload.get("message", "runtime stream failed")))
+        return
+
+    inner = kind if isinstance(kind, dict) else payload
+    if "runtimeClientError" in inner or "internalServerException" in inner:
+        detail = inner.get("runtimeClientError") or inner.get("internalServerException")
+        raise RuntimeError(f"runtime returned error: {detail}")
+    tool_use = inner.get("contentBlockStart", {}).get("start", {}).get("toolUse")
+    if isinstance(tool_use, dict):
+        yield {
+            "event": "tool",
+            "data": {"name": tool_use.get("name", ""), "id": tool_use.get("toolUseId")},
+        }
+    delta = inner.get("contentBlockDelta", {}).get("delta", {})
+    if isinstance(delta, dict) and delta.get("text"):
+        yield {"event": "delta", "data": {"text": str(delta["text"])}}
+    if "result" in payload:
+        yield {"event": "complete", "data": {"text": str(payload.get("result", ""))}}
+
+
+def _normalized_runtime_events(payloads: Iterable[Any]) -> Iterator[dict[str, Any]]:
+    """Suppress a final full result when real deltas were already emitted."""
+    saw_delta = False
+    for payload in payloads:
+        for event in _runtime_payload_events(payload):
+            if event["event"] == "delta":
+                saw_delta = True
+                yield event
+            elif event["event"] == "complete":
+                if not saw_delta and event["data"]["text"]:
+                    saw_delta = True
+                    yield {"event": "delta", "data": event["data"]}
+            else:
+                yield event
+
+
+def _runtime_invoke_params(
+    runtime_arn: str,
+    prompt: str,
+    session_id: str,
+    actor_id: str,
+    qualifier: str | None,
+) -> dict[str, Any]:
+    params: dict[str, Any] = {
+        "agentRuntimeArn": runtime_arn,
+        "runtimeSessionId": session_id,
+        "payload": json.dumps({"prompt": prompt, "actor_id": actor_id}).encode("utf-8"),
+    }
+    if qualifier:
+        params["qualifier"] = qualifier
+    return params
+
+
+def stream_runtime_events(
+    client: Any,
+    runtime_arn: str,
+    prompt: str,
+    session_id: str | None = None,
+    actor_id: str = "default",
+    qualifier: str | None = None,
+) -> Iterator[dict[str, Any]]:
+    """Invoke a runtime and yield normalized tool/text events as bytes arrive."""
+    session_id = session_id or new_session_id()
+    response = client.invoke_agent_runtime(
+        **_runtime_invoke_params(runtime_arn, prompt, session_id, actor_id, qualifier)
+    )
+    body = response["response"]
+    content_type = str(response.get("contentType", "")).lower()
+    if "text/event-stream" in content_type:
+        lines = (
+            body.iter_lines(chunk_size=SSE_READ_CHUNK_BYTES)
+            if hasattr(body, "iter_lines")
+            else body.read().splitlines()
+        )
+        yield from _normalized_runtime_events(_sse_payloads(lines))
+        return
+
+    raw = body.read()
+    try:
+        payload = json.loads(raw)
+    except (ValueError, TypeError):
+        decoded = raw.decode("utf-8", errors="replace") if raw else ""
+        if decoded.lstrip().startswith("data:"):
+            yield from _normalized_runtime_events(_sse_payloads(decoded.splitlines()))
+        elif decoded:
+            yield from _normalized_runtime_events([decoded])
+    else:
+        yield from _normalized_runtime_events([payload])
 
 
 def invoke_runtime_text(
@@ -317,29 +446,21 @@ def invoke_runtime_text(
     actor_id: str = "default",
     qualifier: str | None = None,
 ) -> dict[str, Any]:
-    """Synchronous InvokeAgentRuntime with the template's {prompt} payload.
-
-    ``qualifier`` selects a named endpoint (a version-pinned alias); None keeps
-    the DEFAULT endpoint (auto-follows latest), preserving prior behavior."""
+    """Synchronous InvokeAgentRuntime, joining native streaming responses."""
     session_id = session_id or new_session_id()
-    params: dict[str, Any] = {
-        "agentRuntimeArn": runtime_arn,
-        "runtimeSessionId": session_id,
-        "payload": json.dumps({"prompt": prompt, "actor_id": actor_id}).encode("utf-8"),
-    }
-    if qualifier:
-        params["qualifier"] = qualifier
-    response = client.invoke_agent_runtime(**params)
-    raw = response["response"].read()
-    try:
-        body = json.loads(raw)
-    except (ValueError, TypeError):
-        decoded = raw.decode("utf-8", errors="replace") if raw else ""
-        body = {"result": flatten_sse_text(decoded) or decoded}
-    if isinstance(body, dict) and body.get("error"):
-        raise RuntimeError(f"runtime returned error: {body['error']}")
-    text = body.get("result", "") if isinstance(body, dict) else str(body)
-    return {"text": str(text), "session_id": session_id}
+    parts = [
+        event["data"]["text"]
+        for event in stream_runtime_events(
+            client,
+            runtime_arn,
+            prompt,
+            session_id=session_id,
+            actor_id=actor_id,
+            qualifier=qualifier,
+        )
+        if event["event"] == "delta"
+    ]
+    return {"text": "".join(parts), "session_id": session_id}
 
 
 def a2a_result_text(result: dict[str, Any]) -> str:

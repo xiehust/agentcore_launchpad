@@ -1,8 +1,7 @@
 """The single chat/invoke chain shared by the Chat playground and the public /v1 API.
 
-Harness agents stream real deltas (InvokeHarness event stream, including tool-use
-events). Runtime agents (zip/container/studio) return one buffered answer which
-the platform re-chunks — the SSE `meta` event marks which mode is active.
+Harness and Claude SDK container agents stream real deltas, including tool-use
+events. Other runtime methods keep the buffered compatibility path.
 """
 
 import json
@@ -13,9 +12,7 @@ from typing import Any
 from app.models.ledger import Agent
 from app.services.agentcore.client import data_client
 from app.services.agentcore.harness import new_session_id
-from app.services.invoke import invoke_agent_text
-
-CHUNK_CHARS = 60
+from app.services.invoke import invoke_agent_events
 
 
 def chat_stream(
@@ -24,7 +21,7 @@ def chat_stream(
     """Yield SSE-ready events: meta → (tool|delta)* → done. Never raises mid-stream;
     errors surface as an `error` event."""
     session_id = session_id or new_session_id()
-    mode = "stream" if agent.method == "harness" else "buffered"
+    mode = "stream" if agent.method in {"harness", "container"} else "buffered"
     yield {
         "event": "meta",
         "data": {"session_id": session_id, "agent": agent.name, "mode": mode},
@@ -34,10 +31,12 @@ def chat_stream(
         if agent.method == "harness":
             yield from _harness_events(agent, prompt, session_id, actor_id)
         else:
-            result = invoke_agent_text(agent, prompt, session_id=session_id, actor_id=actor_id)
-            text = result["text"]
-            for i in range(0, len(text), CHUNK_CHARS):
-                yield {"event": "delta", "data": {"text": text[i : i + CHUNK_CHARS]}}
+            yield from invoke_agent_events(
+                agent,
+                prompt,
+                session_id=session_id,
+                actor_id=actor_id,
+            )
     except Exception as exc:
         yield {"event": "error", "data": {"message": f"{type(exc).__name__}: {exc}"}}
         return

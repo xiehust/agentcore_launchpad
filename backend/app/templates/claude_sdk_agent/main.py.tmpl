@@ -18,6 +18,7 @@ import asyncio
 import json
 import logging
 import os
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -30,6 +31,7 @@ from claude_agent_sdk import (
     ClaudeAgentOptions,
     HookMatcher,
     ResultMessage,
+    StreamEvent,
     TextBlock,
     ToolResultBlock,
     ToolUseBlock,
@@ -207,6 +209,7 @@ def build_options(memory: AgentCoreMemory | None = None) -> ClaudeAgentOptions:
         "cwd": "/app/workspace",
         "permission_mode": "bypassPermissions",
         "setting_sources": ["project"],  # pick up /app/.claude (subagents, skills)
+        "include_partial_messages": True,
     }
     if ALLOWED_TOOLS:
         kwargs["allowed_tools"] = ALLOWED_TOOLS
@@ -249,23 +252,38 @@ def _result_text(content: Any) -> str:
     return json.dumps(content) if content is not None else ""
 
 
-async def run_query(
-    prompt: str, memory: AgentCoreMemory | None = None
-) -> QueryOutcome:
-    """One SDK query: collect the assistant text, tool calls AND token usage.
+async def _query_events(
+    prompt: str,
+    memory: AgentCoreMemory | None,
+    outcome: QueryOutcome,
+) -> AsyncIterator[dict[str, Any]]:
+    """Stream one SDK query while collecting its authoritative final outcome.
 
     Tool use arrives as ToolUseBlock (in AssistantMessage) and its matching
     ToolResultBlock (in UserMessage), paired by tool_use_id — captured so
     telemetry can emit one execute_tool span per call.
     """
     chunks: list[str] = []
-    outcome = QueryOutcome()
+    partial_chunks: list[str] = []
     calls: dict[str, ToolCall] = {}
+    fallback_result = ""
+    partial_since_assistant = False
     async for message in query(prompt=prompt, options=build_options(memory)):
-        if isinstance(message, AssistantMessage):
+        if isinstance(message, StreamEvent):
+            event = message.event
+            delta = event.get("delta") if event.get("type") == "content_block_delta" else None
+            if isinstance(delta, dict) and delta.get("type") == "text_delta":
+                text = str(delta.get("text", ""))
+                if text:
+                    partial_chunks.append(text)
+                    partial_since_assistant = True
+                    yield {"event": "delta", "text": text}
+        elif isinstance(message, AssistantMessage):
+            message_text: list[str] = []
             for block in message.content:
                 if isinstance(block, TextBlock):
                     chunks.append(block.text)
+                    message_text.append(block.text)
                 elif isinstance(block, ToolUseBlock):
                     # SDK-MCP tools are namespaced mcp__<server>__<name>;
                     # Claude Code built-ins (Task, …) pass through unchanged.
@@ -273,6 +291,11 @@ async def run_query(
                     calls[block.id] = ToolCall(
                         call_id=block.id, name=name, input=dict(block.input or {})
                     )
+                    yield {"event": "tool", "name": name, "id": block.id}
+            # Older CLI builds may omit StreamEvent despite the SDK option.
+            if message_text and not partial_since_assistant:
+                yield {"event": "delta", "text": "\n".join(message_text)}
+            partial_since_assistant = False
         elif isinstance(message, UserMessage):
             content = message.content if isinstance(message.content, list) else []
             for block in content:
@@ -289,20 +312,36 @@ async def run_query(
                 "num_turns": message.num_turns,
                 "total_cost_usd": message.total_cost_usd,
             }
-            if message.result and not chunks:
-                chunks.append(str(message.result))
-    outcome.result = "\n".join(chunks).strip()
+            if message.result:
+                fallback_result = str(message.result)
+    outcome.result = (
+        "\n".join(chunks).strip()
+        or fallback_result.strip()
+        or "".join(partial_chunks).strip()
+    )
     outcome.tool_calls = list(calls.values())
+
+
+async def run_query(
+    prompt: str, memory: AgentCoreMemory | None = None
+) -> QueryOutcome:
+    """Collect a query for callers that need one buffered result."""
+    outcome = QueryOutcome()
+    async for _event in _query_events(prompt, memory, outcome):
+        pass
     return outcome
 
 
 @app.entrypoint
-async def invoke(payload: dict[str, Any], context: Any = None) -> dict[str, Any]:
+async def invoke(
+    payload: dict[str, Any], context: Any = None
+) -> AsyncIterator[dict[str, Any]]:
     if isinstance(payload, (str, bytes)):
         payload = json.loads(payload)
     prompt = str(payload.get("prompt", "")).strip()
     if not prompt:
-        return {"error": "payload must include a non-empty 'prompt'"}
+        yield {"event": "error", "message": "payload must include a non-empty 'prompt'"}
+        return
     session_id = str(
         getattr(context, "session_id", "") or payload.get("session_id", "") or "adhoc"
     )
@@ -310,7 +349,9 @@ async def invoke(payload: dict[str, Any], context: Any = None) -> dict[str, Any]
     memory = _create_memory(actor_id, session_id)
 
     with tracing.traced_invocation(AGENT_NAME, session_id) as span:
-        outcome = await run_query(prompt, memory)  # unhandled errors mark the span ERROR
+        outcome = QueryOutcome()
+        async for event in _query_events(prompt, memory, outcome):
+            yield event
         for call in outcome.tool_calls:
             tracing.record_tool_call(
                 session_id=session_id,
@@ -336,7 +377,7 @@ async def invoke(payload: dict[str, Any], context: Any = None) -> dict[str, Any]
         )
         if memory:
             await asyncio.to_thread(memory.save_turn, prompt, outcome.result)
-    return {"result": outcome.result, "usage": outcome.usage}
+    yield {"event": "complete", "result": outcome.result, "usage": outcome.usage}
 
 
 if __name__ == "__main__":

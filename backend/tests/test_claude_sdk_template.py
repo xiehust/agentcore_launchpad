@@ -23,6 +23,10 @@ SPEC = AgentSpec(
 )
 
 
+async def collect_async(iterator):
+    return [item async for item in iterator]
+
+
 def test_render_replaces_placeholders():
     code = render_main_py(SPEC)
     assert "__LAUNCHPAD_" not in code
@@ -317,8 +321,61 @@ def test_run_query_wires_request_local_memory_hook(
     asyncio.run(module.run_query("original prompt", memory))
 
     assert captured["prompt"] == "original prompt"
+    assert captured["options"].include_partial_messages is True
     matcher = captured["options"].hooks["UserPromptSubmit"][0]
     assert len(matcher.hooks) == 1
+
+
+def test_query_events_stream_text_without_repeating_final_message(
+    rendered_memory_module, monkeypatch
+):
+    module = rendered_memory_module
+    captured = {}
+
+    async def fake_query(*, prompt, options):
+        captured.update(prompt=prompt, options=options)
+        yield module.StreamEvent(
+            uuid="message-1",
+            session_id="session-one",
+            event={
+                "type": "content_block_delta",
+                "delta": {"type": "text_delta", "text": "hello "},
+            },
+        )
+        yield module.StreamEvent(
+            uuid="message-1",
+            session_id="session-one",
+            event={
+                "type": "content_block_delta",
+                "delta": {"type": "text_delta", "text": "world"},
+            },
+        )
+        yield module.AssistantMessage(
+            content=[module.TextBlock(text="hello world")],
+            model="test-model",
+            uuid="message-1",
+        )
+        yield module.ResultMessage(
+            subtype="success",
+            duration_ms=10,
+            duration_api_ms=8,
+            is_error=False,
+            num_turns=1,
+            session_id="session-one",
+            result="hello world",
+        )
+
+    monkeypatch.setattr(module, "query", fake_query)
+    outcome = module.QueryOutcome()
+
+    events = asyncio.run(collect_async(module._query_events("hello", None, outcome)))
+
+    assert events == [
+        {"event": "delta", "text": "hello "},
+        {"event": "delta", "text": "world"},
+    ]
+    assert outcome.result == "hello world"
+    assert captured["options"].include_partial_messages is True
 
 
 def test_invoke_persists_completed_turn_once(rendered_memory_module, monkeypatch):
@@ -327,20 +384,29 @@ def test_invoke_persists_completed_turn_once(rendered_memory_module, monkeypatch
     memory = SimpleNamespace(save_turn=lambda prompt, response: saved.append((prompt, response)))
     monkeypatch.setattr(module, "_create_memory", lambda actor, session: memory)
 
-    async def fake_run_query(prompt, request_memory):
+    async def fake_query_events(prompt, request_memory, outcome):
         assert prompt == "hello"
         assert request_memory is memory
-        return module.QueryOutcome(result="hello back", usage={"input_tokens": 2})
+        outcome.result = "hello back"
+        outcome.usage = {"input_tokens": 2}
+        yield {"event": "delta", "text": "hello back"}
 
-    monkeypatch.setattr(module, "run_query", fake_run_query)
-    result = asyncio.run(
-        module.invoke(
+    monkeypatch.setattr(module, "_query_events", fake_query_events)
+    events = asyncio.run(
+        collect_async(module.invoke(
             {"prompt": "hello", "actor_id": "agent-a__river"},
             SimpleNamespace(session_id="session-one"),
-        )
+        ))
     )
 
-    assert result["result"] == "hello back"
+    assert events == [
+        {"event": "delta", "text": "hello back"},
+        {
+            "event": "complete",
+            "result": "hello back",
+            "usage": {"input_tokens": 2},
+        },
+    ]
     assert saved == [("hello", "hello back")]
 
 
@@ -366,16 +432,17 @@ def test_query_failure_does_not_persist_turn(rendered_memory_module, monkeypatch
     memory = SimpleNamespace(save_turn=lambda prompt, response: saved.append((prompt, response)))
     monkeypatch.setattr(module, "_create_memory", lambda actor, session: memory)
 
-    async def failed_query(_prompt, _memory):
+    async def failed_query(_prompt, _memory, _outcome):
         raise RuntimeError("claude failed")
+        yield
 
-    monkeypatch.setattr(module, "run_query", failed_query)
+    monkeypatch.setattr(module, "_query_events", failed_query)
     with pytest.raises(RuntimeError, match="claude failed"):
         asyncio.run(
-            module.invoke(
+            collect_async(module.invoke(
                 {"prompt": "hello", "actor_id": "agent-a__river"},
                 SimpleNamespace(session_id="session-one"),
-            )
+            ))
         )
     assert saved == []
 

@@ -1,14 +1,13 @@
 # Claude Agent SDK Containers - Runtime Invocation
 
-## Scenario: buffered long-running invocations
+## Scenario: native response streaming with synchronous compatibility
 
 ### 1. Scope / Trigger
 
-Use this contract when changing the shared AgentCore boto3 client factory,
-Claude SDK container response behavior, or runtime invocation settings.
-Claude SDK containers await the complete `claude-agent-sdk` query and return
-one buffered JSON response, so the caller may receive no response bytes while
-the agent is working.
+Use this contract when changing the shared AgentCore data client, Claude SDK
+container response behavior, Chat/public SSE, or runtime invocation parsing.
+Claude containers must expose SDK partial text as it is generated; returning a
+complete JSON result and re-chunking it after EOF is not streaming.
 
 ### 2. Signatures
 
@@ -16,18 +15,31 @@ the agent is working.
 # app/core/config.py
 Settings.agentcore_read_timeout_s: int = 1000
 
-# app/services/agentcore/client.py
-data_client()  # cached boto3 "bedrock-agentcore" client
+# generated main.py
+build_options(...)  # ClaudeAgentOptions(include_partial_messages=True)
+_query_events(prompt, memory, outcome) -> AsyncIterator[dict[str, Any]]
+invoke(payload, context) -> AsyncIterator[dict[str, Any]]
 
 # app/services/agentcore/runtime.py
-invoke_runtime_text(
+stream_runtime_events(
     client,
     runtime_arn: str,
     prompt: str,
     session_id: str | None = None,
     actor_id: str = "default",
     qualifier: str | None = None,
-) -> dict[str, Any]
+) -> Iterator[dict[str, Any]]
+
+invoke_runtime_text(...) -> dict[str, Any]
+```
+
+Runtime SSE data payloads:
+
+```json
+{"event": "delta", "text": "..."}
+{"event": "tool", "name": "...", "id": "..."}
+{"event": "complete", "result": "...", "usage": {}}
+{"event": "error", "message": "..."}
 ```
 
 Environment override:
@@ -38,66 +50,101 @@ LAUNCHPAD_AGENTCORE_READ_TIMEOUT_S=<positive integer seconds>
 
 ### 3. Contracts
 
+- Generated containers set `include_partial_messages=True`, consume only
+  `StreamEvent` values whose raw event is `content_block_delta` /
+  `text_delta`, and yield one `delta` payload for each non-empty text fragment.
+- `AssistantMessage` remains authoritative for the complete response and tool
+  calls. Do not emit its complete text after partials; emit it only as a
+  fallback when a CLI version supplies no partial text for that assistant
+  message.
+- `ResultMessage` owns usage and failure status. The runtime emits `complete`
+  only after tracing and best-effort Memory persistence finish.
+- The generated `@app.entrypoint` is an async generator. BedrockAgentCoreApp
+  serializes each yielded dictionary as one `data: <json>` SSE event.
+- `stream_runtime_events()` checks `contentType`. For
+  `text/event-stream`, consume `StreamingBody.iter_lines(chunk_size=32)` and
+  yield normalized `tool` / `delta` events immediately. Never use the
+  1024-byte default or call an unbounded `.read()` first.
+- The parser also accepts converted-Harness envelopes
+  (`{"event":{"contentBlockDelta":...}}`) and legacy buffered
+  `application/json` responses.
+- `complete.result` is a fallback only. Once any delta has been observed, do
+  not emit the final full result again.
+- `invoke_runtime_text()` consumes `stream_runtime_events()` and joins deltas.
+  Chat and `/v1/invoke-stream` use the same parser, so sync and stream paths do
+  not own separate response decoders.
+- Direct HTTP container invocations stream natively. A2A and active canary
+  Gateway routes retain their existing buffered compatibility paths.
 - `data_client()` passes
-  `botocore.config.Config(read_timeout=settings.agentcore_read_timeout_s)` to
-  the `bedrock-agentcore` client. Do not rely on botocore's 60-second default.
-- The default is 1000 seconds. AgentCore's non-adjustable synchronous request
-  limit is 900 seconds; the extra margin allows the service timeout or final
-  response to reach the caller first.
-- The setting follows normal Launchpad precedence: default <
-  `config/launchpad.yaml` < `LAUNCHPAD_` environment < init kwargs.
-- `get_settings()` and `data_client()` are cached. Changing the YAML or
-  environment value requires a backend restart.
-- Do not apply this timeout to `bedrock-agentcore-control`, `bedrock-agent`, or
-  `bedrock-agent-runtime` clients. Do not change retry behavior as part of this
-  contract.
-- Container, zip, studio, harness, evaluation, and canary paths continue to
-  share the one `bedrock-agentcore` data client. The response payload and
-  buffered Chat mode remain unchanged.
-- A configured AWS Region changes the endpoint hostname only; it does not
-  change the timeout behavior.
+  `Config(read_timeout=settings.agentcore_read_timeout_s)` to the
+  `bedrock-agentcore` client. The 1000-second default still protects quiet
+  periods and legacy buffered runtimes; it is not a substitute for streaming.
+- Existing deployed containers contain their old generated `main.py`. A
+  template change requires republishing each agent before its DEFAULT endpoint
+  can stream.
+- AgentCore binds an existing `runtimeSessionId` to the runtime version that
+  first served it. After republishing, start a new Chat session to reach the
+  new streaming image; an old session intentionally continues using its
+  previous version and may still return one buffered JSON result.
 
 ### 4. Validation & Error Matrix
 
 | Condition | Behavior |
 |---|---|
-| setting omitted | use 1000 seconds |
-| positive integer override | pass that value to `Config.read_timeout` |
-| zero, negative, or non-integer value | settings validation fails at startup |
-| agent finishes before configured timeout | return the existing buffered response |
-| configured timeout is shorter than agent work | botocore may raise `ReadTimeoutError` |
-| synchronous work exceeds 15 minutes | AgentCore service limit applies; use asynchronous invocation for longer work |
+| SDK emits text deltas | forward each delta before query completion |
+| SDK emits no partials | emit `AssistantMessage` text once as fallback |
+| runtime emits `complete` after deltas | suppress duplicate full result |
+| runtime returns legacy JSON | emit its `result` as one delta |
+| converted Harness SSE | normalize text/tool events |
+| runtime SSE emits `error` | raise; Chat converts it to one `error` event |
+| Claude query fails | AgentCore emits stream error; write no Memory event |
+| old session reused after republish | remains on its original runtime version; start a new session to test the new image |
+| setting omitted | use 1000-second read timeout |
+| invalid timeout | settings validation fails at startup |
+| synchronous work exceeds 15 minutes | AgentCore service limit still applies |
 
 ### 5. Good / Base / Bad Cases
 
-- **Good:** a Claude SDK task takes several minutes but less than 15 minutes;
-  the backend keeps reading and returns the final result.
-- **Base:** a short task behaves exactly as before; only the socket read
-  deadline differs.
-- **Bad configuration:** an operator deliberately sets a short positive
-  timeout and accepts earlier client-side failure.
-- **Bad workload:** work requires more than 15 minutes; increasing this setting
-  cannot extend the AgentCore synchronous service limit.
+- **Good:** the first Claude `text_delta` reaches Chat while the SDK query is
+  still running; later deltas append to the same message.
+- **Base:** a zip/studio or pre-republish container returns legacy JSON and the
+  compatibility decoder emits one complete delta.
+- **Version-pinned:** a session created before republish continues returning
+  its original version's response shape; `NEW SESSION` reaches the new image.
+- **Bad but surfaced:** Claude emits partial text and then fails; Chat preserves
+  the visible partial answer and appends an error event.
+- **Bad implementation:** read the whole StreamingBody, parse the final JSON,
+  then split it into 60-character chunks. The UI animates chunks only after the
+  model has finished.
 
 ### 6. Tests Required
 
-- Settings tests assert the 1000-second default and environment override.
-- Client-factory tests inject settings and assert the boto3 call receives the
-  correct service name, Region, and `Config.read_timeout`.
-- The backend lint and unit-test suite must pass. Real-AWS validation may invoke
-  a container task that runs longer than 60 seconds, but it is not part of the
-  hermetic verify gate.
+- Rendered source compiles, replaces all placeholders, imports `StreamEvent`,
+  and enables `include_partial_messages`.
+- Template tests prove two partial text events are emitted once, the final
+  `AssistantMessage` is not duplicated, and `QueryOutcome.result` is complete.
+- Successful streaming persists one USER/ASSISTANT Memory event after query
+  completion; failure persists none.
+- Runtime parser tests prove the first SSE event is yielded before later lines
+  are consumed, the 32-byte read size is used, tool events survive, and
+  `complete.result` is not duplicated.
+- Legacy JSON, converted-Harness SSE, qualifier, and error tests remain green.
+- Chat tests prove container `meta.mode=stream` and native event order is
+  preserved.
+- The canonical `make verify` gate and one real republished-container browser
+  invocation must pass.
 
 ### 7. Wrong vs Correct
 
 ```python
-# WRONG: botocore silently falls back to a 60-second read timeout.
-return boto3.client("bedrock-agentcore", region_name=settings.region)
+# WRONG: no bytes reach the caller until the runtime closes the response.
+raw = response["response"].read()
+text = json.loads(raw)["result"]
+for chunk in artificial_chunks(text):
+    yield chunk
 
-# CORRECT: allow the full AgentCore synchronous request window.
-return boto3.client(
-    "bedrock-agentcore",
-    region_name=settings.region,
-    config=Config(read_timeout=settings.agentcore_read_timeout_s),
-)
+# CORRECT: parse each SSE event directly from the StreamingBody.
+for line in response["response"].iter_lines(chunk_size=32):
+    for event in parse_sse_line(line):
+        yield event
 ```

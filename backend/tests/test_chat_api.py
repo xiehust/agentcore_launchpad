@@ -7,6 +7,16 @@ from app.models.ledger import Agent
 from app.services.chat import chat_stream, sse_encode
 
 
+def delta_events(text: str):
+    return iter(
+        {
+            "event": "delta",
+            "data": {"text": text[index : index + 60]},
+        }
+        for index in range(0, len(text), 60)
+    )
+
+
 def make_active_agent(method="zip_runtime", name="chat-agent") -> str:
     db = SessionLocal()
     agent = Agent(
@@ -27,11 +37,8 @@ def test_chat_stream_buffered_chunks(monkeypatch):
     db.close()
     monkeypatch.setattr(
         chat_service,
-        "invoke_agent_text",
-        lambda a, p, session_id=None, actor_id="river": {
-            "text": "x" * 150,
-            "session_id": "s" * 40,
-        },
+        "invoke_agent_events",
+        lambda a, p, session_id=None, actor_id="river": delta_events("x" * 150),
     )
     events = list(chat_stream(agent, "hello"))
     kinds = [e["event"] for e in events]
@@ -42,6 +49,28 @@ def test_chat_stream_buffered_chunks(monkeypatch):
     assert "".join(d["data"]["text"] for d in deltas) == "x" * 150
 
 
+def test_chat_stream_container_forwards_native_events(monkeypatch):
+    db = SessionLocal()
+    agent = db.get(Agent, make_active_agent(method="container", name="stream-agent"))
+    db.close()
+    native = [
+        {"event": "delta", "data": {"text": "hello "}},
+        {"event": "tool", "data": {"name": "search", "id": "tool-1"}},
+        {"event": "delta", "data": {"text": "world"}},
+    ]
+    monkeypatch.setattr(
+        chat_service,
+        "invoke_agent_events",
+        lambda *args, **kwargs: iter(native),
+    )
+
+    events = list(chat_stream(agent, "hello"))
+
+    assert events[0]["data"]["mode"] == "stream"
+    assert events[1:-1] == native
+    assert events[-1]["event"] == "done"
+
+
 def test_chat_stream_error_event(monkeypatch):
     db = SessionLocal()
     agent = db.get(Agent, make_active_agent(name="chat-agent-err"))
@@ -50,7 +79,7 @@ def test_chat_stream_error_event(monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("runtime unavailable")
 
-    monkeypatch.setattr(chat_service, "invoke_agent_text", boom)
+    monkeypatch.setattr(chat_service, "invoke_agent_events", boom)
     events = list(chat_stream(agent, "hello"))
     assert events[-1]["event"] == "error"
     assert "runtime unavailable" in events[-1]["data"]["message"]
@@ -102,8 +131,8 @@ def test_chat_endpoint_tracks_session(client, monkeypatch):
     agent_id = make_active_agent(name="chat-sess-agent")
     monkeypatch.setattr(
         chat_service,
-        "invoke_agent_text",
-        lambda a, p, session_id=None, actor_id="river": {"text": "ok", "session_id": "s" * 40},
+        "invoke_agent_events",
+        lambda a, p, session_id=None, actor_id="river": delta_events("ok"),
     )
     res = client.post(f"/api/chat/{agent_id}", json={"prompt": "hi"})
     assert res.status_code == 200
@@ -119,11 +148,8 @@ def test_chat_history_persists_and_replays(client, monkeypatch):
     agent_id = make_active_agent(name="chat-hist-agent")
     monkeypatch.setattr(
         chat_service,
-        "invoke_agent_text",
-        # real runtimes answer under the session id they were invoked with
-        lambda a, p, session_id=None, actor_id="river": {
-            "text": f"echo: {p}", "session_id": session_id,
-        },
+        "invoke_agent_events",
+        lambda a, p, session_id=None, actor_id="river": delta_events(f"echo: {p}"),
     )
     client.post(f"/api/chat/{agent_id}", json={"prompt": "first question"})
     sid = client.get(f"/api/chat/{agent_id}/sessions").json()["sessions"][0]["session_id"]
@@ -157,8 +183,8 @@ def test_sessions_without_transcript_hidden(client, monkeypatch):
 
     monkeypatch.setattr(
         chat_service,
-        "invoke_agent_text",
-        lambda a, p, session_id=None, actor_id="river": {"text": "ok", "session_id": "s" * 40},
+        "invoke_agent_events",
+        lambda a, p, session_id=None, actor_id="river": delta_events("ok"),
     )
     client.post(f"/api/chat/{agent_id}", json={"prompt": "hi"})
     sessions = client.get(f"/api/chat/{agent_id}/sessions").json()["sessions"]
@@ -174,7 +200,7 @@ def test_chat_history_records_errors(client, monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("runtime exploded")
 
-    monkeypatch.setattr(chat_service, "invoke_agent_text", boom)
+    monkeypatch.setattr(chat_service, "invoke_agent_events", boom)
     client.post(f"/api/chat/{agent_id}", json={"prompt": "doomed", "session_id": "e" * 40})
     history = client.get(
         f"/api/chat/{agent_id}/history", params={"session_id": "e" * 40}

@@ -108,6 +108,66 @@ def test_invoke_runtime_text_passes_qualifier():
     assert stub.invoked_with["qualifier"] == "stable"
 
 
+def test_stream_runtime_events_yields_native_sse_incrementally():
+    class Body:
+        def __init__(self):
+            self.lines_seen = 0
+            self.chunk_size = None
+
+        def iter_lines(self, *, chunk_size):
+            self.chunk_size = chunk_size
+            for line in [
+                b'data: {"event":"delta","text":"hello "}',
+                b"",
+                b'data: {"event":"tool","name":"search","id":"tool-1"}',
+                b"",
+                b'data: {"event":"delta","text":"world"}',
+                b"",
+                b'data: {"event":"complete","result":"hello world"}',
+                b"",
+            ]:
+                self.lines_seen += 1
+                yield line
+
+    body = Body()
+
+    class StreamingDataPlane:
+        def invoke_agent_runtime(self, **_kwargs):
+            return {"response": body, "contentType": "text/event-stream"}
+
+    stream = rt.stream_runtime_events(StreamingDataPlane(), "arn:rt-1", "hi")
+
+    assert next(stream) == {"event": "delta", "data": {"text": "hello "}}
+    assert body.lines_seen == 2
+    assert body.chunk_size == 32
+    assert list(stream) == [
+        {"event": "tool", "data": {"name": "search", "id": "tool-1"}},
+        {"event": "delta", "data": {"text": "world"}},
+    ]
+
+
+def test_invoke_runtime_text_joins_native_sse_without_final_duplication():
+    class Body:
+        def iter_lines(self, *, chunk_size):
+            assert chunk_size == 32
+            yield from [
+                b'data: {"event":"delta","text":"hello "}',
+                b"",
+                b'data: {"event":"delta","text":"world"}',
+                b"",
+                b'data: {"event":"complete","result":"hello world"}',
+                b"",
+            ]
+
+    class StreamingDataPlane:
+        def invoke_agent_runtime(self, **_kwargs):
+            return {"response": Body(), "contentType": "text/event-stream"}
+
+    result = rt.invoke_runtime_text(StreamingDataPlane(), "arn:rt-1", "hi")
+
+    assert result["text"] == "hello world"
+
+
 # ─── sigv4_post ──────────────────────────────────────────────────────────────
 def _stub_creds(monkeypatch):
     monkeypatch.setattr(

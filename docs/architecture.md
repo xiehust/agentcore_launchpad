@@ -117,6 +117,17 @@ public  /v1  ──┘        │
 The public `/v1` surface adds `X-Api-Key` auth (keys stored sha256-hashed);
 everything downstream of the dispatch is identical to the console path.
 
+Harness and Claude Agent SDK container agents stream native model deltas.
+Claude containers enable SDK partial messages and yield `delta`, `tool`, and
+`complete` events through the AgentCore Runtime SSE response; the platform
+parses the Runtime `StreamingBody` incrementally and forwards those events
+without waiting for EOF. Synchronous invoke consumes the same event parser and
+joins deltas. Zip/studio runtimes and active canary Gateway routes retain the
+buffered compatibility path. Existing containers must be republished to pick
+up a changed generated runtime template. AgentCore pins an existing runtime
+session to the version that first served it, so a post-republish validation
+must start a new Chat session; an old session continues on its original image.
+
 ## Existing Gateway governance
 
 `/governance` reads MCP Gateways, targets, Policy Engines, policies, and
