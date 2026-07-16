@@ -59,8 +59,8 @@ real, runnable code in this repo.
 | **Memory** | One shared `launchpad_memory` singleton: short-term session events + long-term semantic & user-preference strategies. Namespaces are keyed only on `{actorId}` (there is no `{agentId}` template), so the platform folds the agent id into the actor — `scoped_actor(agent_id, human)` → `<agent>__<human>` — which partitions **both** short-term events and long-term records (`/facts/<agent>__<human>`) per agent. Generated Strands runtimes restore short-term turns through `AgentCoreMemorySessionManager`. Claude Agent SDK containers create one request-local `MemorySessionManager`, inject bounded short-term turns plus `/facts/<actor>` and `/preferences/<actor>` records through a `UserPromptSubmit` hook, then persist the successful USER/ASSISTANT pair as one event. A2A runtimes use `<agent>__a2a__<contextId>` because direct A2A currently has no authenticated human actor envelope. One agent's learned facts never bleed into another's for the same person or A2A context; the ledger still stores the bare human actor for display. |
 | **Gateway** | `launchpad-gw` turns a REST API (office-facts) and a Lambda (hr-database) into MCP tools with Cognito-JWT auth; agent tool calls flow through it. |
 | **Identity** | Token vault backing the gateway — an OAuth2 provider (agent outbound auth) and an API-key provider. |
-| **Registry** | `launchpad-registry` catalogues three descriptor types: A2A (agents), MCP (tools), AGENT_SKILLS (skills). Every deploy auto-creates and submits an A2A record. The console also registers records by hand — external remote MCP servers (streamable-http URL) and skills (SKILL.md → artifacts bucket) — and drives the full lifecycle: submit → approve/reject (a REJECTED record can still be approved), deprecate (terminal — verified live; only delete remains), delete. The registry doubles as the **mount catalog**: `GET /api/registry/attachables` serves only APPROVED MCP/skill records to the create wizard, where MCP records split on URL — the shared gateway attaches as `agentcore_gateway` (OAuth), any other URL as `remote_mcp` (unauthenticated for now) — and skills attach via their s3 `skills[{path}]`. |
-| **Policy** | A Cedar policy engine attached to the gateway in `ENFORCE` mode; deny decisions carry the deciding policy id. Supports NL → Cedar policy generation. |
+| **Registry** | `launchpad-registry` catalogues A2A agents, MCP servers, and AGENT_SKILLS. Every deploy auto-creates and submits an A2A record. Governance can import one existing AgentCore Gateway as one MCP record containing the Gateway endpoint and its complete discovered tool catalog; legacy per-target records remain until an explicit retirement after the Gateway record is APPROVED. Registry approval controls catalog visibility, not Gateway authorization. `GET /api/registry/attachables` reports catalog status separately from Harness attachability and resolves Gateway auth server-side. |
+| **Policy** | Governance discovers existing MCP Gateways live, persists opt-in management through Launchpad-owned Gateway tags, and manages one attached Policy Engine plus Cedar policies. New Engines, Gateway attachments, and policies start in `LOG_ONLY`; ACTIVE edits create LOG_ONLY candidates, promotion and rollback use conservative ordering, and Gateway `ENFORCE` requires evidence or a typed zero-evidence override. Every mutation is journaled locally while AWS remains the source of current state. |
 | **Evaluation** | Real `StartBatchEvaluation` / insights over CloudWatch traces. A run's scope is exactly one of: a **dataset** (replay items — multi-turn scenarios replay sequentially in one session), explicit **session ids**, or a **time window** (`lookback_hours` 1–336 — passive: no new invocations, `filterConfig.timeRange` over existing traffic). 13 general built-in evaluators plus the 3 ground-truth-only `Builtin.Trajectory*Match` matchers (selectable only on dataset runs whose scenarios define `expected_trajectory`) plus custom LLM-as-a-judge evaluators with full CRUD — create/edit (UpdateEvaluator is a full-config replace) on the `?view=evaluators` sub-page. Insights runs pick a subset of the three analysis types (failure analysis / user intent / execution summary). Datasets live in SQLite as devguide scenarios (`?view=datasets` sub-page: scenario editor, JSON/JSONL import) and sync one-way to immutable AWS Dataset resources (`AGENTCORE_EVALUATION_PREDEFINED_V1`); scenario ground truth (assertions / expected responses / expected trajectory) is injected into batch runs via `evaluationMetadata.sessionMetadata`. One batch per account — queue managed, unchanged. |
 | **Optimization** | Recommendations → configuration bundles → gateway A/B (config-bundle 50/50) → target-based canary → verdict → promote → cleanup. |
 | **Observability** | CloudWatch Transaction Search (X-Ray trace segment destination → CloudWatch Logs). Traces are read from the `aws/spans` log group and rendered as a per-session rail. |
@@ -116,6 +116,34 @@ public  /v1  ──┘        │
 
 The public `/v1` surface adds `X-Api-Key` auth (keys stored sha256-hashed);
 everything downstream of the dispatch is identical to the console path.
+
+## Existing Gateway governance
+
+`/governance` reads MCP Gateways, targets, Policy Engines, policies, and
+Registry records directly from AgentCore. Opening a Gateway is read-only.
+Selecting **Manage** adds only these durable tags:
+
+```text
+agentcore-launchpad:managed = true
+agentcore-launchpad:managed-by = agentcore-launchpad
+```
+
+Registry import and Policy mutations require the tag plus a fresh
+`updatedAt`. Unmanaging removes only those tags; it never detaches or deletes
+Gateway, Engine, Policy, or Registry resources.
+
+The Registry and Harness boundaries are intentionally separate. A Gateway MCP
+record contains the whole Gateway tool catalog. Selecting that record attaches
+the whole Gateway to a Harness; Cedar policies authorize individual actions.
+AWS_IAM and unauthenticated Gateways resolve to `awsIam` and `none`. The
+Launchpad-owned CUSTOM_JWT Gateway reuses its configured OAuth provider.
+External CUSTOM_JWT Gateways without a managed provider mapping remain
+catalog-only.
+
+AgentCore Policy decision span fields have not yet been verified in this
+account. The scoped decision endpoint therefore returns `available=false`
+instead of projecting guessed telemetry, and zero-evidence promotion requires
+the typed Gateway name plus a recorded reason.
 
 ## Console authentication
 
@@ -205,6 +233,7 @@ State that is cheap and local lives in a SQLite ledger at `data/launchpad.db`
 | `chat_sessions` | Chat playground sessions — turns, actor, last-seen |
 | `api_keys` | Public-API keys — sha256 hash + prefix (plaintext never stored) |
 | `policy_decisions` | Governance decision log — principal, tool, ALLOW/DENY, reason |
+| `policy_changes` | Immutable Gateway/Engine/Policy mutation snapshots, operation progress, override reasons, and rollback inputs |
 | `eval_datasets` / `eval_runs` | Evaluation datasets (legacy prompts or devguide scenarios + description + last AWS-sync blob) and run state (scores or insight trees; window runs encode their scope as `dataset_name="window:<N>h"`) |
 | `experiments` | Optimization loop — stage + per-stage artifacts, resumable |
 

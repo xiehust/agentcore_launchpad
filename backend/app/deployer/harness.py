@@ -8,6 +8,7 @@ Stage mapping:
     register  → create/refresh the A2A registry record (auto-submit)
 """
 
+import re
 from typing import Any
 
 from app.core.config import get_settings
@@ -15,6 +16,7 @@ from app.deployer.pipeline import StageContext, StageResult, register_method
 from app.models.ledger import Agent
 from app.schemas.agent import AgentSpec
 from app.services import kb_gateway as kbgw
+from app.services import registry_console
 from app.services.agentcore import harness as hc
 from app.services.agentcore.client import control_client
 
@@ -23,6 +25,7 @@ BUILTIN_TOOL_TYPES = {
     "browser": "agentcore_browser",
 }
 GATEWAY_SCOPE = "launchpad-gw/invoke"
+_TOOL_NAME_RE = re.compile(r"[^A-Za-z0-9_]+")
 
 
 def _kb_prompt(spec: AgentSpec) -> str:
@@ -53,12 +56,14 @@ def build_create_params(
     memory_arn: str | None,
     gateway: dict[str, str] | None = None,
     kb_gateway: dict[str, str] | None = None,
+    gateway_attachments: list[dict[str, Any]] | None = None,
 ) -> dict:
     """AgentSpec → CreateHarness kwargs. Harness names disallow hyphens.
 
     ``gateway`` carries {arn, oauth_provider_arn} — any spec tool of type
     "gateway" attaches the shared gateway with CLIENT_CREDENTIALS outbound auth
-    (the harness fetches Cognito M2M tokens itself via AgentCore Identity).
+    (legacy config-less ToolRefs). ``gateway_attachments`` is the server-side
+    live Registry/Gateway resolution for new ToolRefs and takes precedence.
     ``kb_gateway`` carries the same shape for launchpad-kb-gw; it attaches when
     the spec mounts knowledge bases.
     """
@@ -88,7 +93,31 @@ def build_create_params(
                     "config": {"remoteMcp": {"url": tool.config["url"]}},
                 }
             )
-    if gateway and any(t.type == "gateway" for t in spec.tools):
+    if gateway_attachments is not None:
+        used_names: set[str] = set()
+        for index, attachment in enumerate(gateway_attachments, start=1):
+            gateway_arn = attachment.get("gateway_arn")
+            outbound_auth = attachment.get("outbound_auth")
+            if not gateway_arn or not outbound_auth:
+                raise ValueError("resolved Gateway attachment is missing ARN or outbound auth")
+            name = _gateway_tool_name(
+                str(attachment.get("gateway_name") or "gateway"),
+                index,
+                used_names,
+            )
+            tools.append(
+                {
+                    "type": "agentcore_gateway",
+                    "name": name,
+                    "config": {
+                        "agentCoreGateway": {
+                            "gatewayArn": gateway_arn,
+                            "outboundAuth": outbound_auth,
+                        }
+                    },
+                }
+            )
+    elif gateway and any(t.type == "gateway" for t in spec.tools):
         tools.append(
             {
                 "type": "agentcore_gateway",
@@ -107,7 +136,15 @@ def build_create_params(
                 },
             }
         )
-    if kb_gateway and spec.knowledge_bases:
+    resolved_gateway_arns = {
+        attachment.get("gateway_arn")
+        for attachment in gateway_attachments or []
+    }
+    if (
+        kb_gateway
+        and spec.knowledge_bases
+        and kb_gateway["arn"] not in resolved_gateway_arns
+    ):
         tools.append(
             {
                 "type": "agentcore_gateway",
@@ -137,6 +174,19 @@ def build_create_params(
     return params
 
 
+def _gateway_tool_name(name: str, index: int, used: set[str]) -> str:
+    base = _TOOL_NAME_RE.sub("_", name).strip("_") or f"gateway_{index}"
+    if base[0].isdigit():
+        base = f"gateway_{base}"
+    candidate = base
+    suffix = 2
+    while candidate in used:
+        candidate = f"{base}_{suffix}"
+        suffix += 1
+    used.add(candidate)
+    return candidate
+
+
 def _skill_source(path: str) -> dict[str, Any]:
     """spec.skills entry → HarnessSkills member. The API's ``path`` member is a
     *filesystem* path — S3 URIs sent there pass validation but are silently
@@ -145,15 +195,6 @@ def _skill_source(path: str) -> dict[str, Any]:
     if path.startswith("s3://"):
         return {"s3": {"uri": path.removesuffix("SKILL.md")}}
     return {"path": path}
-
-
-def _gateway_config(resources: dict[str, Any]) -> dict[str, str] | None:
-    if resources.get("gateway_arn") and resources.get("oauth_provider_arn"):
-        return {
-            "arn": resources["gateway_arn"],
-            "oauth_provider_arn": resources["oauth_provider_arn"],
-        }
-    return None
 
 
 def _kb_gateway_config(resources: dict[str, Any]) -> dict[str, str] | None:
@@ -165,18 +206,20 @@ def _kb_gateway_config(resources: dict[str, Any]) -> dict[str, str] | None:
     return None
 
 
+def _build_live_params(spec: AgentSpec, resources: dict[str, Any]) -> dict[str, Any]:
+    return build_create_params(
+        spec,
+        resources.get("execution_role_arn", ""),
+        resources.get("memory_arn"),
+        kb_gateway=_kb_gateway_config(resources),
+        gateway_attachments=registry_console.resolve_gateway_attachments(spec.tools),
+    )
+
+
 def _stage_generate(ctx: StageContext, agent: Agent) -> StageResult:
     settings = get_settings()
     spec = AgentSpec(**agent.spec)
-    role_arn = settings.resources.get("execution_role_arn", "")
-    memory_arn = settings.resources.get("memory_arn")
-    params = build_create_params(
-        spec,
-        role_arn,
-        memory_arn,
-        gateway=_gateway_config(settings.resources),
-        kb_gateway=_kb_gateway_config(settings.resources),
-    )
+    params = _build_live_params(spec, settings.resources)
     ctx.scratch["create_params"] = params
     ctx.log(f"harness request generated for {params['harnessName']} · model {spec.model_id}")
     return StageResult(detail=f"harnessName: {params['harnessName']}")
@@ -215,13 +258,7 @@ def _stage_provision(ctx: StageContext, agent: Agent) -> StageResult:
         # generate ran before the KB gateway existed on first attach — rebuild
         # the request now that kb_gateway_* resources are persisted
         settings = get_settings()
-        ctx.scratch["create_params"] = build_create_params(
-            spec,
-            settings.resources.get("execution_role_arn", ""),
-            settings.resources.get("memory_arn"),
-            gateway=_gateway_config(settings.resources),
-            kb_gateway=_kb_gateway_config(settings.resources),
-        )
+        ctx.scratch["create_params"] = _build_live_params(spec, settings.resources)
         ctx.log(f"kb gateway ready · {len(spec.knowledge_bases)} knowledge base(s) mounted")
         return StageResult(
             detail=f"iam role reused · kb targets ready ({len(spec.knowledge_bases)})"
@@ -247,13 +284,7 @@ def _stage_deploy(ctx: StageContext, agent: Agent) -> StageResult:
             params = ctx.scratch.get("create_params")
             if params is None:  # resume/update path without scratch — regenerate
                 settings = get_settings()
-                params = build_create_params(
-                    AgentSpec(**row.spec),
-                    settings.resources.get("execution_role_arn", ""),
-                    settings.resources.get("memory_arn"),
-                    gateway=_gateway_config(settings.resources),
-                    kb_gateway=_kb_gateway_config(settings.resources),
-                )
+                params = _build_live_params(AgentSpec(**row.spec), settings.resources)
             return params
 
         if mode == "update" and row.resource_id:  # in-place re-publish → UpdateHarness

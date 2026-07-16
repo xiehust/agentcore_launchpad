@@ -255,6 +255,374 @@ async function requestForm<T>(path: string, form: FormData): Promise<T> {
   return parseResponse<T>(path, res);
 }
 
+/* ── governance ────────────────────────────────────────────────────────── */
+
+export type GovernanceGatewayMode = "LOG_ONLY" | "ENFORCE";
+export type GovernancePolicyMode = "LOG_ONLY" | "ACTIVE";
+export type GovernanceEvidenceRange = "1h" | "6h" | "24h" | "7d";
+export type GovernanceAuthorizationModel = "allowlist" | "preserve_traffic" | "custom";
+export type GovernanceOperationStatus =
+  | "pending"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "partial"
+  | "interrupted";
+
+export interface GovernancePolicyEngine {
+  id: string;
+  arn: string;
+  name: string;
+  status: string;
+  status_reasons: string[];
+  updated_at: string | null;
+  mode: GovernanceGatewayMode | null;
+}
+
+export interface GovernanceRegistryRecord {
+  record_id: string;
+  name: string;
+  description: string;
+  status: string;
+  version: string | null;
+  url: string;
+}
+
+export interface GovernanceAttachability {
+  attachable: boolean;
+  reason: string | null;
+  auth_type: "aws_iam" | "none" | "oauth" | null;
+}
+
+export interface GovernanceGatewaySummary {
+  id: string;
+  arn: string;
+  name: string;
+  description: string;
+  status: string;
+  status_reasons: string[];
+  protocol_type: string;
+  authorizer_type: string;
+  url: string | null;
+  role_arn: string | null;
+  managed: boolean;
+  target_count: number;
+  targets: {
+    id: string;
+    name: string;
+    status: string;
+    description: string;
+  }[];
+  policy_engine: GovernancePolicyEngine | null;
+  shared_gateways: {
+    id: string;
+    arn: string;
+    name: string;
+  }[];
+  shared_engine: boolean;
+  attachability: GovernanceAttachability;
+  registry_record?: GovernanceRegistryRecord | null;
+  legacy_record_count?: number;
+  updated_at: string | null;
+}
+
+export interface GovernanceGatewayTarget {
+  id: string;
+  name: string;
+  status: string;
+  status_reasons: string[];
+  description: string;
+  listing_mode: string | null;
+}
+
+export interface GovernanceGatewayAction {
+  name: string;
+  target_id: string;
+  target_name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+  verified: boolean;
+  source: "control_schema" | "live_tools_list" | "manual";
+}
+
+export interface GovernanceIamPreflight {
+  status: "pass" | "fail" | "unknown";
+  missing_actions: string[];
+  reason: string | null;
+  operator_error?: string | null;
+  remediation: Record<string, unknown>;
+}
+
+export interface GovernanceGatewayDetail extends GovernanceGatewaySummary {
+  authorizer_configuration: Record<string, unknown> | null;
+  protocol_configuration: Record<string, unknown> | null;
+  targets: GovernanceGatewayTarget[];
+  actions: GovernanceGatewayAction[];
+  iam_preflight: GovernanceIamPreflight | null;
+  external_tools_list_command?: string | null;
+}
+
+export interface GovernanceGatewayListResponse {
+  gateways: GovernanceGatewaySummary[];
+  account_id?: string | null;
+  region?: string;
+  cached?: boolean;
+  cache_age_seconds?: number | null;
+}
+
+export interface GovernanceManageResult {
+  gateway_id: string;
+  managed: boolean;
+}
+
+export interface GovernanceRegistryPreview {
+  gateway_id: string;
+  gateway_name: string;
+  gateway_url: string;
+  proposed: {
+    name: string;
+    description: string;
+    descriptors: Record<string, unknown>;
+  };
+  exact_record: GovernanceRegistryRecord | null;
+  name_conflict: GovernanceRegistryRecord | null;
+  legacy_records: GovernanceRegistryRecord[];
+  outcome: "created" | "reused" | "changed" | "conflicted";
+  changed: boolean;
+}
+
+export interface GovernanceRegistryImportResult {
+  outcome: "created" | "reused" | "updated";
+  record: GovernanceRegistryRecord;
+  submitted: boolean;
+  created: number;
+  reused: number;
+  updated: number;
+  skipped: number;
+  conflicted: number;
+  legacy_records: GovernanceRegistryRecord[];
+}
+
+export interface GovernanceValidationFinding {
+  type: string;
+  message: string;
+  severity: string;
+  location: string | null;
+}
+
+export interface GovernancePolicy {
+  id: string;
+  arn: string;
+  name: string;
+  description: string;
+  status: string;
+  status_reasons: string[];
+  enforcement_mode: GovernancePolicyMode;
+  statement: string;
+  updated_at: string | null;
+  candidate_for?: string;
+  candidate_id?: string;
+  audit_id?: string;
+}
+
+export interface GovernancePolicyListResponse {
+  gateway: {
+    id: string;
+    arn: string;
+    name: string;
+    status: string;
+    updated_at: string | null;
+    policy_engine_configuration: {
+      arn?: string;
+      mode?: GovernanceGatewayMode;
+    } | null;
+  };
+  engine: GovernancePolicyEngine | null;
+  policies: GovernancePolicy[];
+}
+
+export interface GovernanceMutationEnvelope {
+  expected_gateway_updated_at?: string | null;
+  expected_policy_updated_at?: string | null;
+  acknowledged_gateway_ids?: string[];
+  confirmation_name?: string | null;
+  override_reason?: string | null;
+}
+
+export interface GovernanceEngineRequest extends GovernanceMutationEnvelope {
+  name?: string | null;
+  authorization_model: GovernanceAuthorizationModel;
+  high_risk_acknowledged: boolean;
+}
+
+export interface GovernancePolicyCreateRequest extends GovernanceMutationEnvelope {
+  name: string;
+  statement: string;
+  description?: string | null;
+  authorization_model: GovernanceAuthorizationModel;
+  high_risk_acknowledged: boolean;
+  manual_actions: string[];
+}
+
+export interface GovernancePolicyUpdateRequest extends GovernanceMutationEnvelope {
+  statement: string;
+  description?: string | null;
+  manual_actions: string[];
+}
+
+export interface GovernancePolicyTransitionRequest extends GovernanceMutationEnvelope {
+  evidence_range: GovernanceEvidenceRange;
+  audit_id?: string | null;
+}
+
+export interface GovernanceGatewayModeRequest extends GovernancePolicyTransitionRequest {
+  mode: GovernanceGatewayMode;
+}
+
+export interface GovernanceRegistryImportRequest extends GovernanceMutationEnvelope {
+  record_name?: string | null;
+  apply_update: boolean;
+}
+
+export interface GovernanceRetireLegacyRequest extends GovernanceMutationEnvelope {
+  record_ids: string[];
+}
+
+export interface GovernanceGenerationRequest extends GovernanceMutationEnvelope {
+  text: string;
+  name: string;
+}
+
+export interface GovernanceGeneration {
+  id: string;
+  status: string;
+  status_reasons: string[];
+  findings: unknown;
+  assets: {
+    id: string | null;
+    statement: string;
+    findings: unknown;
+    raw_text_fragment: string | null;
+  }[];
+}
+
+export interface GovernanceOperation {
+  id: string;
+  gateway_id: string;
+  gateway_name: string;
+  engine_id: string | null;
+  policy_id: string | null;
+  candidate_policy_id: string | null;
+  operation: string;
+  operator: string;
+  status: GovernanceOperationStatus;
+  before: Record<string, unknown>;
+  requested: Record<string, unknown>;
+  after: Record<string, unknown> | null;
+  expected_updated_at: string | null;
+  override_reason: string | null;
+  error: string | null;
+  created_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface GovernancePolicyDecision {
+  at: string;
+  gateway_id: string;
+  gateway_arn: string;
+  engine_id: string | null;
+  policy_id: string | null;
+  principal: string;
+  action: string;
+  outcome: "ALLOW" | "DENY";
+  engine_mode: GovernanceGatewayMode | null;
+  policy_mode: GovernancePolicyMode | null;
+  trace_id: string | null;
+  session_id: string | null;
+  source: "aws";
+}
+
+export interface GovernanceDecisionResponse {
+  range: GovernanceEvidenceRange;
+  decisions: GovernancePolicyDecision[];
+  count: number;
+  available: boolean;
+  unavailable_reason: string | null;
+  cache: ObsCache;
+}
+
+export interface GovernancePolicyChange {
+  id: string;
+  gateway_id: string;
+  gateway_name: string;
+  engine_id: string | null;
+  policy_id: string | null;
+  candidate_policy_id: string | null;
+  operation: string;
+  operator: string;
+  status: GovernanceOperationStatus;
+  before: Record<string, unknown>;
+  requested: Record<string, unknown>;
+  after: Record<string, unknown> | null;
+  expected_updated_at: string | null;
+  override_reason: string | null;
+  error: string | null;
+  created_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface GovernanceAuditResponse {
+  changes: GovernancePolicyChange[];
+}
+
+export interface GovernanceToolInfo {
+  name: string;
+  source: "gateway" | "builtin";
+  target?: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  auth: string;
+}
+
+export interface GovernanceToolCatalog {
+  tools: GovernanceToolInfo[];
+  gateway_url: string | null;
+}
+
+export interface LegacyGovernancePolicyInfo {
+  engine: {
+    id: string;
+    name: string;
+    status: string;
+    attached_mode: string | null;
+    attached: boolean;
+  };
+  policies: { id: string; name: string; status: string; statement: string }[];
+}
+
+export interface DemoPolicyDecision {
+  at: string | null;
+  principal: string;
+  tool: string;
+  outcome: "ALLOW" | "DENY";
+  reason: string;
+  source?: "demo";
+}
+
+export interface CodeInterpreterDemoResult {
+  stdout: string;
+  session_id: string;
+  latency_ms: number;
+}
+
+export interface BrowserDemoResult {
+  title: string;
+  session_id: string;
+  latency_ms: number;
+}
+
 /* ── observability ─────────────────────────────────────────────────────── */
 
 export interface ObsCache {
@@ -456,6 +824,10 @@ function obsQuery(range: string, force: boolean): string {
   return `range=${encodeURIComponent(range)}${force ? "&force=true" : ""}`;
 }
 
+function governanceGatewayPath(gatewayId: string): string {
+  return `/api/governance/gateways/${encodeURIComponent(gatewayId)}`;
+}
+
 export interface OverviewInfo {
   registry_assets: { agents: number; tools: number; skills: number; total: number };
   active_sessions: number;
@@ -556,6 +928,166 @@ export const api = {
     request<{ skills: AttachedSkill[] }>("/api/agent-skills/import", {
       method: "POST",
       body: JSON.stringify({ staging_id: stagingId, selections }),
+    }),
+  listGovernanceGateways: (force = false) =>
+    request<GovernanceGatewayListResponse>(
+      `/api/governance/gateways${force ? "?refresh=true" : ""}`,
+    ),
+  getGovernanceGateway: (gatewayId: string) =>
+    request<GovernanceGatewayDetail>(governanceGatewayPath(gatewayId)),
+  manageGovernanceGateway: (gatewayId: string) =>
+    request<GovernanceManageResult>(`${governanceGatewayPath(gatewayId)}/manage`, {
+      method: "POST",
+    }),
+  unmanageGovernanceGateway: (gatewayId: string) =>
+    request<GovernanceManageResult>(`${governanceGatewayPath(gatewayId)}/manage`, {
+      method: "DELETE",
+    }),
+  governanceRegistryPreview: (gatewayId: string) =>
+    request<GovernanceRegistryPreview>(
+      `${governanceGatewayPath(gatewayId)}/registry-preview`,
+    ),
+  importGovernanceRegistry: (
+    gatewayId: string,
+    input: GovernanceRegistryImportRequest,
+  ) =>
+    request<GovernanceRegistryImportResult>(
+      `${governanceGatewayPath(gatewayId)}/registry-import`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+  retireGovernanceLegacyRecords: (
+    gatewayId: string,
+    input: GovernanceRetireLegacyRequest,
+  ) =>
+    request<{ retired: string[]; skipped: string[] }>(
+      `${governanceGatewayPath(gatewayId)}/retire-legacy-records`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+  attachGovernanceEngine: (gatewayId: string, input: GovernanceEngineRequest) =>
+    request<{ operation: GovernanceOperation }>(
+      `${governanceGatewayPath(gatewayId)}/engine`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+    ).then((result) => result.operation),
+  listGovernancePolicies: (gatewayId: string) =>
+    request<GovernancePolicyListResponse>(
+      `${governanceGatewayPath(gatewayId)}/policies`,
+    ),
+  createGovernancePolicy: (
+    gatewayId: string,
+    input: GovernancePolicyCreateRequest,
+  ) =>
+    request<{ operation: GovernanceOperation }>(
+      `${governanceGatewayPath(gatewayId)}/policies`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+    ).then((result) => result.operation),
+  updateGovernancePolicy: (
+    gatewayId: string,
+    policyId: string,
+    input: GovernancePolicyUpdateRequest,
+  ) =>
+    request<{ operation: GovernanceOperation }>(
+      `${governanceGatewayPath(gatewayId)}/policies/${encodeURIComponent(policyId)}`,
+      { method: "PUT", body: JSON.stringify(input) },
+    ).then((result) => result.operation),
+  promoteGovernancePolicy: (
+    gatewayId: string,
+    policyId: string,
+    input: GovernancePolicyTransitionRequest,
+  ) =>
+    request<{ operation: GovernanceOperation }>(
+      `${governanceGatewayPath(gatewayId)}/policies/${encodeURIComponent(policyId)}/promote`,
+      { method: "POST", body: JSON.stringify(input) },
+    ).then((result) => result.operation),
+  rollbackGovernancePolicy: (
+    gatewayId: string,
+    policyId: string,
+    input: GovernancePolicyTransitionRequest,
+  ) =>
+    request<{ operation: GovernanceOperation }>(
+      `${governanceGatewayPath(gatewayId)}/policies/${encodeURIComponent(policyId)}/rollback`,
+      { method: "POST", body: JSON.stringify(input) },
+    ).then((result) => result.operation),
+  setGovernanceGatewayMode: (
+    gatewayId: string,
+    input: GovernanceGatewayModeRequest,
+  ) =>
+    request<{ operation: GovernanceOperation }>(
+      `${governanceGatewayPath(gatewayId)}/mode`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+    ).then((result) => result.operation),
+  startGovernanceGeneration: (
+    gatewayId: string,
+    input: GovernanceGenerationRequest,
+  ) =>
+    request<{
+      operation: GovernanceOperation;
+      generation_id: string;
+      status: string;
+    }>(`${governanceGatewayPath(gatewayId)}/generations`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }).then((result) => ({
+      id: result.generation_id,
+      status: result.status,
+      status_reasons: [],
+      findings: null,
+      assets: [],
+    })),
+  getGovernanceGeneration: (gatewayId: string, generationId: string) =>
+    request<GovernanceGeneration>(
+      `${governanceGatewayPath(gatewayId)}/generations/${encodeURIComponent(generationId)}`,
+    ),
+  governanceDecisions: (
+    gatewayId: string,
+    range: GovernanceEvidenceRange,
+    policyId?: string,
+    force = false,
+  ) => {
+    const query = new URLSearchParams({ range });
+    if (policyId) query.set("policy_id", policyId);
+    if (force) query.set("force", "true");
+    return request<GovernanceDecisionResponse>(
+      `${governanceGatewayPath(gatewayId)}/decisions?${query.toString()}`,
+    );
+  },
+  governanceAudit: (gatewayId: string) =>
+    request<GovernanceAuditResponse>(`${governanceGatewayPath(gatewayId)}/audit`),
+  governanceOperation: (operationId: string) =>
+    request<{ operation: GovernanceOperation }>(
+      `/api/governance/operations/${encodeURIComponent(operationId)}`,
+    ).then((result) => result.operation),
+  governanceToolCatalog: () => request<GovernanceToolCatalog>("/api/tools"),
+  legacyGovernancePolicies: () =>
+    request<LegacyGovernancePolicyInfo>("/api/governance/policies"),
+  demoGovernanceDecisions: () =>
+    request<{ decisions: DemoPolicyDecision[] }>("/api/governance/decisions"),
+  runGovernancePolicyTest: (username: "river" | "demo") =>
+    request<Record<string, unknown>>("/api/governance/policy-test", {
+      method: "POST",
+      body: JSON.stringify({
+        username,
+        tool: "hr-database___create_payout",
+        arguments: { employee_id: "EMP-1024", amount: 42 },
+      }),
+    }),
+  runCodeInterpreterDemo: (code: string) =>
+    request<CodeInterpreterDemoResult>("/api/demos/code-interpreter", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    }),
+  runBrowserDemo: (url: string) =>
+    request<BrowserDemoResult>("/api/demos/browser", {
+      method: "POST",
+      body: JSON.stringify({ url }),
     }),
   obsDashboard: (range: string, force = false) =>
     request<ObsDashboard>(`/api/observability/dashboard?${obsQuery(range, force)}`),

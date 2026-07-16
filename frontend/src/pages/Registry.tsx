@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import { Network } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -389,6 +390,10 @@ export function Registry() {
           ))}
           {searching && <span className="tab active">{t("registry.searchResults")}</span>}
           <div style={{ marginLeft: "auto", alignSelf: "center", display: "flex", gap: 8 }}>
+            <Btn onClick={() => navigate("/governance")}>
+              <Network size={14} aria-hidden="true" />
+              {t("registry.importGateway")}
+            </Btn>
             <Btn
               onClick={() => setSearchParams({ view: "a2a-demo" })}
               data-testid="a2a-demo-btn"

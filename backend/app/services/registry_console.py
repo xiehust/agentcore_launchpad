@@ -16,6 +16,7 @@ from app.core.config import REPO_ROOT, get_settings
 from app.core.errors import AppError
 from app.models.ledger import Agent
 from app.services import mcp_client
+from app.services.agentcore import policy as policy_api
 from app.services.agentcore import registry as reg
 from app.services.agentcore.client import control_client, data_client
 from app.services.skill_ingest import (
@@ -35,6 +36,7 @@ _parse_frontmatter = parse_frontmatter
 
 SKILLS_DIR = REPO_ROOT / "samples" / "skills"
 SKILL_NAME = "expense-report-writer"
+GATEWAY_SCOPE = "launchpad-gw/invoke"
 
 
 def _registry_id() -> str:
@@ -207,15 +209,542 @@ def console_delete(record_id: str) -> None:
     reg.delete_record(control_client(), _registry_id(), record_id)
 
 
-def attachable_records() -> dict[str, Any]:
+def build_gateway_record(
+    *,
+    gateway_name: str,
+    gateway_url: str,
+    target_names: list[str],
+    actions: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build one standard MCP record for an entire AgentCore Gateway.
+
+    Action names are copied exactly from discovery. Target identity remains
+    visible through those exact names and the record description; no
+    Launchpad-only fields are added to the MCP server schema.
+    """
+    tools: list[dict[str, Any]] = []
+    for action in actions:
+        name = action.get("name")
+        if not isinstance(name, str) or not name:
+            raise AppError(
+                "governance.action_unverified",
+                "every Gateway action needs an exact non-empty identifier",
+                status_code=422,
+            )
+        tools.append(
+            {
+                "name": name,
+                "description": str(action.get("description") or ""),
+                "inputSchema": action.get("input_schema")
+                or action.get("inputSchema")
+                or {},
+            }
+        )
+    description = (
+        f"AgentCore Gateway {gateway_name} · "
+        f"{len(target_names)} target(s) · {len(tools)} MCP tool(s)"
+    )
+    return {
+        "name": gateway_name,
+        "description": description,
+        "descriptors": reg.build_mcp_descriptors(
+            target=gateway_name,
+            description=description,
+            gateway_url=gateway_url,
+            tools=tools,
+        ),
+    }
+
+
+def _mcp_record_url(record: dict[str, Any]) -> str:
+    try:
+        server = json.loads(record["descriptors"]["mcp"]["server"]["inlineContent"])
+        return str((server.get("remotes") or [{}])[0].get("url") or "")
+    except (KeyError, TypeError, ValueError):
+        return ""
+
+
+def _descriptor_fingerprint(value: Any) -> Any:
+    """Normalize embedded descriptor JSON before comparing AWS live state."""
+    if isinstance(value, dict):
+        return {key: _descriptor_fingerprint(item) for key, item in sorted(value.items())}
+    if isinstance(value, list):
+        return [_descriptor_fingerprint(item) for item in value]
+    if isinstance(value, str):
+        try:
+            return _descriptor_fingerprint(json.loads(value))
+        except (TypeError, ValueError):
+            return value
+    return value
+
+
+def _registry_record_summary(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "record_id": record.get("recordId"),
+        "name": record.get("name"),
+        "description": record.get("description", ""),
+        "status": record.get("status"),
+        "version": record.get("recordVersion"),
+        "url": _mcp_record_url(record),
+    }
+
+
+def _list_mcp_record_details(client: Any, registry_id: str) -> list[dict[str, Any]]:
+    return [
+        reg.get_record(client, registry_id, summary["recordId"])
+        for summary in reg.list_records(client, registry_id, "MCP")
+    ]
+
+
+def gateway_registry_states(
+    *,
+    gateways: list[dict[str, Any]],
+    client: Any | None = None,
+    registry_id: str | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Match live Gateways to their Gateway-level and legacy Registry records."""
+    client = client or control_client()
+    registry_id = registry_id or _registry_id()
+    records = _list_mcp_record_details(client, registry_id)
+    by_url: dict[str, list[dict[str, Any]]] = {}
+    for record in records:
+        url = _mcp_record_url(record)
+        if url:
+            by_url.setdefault(url, []).append(record)
+
+    states: dict[str, dict[str, Any]] = {}
+    for gateway in gateways:
+        gateway_id = gateway.get("gatewayId") or gateway.get("id")
+        gateway_name = gateway.get("name")
+        gateway_url = gateway.get("gatewayUrl") or gateway.get("url")
+        matches = by_url.get(str(gateway_url or ""), [])
+        exact = next(
+            (record for record in matches if record.get("name") == gateway_name),
+            None,
+        )
+        if exact is None:
+            exact = next(
+                (
+                    record
+                    for record in matches
+                    if str(record.get("description") or "").startswith(
+                        "AgentCore Gateway "
+                    )
+                ),
+                None,
+            )
+        legacy = [
+            record
+            for record in matches
+            if exact is None or record.get("recordId") != exact.get("recordId")
+        ]
+        if gateway_id:
+            states[str(gateway_id)] = {
+                "registry_record": (
+                    _registry_record_summary(exact) if exact is not None else None
+                ),
+                "legacy_record_count": len(legacy),
+            }
+    return states
+
+
+def gateway_registry_preview(
+    *,
+    gateway_id: str,
+    gateway_name: str,
+    gateway_url: str,
+    target_names: list[str],
+    actions: list[dict[str, Any]],
+    record_name: str | None = None,
+    client: Any | None = None,
+    registry_id: str | None = None,
+) -> dict[str, Any]:
+    """Preview the Gateway-level record and non-destructive legacy migration.
+
+    Governance owns Gateway management checks and passes its normalized live
+    Gateway/action projection here. Matching is based on the unique live
+    Gateway URL; a record with the desired name but another URL is a conflict.
+    """
+    client = client or control_client()
+    registry_id = registry_id or _registry_id()
+    desired_name = record_name or gateway_name
+    proposed = build_gateway_record(
+        gateway_name=desired_name,
+        gateway_url=gateway_url,
+        target_names=target_names,
+        actions=actions,
+    )
+    records = _list_mcp_record_details(client, registry_id)
+    exact = next(
+        (
+            record
+            for record in records
+            if record.get("name") == desired_name
+            and _mcp_record_url(record) == gateway_url
+        ),
+        None,
+    )
+    name_conflict = next(
+        (
+            record
+            for record in records
+            if record.get("name") == desired_name
+            and _mcp_record_url(record) != gateway_url
+        ),
+        None,
+    )
+    legacy = [
+        record
+        for record in records
+        if _mcp_record_url(record) == gateway_url
+        and (exact is None or record.get("recordId") != exact.get("recordId"))
+    ]
+    changed = bool(
+        exact
+        and (
+            exact.get("description", "") != proposed["description"]
+            or _descriptor_fingerprint(exact.get("descriptors"))
+            != _descriptor_fingerprint(proposed["descriptors"])
+        )
+    )
+    outcome = (
+        "conflicted"
+        if name_conflict
+        else "created"
+        if exact is None
+        else "changed"
+        if changed
+        else "reused"
+    )
+    return {
+        "gateway_id": gateway_id,
+        "gateway_name": gateway_name,
+        "gateway_url": gateway_url,
+        "proposed": proposed,
+        "outcome": outcome,
+        "changed": changed,
+        "exact_record": _registry_record_summary(exact) if exact else None,
+        "name_conflict": _registry_record_summary(name_conflict) if name_conflict else None,
+        "legacy_records": [_registry_record_summary(record) for record in legacy],
+    }
+
+
+def import_gateway_record(
+    *,
+    gateway_id: str,
+    gateway_name: str,
+    gateway_url: str,
+    target_names: list[str],
+    actions: list[dict[str, Any]],
+    record_name: str | None = None,
+    apply_update: bool = False,
+    client: Any | None = None,
+    registry_id: str | None = None,
+) -> dict[str, Any]:
+    """Create/reuse/update and submit one Gateway-level Registry record.
+
+    This operation never approves or deprecates a record. Governance must run
+    its managed-Gateway preflight before calling it.
+    """
+    client = client or control_client()
+    registry_id = registry_id or _registry_id()
+    preview = gateway_registry_preview(
+        gateway_id=gateway_id,
+        gateway_name=gateway_name,
+        gateway_url=gateway_url,
+        target_names=target_names,
+        actions=actions,
+        record_name=record_name,
+        client=client,
+        registry_id=registry_id,
+    )
+    if preview["name_conflict"]:
+        raise AppError(
+            "governance.registry_name_conflict",
+            f"Registry name '{preview['proposed']['name']}' already points to another URL",
+            detail=preview["name_conflict"],
+            status_code=409,
+        )
+    exact = preview["exact_record"]
+    if exact and exact["status"] == "DEPRECATED":
+        raise AppError(
+            "governance.registry_name_conflict",
+            "the Gateway-level Registry record is DEPRECATED and cannot be reused",
+            detail=exact,
+            status_code=409,
+        )
+
+    proposed = preview["proposed"]
+    update_skipped = bool(exact and preview["changed"] and not apply_update)
+    if exact and (not preview["changed"] or update_skipped):
+        record = reg.get_record(client, registry_id, exact["record_id"])
+        created = False
+    else:
+        record, created = reg.upsert_record(
+            client,
+            registry_id,
+            name=proposed["name"],
+            description=proposed["description"],
+            descriptor_type="MCP",
+            descriptors=proposed["descriptors"],
+        )
+    record_id = record["recordId"]
+    if created or (preview["changed"] and not update_skipped):
+        record = reg.wait_record_settled(client, registry_id, record_id)
+    submitted = record.get("status") == "DRAFT" and not update_skipped
+    if submitted:
+        reg.submit_record(client, registry_id, record_id)
+        record = reg.get_record(client, registry_id, record_id)
+
+    outcome = (
+        "created"
+        if created
+        else "updated"
+        if preview["changed"] and not update_skipped
+        else "reused"
+    )
+    return {
+        "outcome": outcome,
+        "created": int(created),
+        "reused": int(not created and (not preview["changed"] or update_skipped)),
+        "updated": int(not created and preview["changed"] and not update_skipped),
+        "skipped": int(update_skipped or (not preview["changed"] and not submitted)),
+        "conflicted": 0,
+        "submitted": submitted,
+        "record": _registry_record_summary(record),
+        "legacy_records": preview["legacy_records"],
+    }
+
+
+def retire_legacy_gateway_records(
+    *,
+    gateway_record_id: str,
+    legacy_record_ids: list[str],
+    client: Any | None = None,
+    registry_id: str | None = None,
+) -> dict[str, Any]:
+    """Explicitly deprecate selected legacy target records after cutover."""
+    client = client or control_client()
+    registry_id = registry_id or _registry_id()
+    gateway_record = reg.get_record(client, registry_id, gateway_record_id)
+    gateway_url = _mcp_record_url(gateway_record)
+    if (
+        gateway_record.get("descriptorType") != "MCP"
+        or gateway_record.get("status") != "APPROVED"
+        or not gateway_url
+    ):
+        raise AppError(
+            "governance.registry_record_not_approved",
+            "the Gateway-level Registry record must be APPROVED before legacy retirement",
+            status_code=409,
+        )
+
+    selected: list[dict[str, Any]] = []
+    for record_id in dict.fromkeys(legacy_record_ids):
+        record = reg.get_record(client, registry_id, record_id)
+        if (
+            record_id == gateway_record_id
+            or record.get("descriptorType") != "MCP"
+            or _mcp_record_url(record) != gateway_url
+        ):
+            raise AppError(
+                "governance.registry_name_conflict",
+                f"record {record_id} is not a legacy record for this Gateway",
+                status_code=409,
+            )
+        selected.append(record)
+
+    retired: list[str] = []
+    skipped: list[str] = []
+    for record in selected:
+        record_id = record["recordId"]
+        if record.get("status") == "DEPRECATED":
+            skipped.append(record_id)
+            continue
+        reg.disable_record(client, registry_id, record_id)
+        retired.append(record_id)
+    return {"retired": retired, "skipped": skipped}
+
+
+def _list_live_mcp_gateways(client: Any) -> list[dict[str, Any]]:
+    return [
+        policy_api.get_gateway(client, summary["gatewayId"])
+        for summary in policy_api.list_gateways(client)
+        if summary.get("protocolType") == "MCP"
+    ]
+
+
+def _managed_launchpad_gateway(gateway: dict[str, Any], resources: dict[str, Any]) -> bool:
+    configured_id = resources.get("gateway_id")
+    if configured_id:
+        return gateway.get("gatewayId") == configured_id
+    return bool(
+        resources.get("gateway_url")
+        and gateway.get("name") == "launchpad-gw"
+        and gateway.get("gatewayUrl") == resources["gateway_url"]
+    )
+
+
+def _gateway_auth(
+    gateway: dict[str, Any],
+    resources: dict[str, Any],
+) -> tuple[str | None, dict[str, Any] | None, str | None]:
+    authorizer = gateway.get("authorizerType")
+    if authorizer == "AWS_IAM":
+        return "aws_iam", {"awsIam": {}}, None
+    if authorizer == "NONE":
+        return "none", {"none": {}}, None
+    if authorizer == "CUSTOM_JWT" and _managed_launchpad_gateway(gateway, resources):
+        provider_arn = resources.get("oauth_provider_arn")
+        if provider_arn:
+            return (
+                "oauth",
+                {
+                    "oauth": {
+                        "providerArn": provider_arn,
+                        "grantType": "CLIENT_CREDENTIALS",
+                        "scopes": [GATEWAY_SCOPE],
+                    }
+                },
+                None,
+            )
+    return (
+        "oauth" if authorizer == "CUSTOM_JWT" else None,
+        None,
+        "Gateway outbound auth is not mapped to a Launchpad-managed credential provider",
+    )
+
+
+def _gateway_attachment(gateway: dict[str, Any], resources: dict[str, Any]) -> dict[str, Any]:
+    auth_type, outbound_auth, reason = _gateway_auth(gateway, resources)
+    return {
+        "gateway_id": gateway.get("gatewayId"),
+        "gateway_arn": gateway.get("gatewayArn"),
+        "gateway_name": gateway.get("name"),
+        "attachable": outbound_auth is not None,
+        "attachability_reason": reason,
+        "auth_type": auth_type,
+        "outbound_auth": outbound_auth,
+    }
+
+
+def _legacy_gateway_attachment(resources: dict[str, Any]) -> dict[str, Any] | None:
+    if not resources.get("gateway_arn") or not resources.get("oauth_provider_arn"):
+        return None
+    return {
+        "gateway_id": resources.get("gateway_id"),
+        "gateway_arn": resources["gateway_arn"],
+        "gateway_name": "launchpad-gw",
+        "attachable": True,
+        "attachability_reason": None,
+        "auth_type": "oauth",
+        "outbound_auth": {
+            "oauth": {
+                "providerArn": resources["oauth_provider_arn"],
+                "grantType": "CLIENT_CREDENTIALS",
+                "scopes": [GATEWAY_SCOPE],
+            }
+        },
+    }
+
+
+def resolve_gateway_attachments(
+    tools: list[Any],
+    *,
+    client: Any | None = None,
+    registry_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Reread selected Registry records and Gateways for Harness deployment.
+
+    New refs carry only ``record_id`` + ``gateway_id``. Any other browser
+    fields are ignored. Config-less refs retain the historical configured
+    launchpad-gw fallback.
+    """
+    gateway_tools = [tool for tool in tools if getattr(tool, "type", None) == "gateway"]
+    if not gateway_tools:
+        return []
+    resources = get_settings().resources
+    attachments: list[dict[str, Any]] = []
+
+    if any(not getattr(tool, "config", None) for tool in gateway_tools):
+        legacy = _legacy_gateway_attachment(resources)
+        if legacy:
+            attachments.append(legacy)
+
+    configured = [
+        getattr(tool, "config", {}) or {}
+        for tool in gateway_tools
+        if getattr(tool, "config", None)
+    ]
+    for config in configured:
+        record_id = config.get("record_id")
+        gateway_id = config.get("gateway_id")
+        if not record_id or not gateway_id:
+            raise AppError(
+                "governance.gateway_unsupported",
+                "Gateway tool refs must include both record_id and gateway_id",
+                status_code=409,
+            )
+    if configured:
+        client = client or control_client()
+        registry_id = registry_id or _registry_id()
+
+    for config in configured:
+        record_id = config["record_id"]
+        gateway_id = config["gateway_id"]
+        record = reg.get_record(client, registry_id, record_id)
+        if record.get("descriptorType") != "MCP" or record.get("status") != "APPROVED":
+            raise AppError(
+                "governance.registry_record_not_approved",
+                f"Registry record {record_id} is no longer an APPROVED MCP record",
+                status_code=409,
+            )
+        record_url = _mcp_record_url(record)
+        gateway = policy_api.get_gateway(client, gateway_id)
+        if (
+            gateway.get("protocolType") != "MCP"
+            or not record_url
+            or gateway.get("gatewayUrl") != record_url
+        ):
+            raise AppError(
+                "governance.concurrent_change",
+                "the selected Registry record no longer resolves to the selected Gateway",
+                status_code=409,
+            )
+        attachment = _gateway_attachment(gateway, resources)
+        if not attachment["attachable"]:
+            raise AppError(
+                "governance.gateway_unsupported",
+                attachment["attachability_reason"],
+                status_code=409,
+            )
+        attachments.append(attachment)
+
+    unique: dict[str, dict[str, Any]] = {}
+    for attachment in attachments:
+        key = str(attachment["gateway_arn"])
+        unique[key] = attachment
+    return list(unique.values())
+
+
+def attachable_records(
+    *,
+    client: Any | None = None,
+    registry_id: str | None = None,
+    gateways: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Catalog entries an agent can mount, sourced ONLY from APPROVED records —
-    the registry lifecycle is the availability gate. MCP records split on the
-    remote URL: the shared gateway attaches as agentcore_gateway (OAuth), any
-    other URL attaches as remote_mcp. Skills carry the s3 path a harness
-    mounts via skills[{path}]."""
-    client = control_client()
-    registry_id = _registry_id()
-    gateway_url = get_settings().resources.get("gateway_url", "")
+    the registry lifecycle is the availability gate. MCP records whose URL
+    matches a live AgentCore Gateway expose server-derived attachability;
+    other MCP records remain unauthenticated remote_mcp entries."""
+    client = client or control_client()
+    registry_id = registry_id or _registry_id()
+    resources = get_settings().resources
+    gateways = gateways if gateways is not None else _list_live_mcp_gateways(client)
+    gateways_by_url: dict[str, list[dict[str, Any]]] = {}
+    for gateway in gateways:
+        if gateway.get("protocolType") == "MCP" and gateway.get("gatewayUrl"):
+            gateways_by_url.setdefault(gateway["gatewayUrl"], []).append(gateway)
     mcp_servers: list[dict[str, Any]] = []
     skills: list[dict[str, Any]] = []
     for summary in reg.list_records(client, registry_id, None, "APPROVED"):
@@ -231,13 +760,35 @@ def attachable_records() -> dict[str, Any]:
                 url = (server.get("remotes") or [{}])[0].get("url", "")
                 if not url:
                     continue
+                matches = gateways_by_url.get(url, [])
+                gateway = matches[0] if len(matches) == 1 else None
+                capability = (
+                    _gateway_attachment(gateway, resources)
+                    if gateway
+                    else {
+                        "gateway_id": None,
+                        "gateway_arn": None,
+                        "attachable": len(matches) == 0,
+                        "attachability_reason": (
+                            None
+                            if not matches
+                            else "multiple live Gateways expose the same endpoint"
+                        ),
+                        "auth_type": "none" if not matches else None,
+                    }
+                )
                 mcp_servers.append(
                     {
                         "name": record["name"],
                         "description": record.get("description", ""),
                         "url": url,
-                        "gateway": bool(gateway_url) and url == gateway_url,
+                        "gateway": gateway is not None or bool(matches),
                         "record_id": record["recordId"],
+                        **{
+                            key: value
+                            for key, value in capability.items()
+                            if key != "outbound_auth"
+                        },
                     }
                 )
             else:

@@ -67,3 +67,51 @@ with requests.post(
 
 Errors use the platform envelope `{code, message, detail}` — e.g.
 `auth.missing_api_key` (401), `agent.not_active` (409), `agent.not_found` (404).
+
+## Console Governance API
+
+These `/api` routes back the authenticated console. They are not part of the
+public `/v1` agent invocation contract.
+
+| Method | Path | Result |
+|---|---|---|
+| `GET` | `/api/governance/gateways` | Live MCP Gateway inventory |
+| `GET` | `/api/governance/gateways/{id}` | Targets, actions, Registry, Engine, IAM, and attachability detail |
+| `POST/DELETE` | `/api/governance/gateways/{id}/manage` | Add/remove only Launchpad management tags |
+| `GET` | `/api/governance/gateways/{id}/registry-preview` | Gateway-level record diff and legacy matches |
+| `POST` | `/api/governance/gateways/{id}/registry-import` | Create/reuse/update and submit; never approve |
+| `POST` | `/api/governance/gateways/{id}/retire-legacy-records` | Explicit retirement after Gateway record approval |
+| `POST` | `/api/governance/gateways/{id}/engine` | Create/adopt and attach an Engine in `LOG_ONLY` |
+| `GET/POST` | `/api/governance/gateways/{id}/policies` | List or create `LOG_ONLY` policies |
+| `PUT` | `/api/governance/gateways/{id}/policies/{policy_id}` | Update LOG_ONLY or create an ACTIVE-policy candidate |
+| `POST` | `/api/governance/gateways/{id}/policies/{policy_id}/promote` | Evidence-gated activation/cutover |
+| `POST` | `/api/governance/gateways/{id}/policies/{policy_id}/rollback` | Audited snapshot/candidate rollback |
+| `POST` | `/api/governance/gateways/{id}/mode` | Gateway `LOG_ONLY`/`ENFORCE` transition |
+| `GET` | `/api/governance/gateways/{id}/decisions` | AWS decision projection or explicit unavailable state |
+| `GET` | `/api/governance/gateways/{id}/audit` | Immutable local change journal |
+| `GET` | `/api/governance/operations/{operation_id}` | Async operation status |
+
+Policy and Gateway mutations return `202`:
+
+```json
+{"operation": {"id": "...", "status": "pending", "operation": "policy_create"}}
+```
+
+Poll the operation route until `succeeded`, `failed`, `partial`, or
+`interrupted`. Mutation requests carry the live timestamps and confirmations
+that apply to the operation:
+
+```json
+{
+  "expected_gateway_updated_at": "2026-07-16T09:00:00+00:00",
+  "expected_policy_updated_at": "2026-07-16T09:01:00+00:00",
+  "acknowledged_gateway_ids": ["gw-a", "gw-b"],
+  "confirmation_name": "finance-gateway",
+  "override_reason": null
+}
+```
+
+Common conflict codes are `governance.gateway_not_managed`,
+`governance.concurrent_change`, `governance.shared_engine_changed`,
+`governance.iam_preflight_failed`, `governance.evidence_required`, and
+`governance.registry_record_not_approved`.

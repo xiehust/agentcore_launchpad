@@ -35,3 +35,8 @@ def agent_client():
 @lru_cache
 def agent_runtime_client():
     return boto3.client("bedrock-agent-runtime", region_name=get_settings().region)
+
+
+@lru_cache
+def iam_client():
+    return boto3.client("iam", region_name=get_settings().region)

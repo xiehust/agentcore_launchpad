@@ -36,6 +36,7 @@ from app.routers.overview import router as overview_router
 from app.routers.public_api import router as public_router
 from app.routers.registry import router as registry_router
 from app.routers.tools import router as tools_router
+from app.services.governance import reconcile_policy_changes
 from app.services.model_prices import start_auto_refresh
 
 API_DESCRIPTION = """AgentCore Launchpad — enterprise agent platform.
@@ -108,6 +109,12 @@ def create_app(resume_jobs: bool = False) -> FastAPI:
             logging.getLogger("launchpad").info(
                 "cleared stale Runtime Canary action(s) on: %s",
                 ", ".join(stale_canaries),
+            )
+        reconciled_policy_changes = reconcile_policy_changes()
+        if reconciled_policy_changes:
+            logging.getLogger("launchpad").info(
+                "reconciled %d interrupted Policy operation(s)",
+                len(reconciled_policy_changes),
             )
         start_auto_refresh()  # periodic model-price refresh (real server only)
 

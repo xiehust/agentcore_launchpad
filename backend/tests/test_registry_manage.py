@@ -139,9 +139,21 @@ def test_attachables_parsing_splits_gateway_and_remote(monkeypatch):
     monkeypatch.setattr(console_mod.reg, "get_record",
                         lambda c, r, rid: records[rid])
 
-    out = console_mod.attachable_records()
+    out = console_mod.attachable_records(
+        gateways=[
+            {
+                "gatewayId": "gw-1",
+                "gatewayArn": "arn:gw-1",
+                "gatewayUrl": gw_url,
+                "name": "launchpad-gw",
+                "protocolType": "MCP",
+                "authorizerType": "CUSTOM_JWT",
+            }
+        ]
+    )
     by_name = {m["name"]: m for m in out["mcp_servers"]}
     assert by_name["hr-database"]["gateway"] is True
+    assert by_name["hr-database"]["gateway_id"] == "gw-1"
     assert by_name["deepwiki"]["gateway"] is False
     assert out["skills"][0]["name"] == "meeting-summarizer"
     assert "broken" not in by_name  # malformed descriptor skipped

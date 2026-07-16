@@ -1,8 +1,8 @@
 """Governance API — policy card, test-evaluate, decision log, traces, generation."""
 
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, Path
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -10,13 +10,282 @@ from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.errors import AppError
 from app.models.ledger import PolicyDecision
+from app.schemas.governance import (
+    EngineRequest,
+    GatewayModeRequest,
+    PolicyCreateRequest,
+    PolicyTransitionRequest,
+    PolicyUpdateRequest,
+    RegistryImportRequest,
+    RetireLegacyRequest,
+)
+from app.schemas.governance import (
+    GenerationRequest as ScopedGenerationRequest,
+)
+from app.services import governance as governance_service
 from app.services import mcp_client
 from app.services import traces as trace_service
-from app.services.agentcore.client import control_client
+from app.services.agentcore.client import control_client, iam_client
 
 router = APIRouter(prefix="/api", tags=["governance"])
 
 ROLE_BY_USER = {"river": "platform-admin", "demo": "hr-analyst"}
+GATEWAY_ID = Path(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+RESOURCE_ID = Path(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+OPERATION_ID = Path(pattern=r"^[a-f0-9]{32}$")
+
+
+@router.get("/governance/gateways")
+def get_gateways(refresh: bool = False) -> dict[str, Any]:
+    return {
+        "gateways": governance_service.list_gateway_views(
+            control_client(),
+            refresh=refresh,
+        )
+    }
+
+
+@router.get("/governance/gateways/{gateway_id}")
+def get_gateway_detail(gateway_id: str = GATEWAY_ID) -> dict[str, Any]:
+    return governance_service.gateway_detail(
+        control_client(),
+        iam_client(),
+        gateway_id,
+    )
+
+
+@router.post("/governance/gateways/{gateway_id}/manage")
+def manage_gateway(gateway_id: str = GATEWAY_ID) -> dict[str, Any]:
+    return governance_service.manage_gateway(control_client(), gateway_id)
+
+
+@router.delete("/governance/gateways/{gateway_id}/manage")
+def unmanage_gateway(gateway_id: str = GATEWAY_ID) -> dict[str, Any]:
+    return governance_service.unmanage_gateway(control_client(), gateway_id)
+
+
+@router.get("/governance/gateways/{gateway_id}/registry-preview")
+def get_gateway_registry_preview(gateway_id: str = GATEWAY_ID) -> dict[str, Any]:
+    return governance_service.gateway_registry_preview(control_client(), gateway_id)
+
+
+@router.post("/governance/gateways/{gateway_id}/registry-import")
+def import_gateway_registry(
+    req: RegistryImportRequest,
+    gateway_id: str = GATEWAY_ID,
+) -> dict[str, Any]:
+    return governance_service.import_gateway_registry(
+        control_client(),
+        gateway_id,
+        req,
+    )
+
+
+@router.post("/governance/gateways/{gateway_id}/retire-legacy-records")
+def retire_gateway_legacy_records(
+    req: RetireLegacyRequest,
+    gateway_id: str = GATEWAY_ID,
+) -> dict[str, Any]:
+    return governance_service.retire_gateway_legacy_records(
+        control_client(),
+        gateway_id,
+        req,
+    )
+
+
+@router.get("/governance/gateways/{gateway_id}/policies")
+def get_gateway_policies(
+    gateway_id: str = GATEWAY_ID,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    return governance_service.policies_view(control_client(), gateway_id, db=db)
+
+
+@router.post("/governance/gateways/{gateway_id}/engine", status_code=202)
+def attach_policy_engine(
+    req: EngineRequest,
+    background_tasks: BackgroundTasks,
+    gateway_id: str = GATEWAY_ID,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    operation = governance_service.queue_engine_attach(
+        db,
+        control_client(),
+        gateway_id,
+        req,
+    )
+    background_tasks.add_task(governance_service.run_policy_change, operation["id"])
+    return {"operation": operation}
+
+
+@router.post("/governance/gateways/{gateway_id}/policies", status_code=202)
+def create_gateway_policy(
+    req: PolicyCreateRequest,
+    background_tasks: BackgroundTasks,
+    gateway_id: str = GATEWAY_ID,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    operation = governance_service.queue_policy_create(
+        db,
+        control_client(),
+        gateway_id,
+        req,
+    )
+    background_tasks.add_task(governance_service.run_policy_change, operation["id"])
+    return {"operation": operation}
+
+
+@router.put(
+    "/governance/gateways/{gateway_id}/policies/{policy_id}",
+    status_code=202,
+)
+def update_gateway_policy(
+    req: PolicyUpdateRequest,
+    background_tasks: BackgroundTasks,
+    gateway_id: str = GATEWAY_ID,
+    policy_id: str = RESOURCE_ID,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    operation = governance_service.queue_policy_update(
+        db,
+        control_client(),
+        gateway_id,
+        policy_id,
+        req,
+    )
+    background_tasks.add_task(governance_service.run_policy_change, operation["id"])
+    return {"operation": operation}
+
+
+@router.post(
+    "/governance/gateways/{gateway_id}/policies/{policy_id}/promote",
+    status_code=202,
+)
+def promote_gateway_policy(
+    req: PolicyTransitionRequest,
+    background_tasks: BackgroundTasks,
+    gateway_id: str = GATEWAY_ID,
+    policy_id: str = RESOURCE_ID,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    operation = governance_service.queue_policy_transition(
+        db,
+        control_client(),
+        gateway_id,
+        policy_id,
+        req,
+        rollback=False,
+        evidence_count=0,
+    )
+    background_tasks.add_task(governance_service.run_policy_change, operation["id"])
+    return {"operation": operation}
+
+
+@router.post(
+    "/governance/gateways/{gateway_id}/policies/{policy_id}/rollback",
+    status_code=202,
+)
+def rollback_gateway_policy(
+    req: PolicyTransitionRequest,
+    background_tasks: BackgroundTasks,
+    gateway_id: str = GATEWAY_ID,
+    policy_id: str = RESOURCE_ID,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    operation = governance_service.queue_policy_transition(
+        db,
+        control_client(),
+        gateway_id,
+        policy_id,
+        req,
+        rollback=True,
+        evidence_count=0,
+    )
+    background_tasks.add_task(governance_service.run_policy_change, operation["id"])
+    return {"operation": operation}
+
+
+@router.post("/governance/gateways/{gateway_id}/mode", status_code=202)
+def update_gateway_mode(
+    req: GatewayModeRequest,
+    background_tasks: BackgroundTasks,
+    gateway_id: str = GATEWAY_ID,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    operation = governance_service.queue_gateway_mode(
+        db,
+        control_client(),
+        iam_client(),
+        gateway_id,
+        req,
+        evidence_count=0,
+    )
+    background_tasks.add_task(governance_service.run_policy_change, operation["id"])
+    return {"operation": operation}
+
+
+@router.post("/governance/gateways/{gateway_id}/generations", status_code=202)
+def start_gateway_generation(
+    req: ScopedGenerationRequest,
+    gateway_id: str = GATEWAY_ID,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    result = governance_service.start_generation(
+        db,
+        control_client(),
+        gateway_id,
+        req,
+    )
+    return {
+        "operation": result["operation"],
+        "generation_id": result["id"],
+        "status": result["status"],
+    }
+
+
+@router.get(
+    "/governance/gateways/{gateway_id}/generations/{generation_id}",
+)
+def get_gateway_generation(
+    gateway_id: str = GATEWAY_ID,
+    generation_id: str = RESOURCE_ID,
+) -> dict[str, Any]:
+    return governance_service.generation_view(
+        control_client(),
+        gateway_id,
+        generation_id,
+    )
+
+
+@router.get("/governance/gateways/{gateway_id}/audit")
+def get_gateway_audit(
+    gateway_id: str = GATEWAY_ID,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    return {"changes": governance_service.list_audit(db, gateway_id)}
+
+
+@router.get("/governance/gateways/{gateway_id}/decisions")
+def get_gateway_decisions(
+    gateway_id: str = GATEWAY_ID,
+    range: Literal["1h", "6h", "24h", "7d"] = "24h",
+    policy_id: str | None = None,
+    force: bool = False,
+) -> dict[str, Any]:
+    del policy_id, force
+    return governance_service.unavailable_policy_decisions(
+        control_client(),
+        gateway_id,
+        range,
+    )
+
+
+@router.get("/governance/operations/{operation_id}")
+def get_governance_operation(
+    operation_id: str = OPERATION_ID,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    return {"operation": governance_service.get_operation(db, operation_id)}
 
 
 @router.get("/governance/policies")
@@ -104,9 +373,11 @@ def decision_log(db: Session = Depends(get_db)) -> dict[str, Any]:
                 "tool": r.tool,
                 "outcome": r.outcome,
                 "reason": (r.reason or "")[:160],
+                "source": "demo",
             }
             for r in rows
-        ]
+        ],
+        "source": "demo",
     }
 
 

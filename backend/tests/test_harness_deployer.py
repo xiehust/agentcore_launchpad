@@ -64,6 +64,54 @@ def test_build_params_tools_skills_env_no_memory():
     assert "memory" not in params
 
 
+def test_build_params_multiple_gateway_auth_modes():
+    s = spec(
+        tools=[
+            {"type": "gateway", "name": "finance"},
+            {"type": "gateway", "name": "analytics"},
+        ]
+    )
+    params = build_create_params(
+        s,
+        ROLE_ARN,
+        MEM_ARN,
+        gateway_attachments=[
+            {
+                "gateway_arn": "arn:gw:iam",
+                "gateway_name": "finance-gw",
+                "outbound_auth": {"awsIam": {}},
+            },
+            {
+                "gateway_arn": "arn:gw:none",
+                "gateway_name": "analytics-gw",
+                "outbound_auth": {"none": {}},
+            },
+        ],
+    )
+    assert params["tools"] == [
+        {
+            "type": "agentcore_gateway",
+            "name": "finance_gw",
+            "config": {
+                "agentCoreGateway": {
+                    "gatewayArn": "arn:gw:iam",
+                    "outboundAuth": {"awsIam": {}},
+                }
+            },
+        },
+        {
+            "type": "agentcore_gateway",
+            "name": "analytics_gw",
+            "config": {
+                "agentCoreGateway": {
+                    "gatewayArn": "arn:gw:none",
+                    "outboundAuth": {"none": {}},
+                }
+            },
+        },
+    ]
+
+
 def test_build_params_s3_skills_use_s3_source():
     """Registry skills are S3 prefixes and must ride {"s3": {"uri": …}} — the
     `path` member is a FILESYSTEM path; s3 URIs there deploy fine but the

@@ -87,6 +87,10 @@ _STAGING_TTL_S = 600  # 10 minutes
 _staging: dict[str, dict[str, Any]] = {}  # id → {"bundles": [SkillBundle], "expires": float}
 
 
+def _invalidate_attachables() -> None:
+    _attachables_cache.update(data=None, at=0.0)
+
+
 def _record_out(record: dict[str, Any]) -> dict[str, Any]:
     return {
         "record_id": record.get("recordId"),
@@ -128,6 +132,7 @@ def record_action(record_id: str, req: ActionRequest) -> dict[str, Any]:
         console.console_action(record_id, req.action)
     except ValueError as exc:
         raise AppError("registry.unknown_action", str(exc), status_code=400) from exc
+    _invalidate_attachables()
     return _record_out(console.console_get(record_id))
 
 
@@ -151,14 +156,18 @@ def register_record(req: RegisterRequest) -> dict[str, Any]:
                 "MCP registration needs a http(s) streamable-http server URL",
                 status_code=400,
             )
-        return _record_out(console.register_mcp_server(req.name, req.description, req.url))
+        record = console.register_mcp_server(req.name, req.description, req.url)
+        _invalidate_attachables()
+        return _record_out(record)
     if not req.skill_md or not req.skill_md.strip():
         raise AppError(
             "registry.skill_md_required",
             "skill registration needs SKILL.md content",
             status_code=400,
         )
-    return _record_out(console.register_skill(req.name, req.description, req.skill_md))
+    record = console.register_skill(req.name, req.description, req.skill_md)
+    _invalidate_attachables()
+    return _record_out(record)
 
 
 def _sweep_staging() -> None:
@@ -353,6 +362,8 @@ def import_skills(req: ImportRequest) -> dict[str, Any]:
     # without re-uploading; the TTL sweep reclaims abandoned sessions
     if all(r["ok"] for r in records):
         _drop_staging(req.staging_id)
+    if any(r["ok"] for r in records):
+        _invalidate_attachables()
     return {"records": records}
 
 
@@ -378,7 +389,9 @@ def reimport_record(record_id: str) -> dict[str, Any]:
     the updated record (same shape as GET). inline/zip records (no retrievable
     origin) and DEPRECATED records return 400 ``registry.not_reimportable``; a
     failed re-acquire/validation returns 422 ``registry.skill_invalid``."""
-    return _record_out(console.reimport_skill(record_id))
+    record = console.reimport_skill(record_id)
+    _invalidate_attachables()
+    return _record_out(record)
 
 
 class UpdateRecordRequest(BaseModel):
@@ -469,12 +482,14 @@ def update_record(record_id: str, req: UpdateRecordRequest) -> dict[str, Any]:
     )
     if req.staging_id is not None:
         _drop_staging(req.staging_id)
+    _invalidate_attachables()
     return _record_out(result)
 
 
 @router.delete("/records/{record_id}")
 def delete_record(record_id: str) -> dict[str, Any]:
     console.console_delete(record_id)
+    _invalidate_attachables()
     return {"deleted": True, "record_id": record_id}
 
 
@@ -496,4 +511,6 @@ def attachables(refresh: bool = False) -> dict[str, Any]:
 @router.post("/sync-defaults")
 def sync_defaults() -> dict[str, Any]:
     """Register gateway targets (MCP) + the sample skill bundle (AGENT_SKILLS)."""
-    return {"results": console.ensure_default_records()}
+    results = console.ensure_default_records()
+    _invalidate_attachables()
+    return {"results": results}

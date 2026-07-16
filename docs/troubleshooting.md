@@ -76,3 +76,22 @@ entry below was observed during implementation — none is speculative.
 - **A Cedar deny carries the deciding policy id.** When the gateway blocks a
   tool call in `ENFORCE` mode, the decision (and the decision log) name the
   policy that produced the DENY — use it to trace which statement fired.
+- **Management is an opt-in tag, not resource ownership.** An unmanaged
+  Gateway remains readable. Registry and Policy mutations require the
+  Launchpad management tags. Unmanage removes only those tags and does not
+  detach or delete any AWS resource.
+- **Registry approval does not authorize a tool.** A Gateway-level Registry
+  record publishes the entire Gateway catalog. A Harness attaches the whole
+  Gateway; Cedar policies decide which exact actions may run.
+- **External CUSTOM_JWT Gateways can be catalog-only.** Launchpad never accepts
+  an operator JWT. Without a configured AgentCore Identity OAuth provider
+  mapping, the Registry record can be approved but Harness attachment remains
+  disabled.
+- **Engine attachment can fail IAM preflight.** The Gateway role needs
+  `bedrock-agentcore:GetPolicyEngine`, `AuthorizeAction`, and
+  `PartiallyAuthorizeActions` scoped to the Engine/Gateway resources. Launchpad
+  returns a remediation statement but never edits the external role.
+- **Policy decision telemetry may report unavailable.** The production parser
+  stays disabled until real ALLOW and DENY Policy spans establish the preview
+  field shape. The UI does not substitute local demo decisions. Promotion with
+  zero evidence requires the exact Gateway name and a non-empty audit reason.

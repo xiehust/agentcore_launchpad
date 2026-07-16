@@ -8,7 +8,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, Text
+from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, event, inspect
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -109,6 +109,64 @@ class PolicyDecision(Base):
     outcome: Mapped[str] = mapped_column(String(8))  # ALLOW | DENY
     reason: Mapped[str | None] = mapped_column(Text, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class PolicyChange(Base):
+    """Immutable request/snapshot fields plus mutable AWS operation outcome."""
+
+    __tablename__ = "policy_changes"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    gateway_id: Mapped[str] = mapped_column(String(128), index=True)
+    gateway_arn: Mapped[str] = mapped_column(String(512))
+    gateway_name: Mapped[str] = mapped_column(String(100))
+    engine_id: Mapped[str | None] = mapped_column(String(128), default=None)
+    engine_arn: Mapped[str | None] = mapped_column(String(512), default=None)
+    policy_id: Mapped[str | None] = mapped_column(String(128), default=None)
+    policy_name: Mapped[str | None] = mapped_column(String(100), default=None)
+    candidate_policy_id: Mapped[str | None] = mapped_column(String(128), default=None)
+    operation: Mapped[str] = mapped_column(String(48))
+    operator: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    before: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    requested: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    after: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    expected_updated_at: Mapped[str | None] = mapped_column(String(64), default=None)
+    override_reason: Mapped[str | None] = mapped_column(Text, default=None)
+    error: Mapped[str | None] = mapped_column(Text, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+
+
+_POLICY_CHANGE_IMMUTABLE = {
+    "gateway_id",
+    "gateway_arn",
+    "gateway_name",
+    "engine_id",
+    "engine_arn",
+    "policy_id",
+    "policy_name",
+    "operation",
+    "operator",
+    "before",
+    "requested",
+    "expected_updated_at",
+    "override_reason",
+    "created_at",
+}
+
+
+@event.listens_for(PolicyChange, "before_update")
+def _prevent_policy_change_snapshot_mutation(_: Any, __: Any, target: PolicyChange) -> None:
+    state = inspect(target)
+    changed = [
+        name for name in _POLICY_CHANGE_IMMUTABLE if state.attrs[name].history.has_changes()
+    ]
+    if changed:
+        raise ValueError(f"immutable policy audit fields changed: {', '.join(sorted(changed))}")
 
 
 class Job(Base):

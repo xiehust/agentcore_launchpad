@@ -38,7 +38,11 @@ type Method = "harness" | "zip_runtime" | "container";
 interface StoredSpec {
   model_id?: string;
   system_prompt?: string;
-  tools?: { type: string; name: string; config?: { url?: string } }[];
+  tools?: {
+    type: string;
+    name: string;
+    config?: { url?: string; record_id?: string; gateway_id?: string };
+  }[];
   skills?: string[];
   knowledge_bases?: KbRef[];
   memory?: { long_term?: boolean };
@@ -98,6 +102,12 @@ interface AttachableMcp {
   description: string;
   url: string;
   gateway: boolean;
+  record_id: string;
+  gateway_id: string | null;
+  gateway_arn: string | null;
+  attachable: boolean;
+  attachability_reason: string | null;
+  auth_type: "aws_iam" | "none" | "oauth" | null;
 }
 interface AttachableSkill {
   name: string;
@@ -134,12 +144,15 @@ export function CreateAgent() {
   const [modelId, setModelId] = useState(DEFAULT_MODEL);
   const [systemPrompt, setSystemPrompt] = useState("");
   const [tools, setTools] = useState<string[]>([]);
-  const [gatewayTargets, setGatewayTargets] = useState<string[]>([]);
+  const [gatewayTargets, setGatewayTargets] = useState<AttachableMcp[]>([]);
   const [remoteMcp, setRemoteMcp] = useState<AttachableMcp[]>([]);
   const [skillCatalog, setSkillCatalog] = useState<AttachableSkill[]>([]);
   const [selectedGateway, setSelectedGateway] = useState<string[]>(
     prefillGateway ? [prefillGateway] : [],
   );
+  const [storedGatewayConfig, setStoredGatewayConfig] = useState<
+    Record<string, { record_id: string; gateway_id: string }>
+  >({});
   const [selectedMcp, setSelectedMcp] = useState<string[]>([]);
   const [kbCatalog, setKbCatalog] = useState<AttachableKb[]>([]);
   const [selectedKbs, setSelectedKbs] = useState<string[]>([]);
@@ -185,7 +198,7 @@ export function CreateAgent() {
     fetch("/api/registry/attachables")
       .then((res) => (res.ok ? res.json() : { mcp_servers: [], skills: [] }))
       .then((d: { mcp_servers: AttachableMcp[]; skills: AttachableSkill[] }) => {
-        setGatewayTargets(d.mcp_servers.filter((m) => m.gateway).map((m) => m.name));
+        setGatewayTargets(d.mcp_servers.filter((m) => m.gateway));
         setRemoteMcp(d.mcp_servers.filter((m) => !m.gateway));
         setSkillCatalog(d.skills);
       })
@@ -271,6 +284,7 @@ export function CreateAgent() {
     setSystemPrompt("");
     setTools([]);
     setSelectedGateway([]);
+    setStoredGatewayConfig({});
     setSelectedMcp([]);
     setSelectedKbs([]);
     setSpecKbs([]);
@@ -319,7 +333,14 @@ export function CreateAgent() {
       method === "harness"
         ? [
             ...tools.map((n) => ({ type: "builtin", name: n })),
-            ...selectedGateway.map((n) => ({ type: "gateway", name: n })),
+            ...selectedGateway.map((n) => {
+              const server = gatewayTargets.find((item) => item.name === n);
+              const config =
+                server?.record_id && server.gateway_id
+                  ? { record_id: server.record_id, gateway_id: server.gateway_id }
+                  : storedGatewayConfig[n];
+              return { type: "gateway", name: n, ...(config ? { config } : {}) };
+            }),
             ...selectedMcp.flatMap((n) => {
               const server = remoteMcp.find((m) => m.name === n);
               return server ? [{ type: "mcp", name: n, config: { url: server.url } }] : [];
@@ -402,7 +423,23 @@ export function CreateAgent() {
     setModelId(spec.model_id ?? DEFAULT_MODEL);
     setSystemPrompt(spec.system_prompt ?? "");
     setTools((spec.tools ?? []).filter((x) => x.type === "builtin").map((x) => x.name));
-    setSelectedGateway((spec.tools ?? []).filter((x) => x.type === "gateway").map((x) => x.name));
+    const gatewayTools = (spec.tools ?? []).filter((x) => x.type === "gateway");
+    setSelectedGateway(gatewayTools.map((x) => x.name));
+    setStoredGatewayConfig(
+      Object.fromEntries(
+        gatewayTools.flatMap((tool) =>
+          tool.config?.record_id && tool.config.gateway_id
+            ? [[
+                tool.name,
+                {
+                  record_id: tool.config.record_id,
+                  gateway_id: tool.config.gateway_id,
+                },
+              ]]
+            : [],
+        ),
+      ),
+    );
     setSelectedMcp((spec.tools ?? []).filter((x) => x.type === "mcp").map((x) => x.name));
     setSelectedKbs((spec.knowledge_bases ?? []).map((k) => k.kb_id));
     setSpecKbs(spec.knowledge_bases ?? []);
@@ -568,8 +605,16 @@ export function CreateAgent() {
       new Set(fsPaths).size === fsPaths.length &&
       (!byoMounts || (splitIds(vpcSubnets).length > 0 && splitIds(vpcSgs).length > 0)));
 
+  const gatewaySelectionsValid = selectedGateway.every((name) => {
+    const live = gatewayTargets.find((gateway) => gateway.name === name);
+    if (live) return live.attachable;
+    return storedGatewayConfig[name] == null;
+  });
   const configValid =
-    /^[a-z][a-z0-9-]{2,47}$/.test(name) && systemPrompt.trim().length > 0 && fsValid;
+    /^[a-z][a-z0-9-]{2,47}$/.test(name) &&
+    systemPrompt.trim().length > 0 &&
+    fsValid &&
+    gatewaySelectionsValid;
 
   return (
     <section>
@@ -745,19 +790,27 @@ export function CreateAgent() {
                     ))}
                     {gatewayTargets.map((target) => (
                       <button
-                        key={target}
+                        key={target.record_id}
                         type="button"
-                        className={`selchip${selectedGateway.includes(target) ? " on" : ""}`}
-                        style={{ cursor: "pointer" }}
-                        onClick={() =>
+                        className={`selchip${selectedGateway.includes(target.name) ? " on" : ""}`}
+                        disabled={!target.attachable}
+                        style={{ cursor: target.attachable ? "pointer" : "not-allowed" }}
+                        title={target.attachability_reason ?? target.description}
+                        onClick={() => {
+                          if (!target.attachable) return;
                           setSelectedGateway((prev) =>
-                            prev.includes(target)
-                              ? prev.filter((x) => x !== target)
-                              : [...prev, target],
-                          )
-                        }
+                            prev.includes(target.name)
+                              ? prev.filter((x) => x !== target.name)
+                              : [...prev, target.name],
+                          );
+                        }}
                       >
-                        {target} · gateway {selectedGateway.includes(target) ? "✓" : "+"}
+                        {target.name} · gateway{" "}
+                        {target.attachable
+                          ? selectedGateway.includes(target.name)
+                            ? "✓"
+                            : "+"
+                          : "—"}
                       </button>
                     ))}
                     {remoteMcp.map((server) => (

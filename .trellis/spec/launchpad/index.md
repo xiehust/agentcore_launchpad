@@ -20,5 +20,6 @@
 | [Evaluation Sub-page Interaction](./evaluation-subpage-interaction.md) | Shared table + URL-param selection for experiments/evaluators/datasets, including Configuration/Canary mode and handoff params (`exp`/`canary`/`champion`/`sourceExp`), editor rehydration, read-only variants, and testids | Active |
 | [Console Authentication](./console-auth.md) | Optional local operator credentials, HMAC session-cookie contract, `/api` middleware boundary, `/v1` independence, and frontend expiry handling | Active |
 | [Remote Production Deployment](./remote-production-deployment.md) | Workshop EC2 + CloudFront deployment contract: us-east-1 bootstrap, loopback services, nginx origin-key gate, CloudFront-only port 80, systemd Region override, seeding and verification | Active |
+| [Existing Gateway Policy Management](./gateway-policy-management.md) | Live Gateway onboarding tags, Gateway-level Registry records, server-derived Harness auth, conservative Cedar lifecycle, audit, and operation contracts | Active |
 
 **Language**: All documentation should be written in **English**.

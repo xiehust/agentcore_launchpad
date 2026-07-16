@@ -1,0 +1,161 @@
+from datetime import UTC, datetime
+from unittest.mock import MagicMock
+
+import pytest
+
+from app.services.agentcore import policy
+
+
+def test_gateway_and_policy_pagination():
+    control = MagicMock()
+    control.list_gateways.side_effect = [
+        {"items": [{"gatewayId": "gw-1"}], "nextToken": "next"},
+        {"items": [{"gatewayId": "gw-2"}]},
+    ]
+    control.list_policies.side_effect = [
+        {"policies": [{"policyId": "p-1"}], "nextToken": "next"},
+        {"policies": [{"policyId": "p-2"}]},
+    ]
+
+    assert [item["gatewayId"] for item in policy.list_gateways(control)] == [
+        "gw-1",
+        "gw-2",
+    ]
+    assert [item["policyId"] for item in policy.list_policies(control, "pe-1")] == [
+        "p-1",
+        "p-2",
+    ]
+    assert control.list_gateways.call_args_list[1].kwargs["nextToken"] == "next"
+    assert control.list_policies.call_args_list[1].kwargs["policyEngineId"] == "pe-1"
+
+
+def test_management_tags_preserve_unrelated_tags():
+    control = MagicMock()
+    control.list_tags_for_resource.return_value = {
+        "tags": {"owner": "platform", **policy.MANAGED_TAGS}
+    }
+    assert policy.is_managed(policy.list_tags(control, "arn:gateway"))
+
+    policy.tag_managed(control, "arn:gateway")
+    control.tag_resource.assert_called_once_with(
+        resourceArn="arn:gateway",
+        tags=policy.MANAGED_TAGS,
+    )
+    policy.untag_managed(control, "arn:gateway")
+    control.untag_resource.assert_called_once_with(
+        resourceArn="arn:gateway",
+        tagKeys=list(policy.MANAGED_TAGS),
+    )
+
+
+def test_update_gateway_preserves_supported_fields():
+    now = datetime.now(UTC)
+    gateway = {
+        "gatewayId": "gw-1",
+        "gatewayArn": "arn:gw-1",
+        "gatewayUrl": "https://example.test/mcp",
+        "name": "existing-gateway",
+        "roleArn": "arn:aws:iam::123:role/gateway",
+        "authorizerType": "CUSTOM_JWT",
+        "authorizerConfiguration": {
+            "customJWTAuthorizer": {"discoveryUrl": "https://issuer.test/.well-known"}
+        },
+        "description": "keep",
+        "protocolType": "MCP",
+        "protocolConfiguration": {"mcp": {"supportedVersions": ["2025-06-18"]}},
+        "kmsKeyArn": "arn:kms",
+        "customTransformConfiguration": {"lambda": {"arn": "arn:lambda:transform"}},
+        "interceptorConfigurations": [
+            {
+                "interceptor": {"lambda": {"arn": "arn:lambda:interceptor"}},
+                "interceptionPoints": ["REQUEST"],
+            }
+        ],
+        "exceptionLevel": "DEBUG",
+        "wafConfiguration": {"failureMode": "FAIL_CLOSE"},
+        "policyEngineConfiguration": {"arn": "arn:old", "mode": "ENFORCE"},
+        "createdAt": now,
+        "updatedAt": now,
+        "status": "READY",
+        "statusReasons": [],
+        "workloadIdentityDetails": {"workloadIdentityArn": "arn:identity"},
+        "webAclArn": "arn:waf",
+    }
+    params = policy.gateway_update_params(
+        gateway,
+        {"arn": "arn:new", "mode": "LOG_ONLY"},
+    )
+
+    assert params["policyEngineConfiguration"] == {
+        "arn": "arn:new",
+        "mode": "LOG_ONLY",
+    }
+    for field in (
+        "name",
+        "roleArn",
+        "authorizerType",
+        "authorizerConfiguration",
+        "description",
+        "protocolType",
+        "protocolConfiguration",
+        "kmsKeyArn",
+        "customTransformConfiguration",
+        "interceptorConfigurations",
+        "exceptionLevel",
+        "wafConfiguration",
+    ):
+        assert params[field] == gateway[field]
+    assert "status" not in params
+    assert "gatewayArn" not in params
+    assert "workloadIdentityDetails" not in params
+    assert "webAclArn" not in params
+
+
+def test_update_gateway_fetches_fresh_state():
+    control = MagicMock()
+    control.get_gateway.return_value = {
+        "gatewayId": "gw-1",
+        "name": "gw",
+        "roleArn": "arn:role",
+        "authorizerType": "AWS_IAM",
+        "description": "current",
+    }
+    policy.update_gateway_policy_configuration(
+        control,
+        gateway_id="gw-1",
+        engine_arn="arn:engine",
+        mode="LOG_ONLY",
+    )
+    control.get_gateway.assert_called_once_with(gatewayIdentifier="gw-1")
+    assert control.update_gateway.call_args.kwargs["description"] == "current"
+
+
+def test_wait_policy_surfaces_terminal_failure():
+    control = MagicMock()
+    control.get_policy.return_value = {
+        "status": "UPDATE_FAILED",
+        "statusReasons": ["invalid Cedar"],
+    }
+    with pytest.raises(RuntimeError, match="invalid Cedar"):
+        policy.wait_policy_active(
+            control,
+            "pe-1",
+            "p-1",
+            interval_s=0,
+            sleeper=lambda _: None,
+        )
+
+
+def test_create_policy_is_always_log_only():
+    control = MagicMock()
+    policy.create_policy(
+        control,
+        engine_id="pe-1",
+        name="candidate",
+        statement="permit(principal, action, resource);",
+    )
+    assert control.create_policy.call_args.kwargs["enforcementMode"] == "LOG_ONLY"
+    assert (
+        control.create_policy.call_args.kwargs["validationMode"]
+        == "FAIL_ON_ANY_FINDINGS"
+    )
