@@ -3,7 +3,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
-import { Btn, Chip, ConfirmDialog, LaunchSequence, Panel, useToast, ViewHead } from "../components";
+import {
+  Btn,
+  Chip,
+  ConfirmDialog,
+  LaunchSequence,
+  MethodChip,
+  Panel,
+  useToast,
+  ViewHead,
+} from "../components";
 import type { AgentInfo, DeploymentInfo, InspectedSkill, JobInfo } from "../lib/api";
 import { api, ApiError } from "../lib/api";
 
@@ -1397,9 +1406,8 @@ function AgentList({
           {agents.map((a) => (
             <tr key={a.id}>
               <td className="pri">{a.name}</td>
-              <td className="mono dim">
-                {a.method}
-                {(a.spec as StoredSpec | undefined)?.protocol === "a2a" && " · a2a"}
+              <td>
+                <MethodChip method={a.method} />
               </td>
               <td>
                 <Chip
@@ -1465,4 +1473,3 @@ function AgentList({
     </Panel>
   );
 }
-

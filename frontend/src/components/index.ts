@@ -7,6 +7,7 @@ export { DataTable, type Column } from "./DataTable";
 export { Kicker } from "./Kicker";
 export { LaunchSequence } from "./LaunchSequence";
 export { Markdown } from "./Markdown";
+export { MethodChip } from "./MethodChip";
 export { Panel } from "./Panel";
 export { StatTile } from "./StatTile";
 export { StageCard } from "./StageCard";

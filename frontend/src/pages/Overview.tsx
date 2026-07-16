@@ -3,8 +3,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
-import { Chip, DataTable, Panel, StatTile, ViewHead } from "../components";
-import type { ChipTone } from "../components";
+import { Chip, DataTable, MethodChip, Panel, StatTile, ViewHead } from "../components";
 import type { AgentInfo, OverviewInfo } from "../lib/api";
 import { api } from "../lib/api";
 
@@ -17,13 +16,6 @@ const SERVICES = [
   "evaluation",
   "observability",
 ] as const;
-
-const METHOD_CHIP: Record<string, { tone: ChipTone; icon: string; label: string }> = {
-  harness: { tone: "amber", icon: "◇", label: "HARNESS" },
-  container: { tone: "blue", icon: "▣", label: "CLAUDE SDK" },
-  zip_runtime: { tone: "aqua", icon: "⬡", label: "STRANDS" },
-  studio: { tone: "aqua", icon: "⬡", label: "STUDIO" },
-};
 
 function useAgents(intervalMs = 5000): AgentInfo[] | null {
   const [agents, setAgents] = useState<AgentInfo[] | null>(null);
@@ -186,39 +178,34 @@ export function Overview() {
               )
             }
           >
-            {agents.map((agent) => {
-              const method = METHOD_CHIP[agent.method] ?? METHOD_CHIP.harness;
-              return (
-                <tr key={agent.id}>
-                  <td className="pri">{agent.name}</td>
-                  <td>
-                    <Chip tone={method.tone} icon={method.icon}>
-                      {method.label}
+            {agents.map((agent) => (
+              <tr key={agent.id}>
+                <td className="pri">{agent.name}</td>
+                <td>
+                  <MethodChip method={agent.method} />
+                </td>
+                <td className="mono dim">{stageSummary(agent)}</td>
+                <td>
+                  {agent.status === "active" ? (
+                    <Chip tone="good" icon="●">
+                      {t("status.active")}
                     </Chip>
-                  </td>
-                  <td className="mono dim">{stageSummary(agent)}</td>
-                  <td>
-                    {agent.status === "active" ? (
-                      <Chip tone="good" icon="●">
-                        {t("status.active")}
-                      </Chip>
-                    ) : agent.status === "failed" ? (
-                      <Chip tone="crit" icon="✕">
-                        {t("status.failed")}
-                      </Chip>
-                    ) : (
-                      <Chip tone="warn" icon="◐">
-                        {t("status.deploying")}
-                      </Chip>
-                    )}
-                  </td>
-                  <td>
-                    <span className="arn">{agent.arn ?? "—"}</span>
-                  </td>
-                  <td className="mono dim">{ageOf(agent.created_at, now)}</td>
-                </tr>
-              );
-            })}
+                  ) : agent.status === "failed" ? (
+                    <Chip tone="crit" icon="✕">
+                      {t("status.failed")}
+                    </Chip>
+                  ) : (
+                    <Chip tone="warn" icon="◐">
+                      {t("status.deploying")}
+                    </Chip>
+                  )}
+                </td>
+                <td>
+                  <span className="arn">{agent.arn ?? "—"}</span>
+                </td>
+                <td className="mono dim">{ageOf(agent.created_at, now)}</td>
+              </tr>
+            ))}
           </DataTable>
         </Panel>
 
