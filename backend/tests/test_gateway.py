@@ -1,12 +1,16 @@
 """Gateway bootstrap idempotency, MCP client parsing, harness gateway mapping."""
 
 import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
+from botocore.exceptions import ClientError
 
+from app.core.errors import AppError
 from app.deployer.harness import build_create_params
+from app.routers import tools as tools_router
 from app.schemas.agent import AgentSpec
 from app.services import gateway_bootstrap as gb
 from app.services import mcp_client
@@ -169,8 +173,60 @@ def test_mcp_rpc_raises_envelope_on_401(monkeypatch):
         return httpx.Response(401, text="Unauthorized", request=httpx.Request("POST", url))
 
     monkeypatch.setattr(mcp_client.httpx, "post", fake_post)
-    from app.core.errors import AppError
-
     with pytest.raises(AppError) as err:
         mcp_client._rpc("https://gw/mcp", "tok", "tools/list")
     assert err.value.code == "gateway.unauthorized"
+
+
+def test_mcp_cognito_auth_rejection_becomes_app_error(monkeypatch):
+    cognito = MagicMock()
+    cognito.initiate_auth.side_effect = ClientError(
+        {
+            "Error": {
+                "Code": "NotAuthorizedException",
+                "Message": "Incorrect username or password.",
+            }
+        },
+        "InitiateAuth",
+    )
+    monkeypatch.setattr(
+        mcp_client,
+        "get_settings",
+        lambda: SimpleNamespace(
+            region="us-west-2",
+            resources={"user_pool_client_id": "client-id"},
+        ),
+    )
+    monkeypatch.setattr(
+        mcp_client,
+        "load_yaml_config",
+        lambda: {"demo_users": {"passwords": {"river": "stale-password"}}},
+    )
+    monkeypatch.setattr(mcp_client.boto3, "client", lambda *args, **kwargs: cognito)
+    mcp_client._token_cache.clear()
+
+    with pytest.raises(AppError) as err:
+        mcp_client.get_cognito_token()
+
+    assert err.value.code == "gateway.credentials_rejected"
+    assert err.value.status_code == 503
+    assert err.value.detail == {"aws_code": "NotAuthorizedException"}
+
+
+def test_tool_catalog_degrades_when_gateway_credentials_are_rejected(client, monkeypatch):
+    def rejected():
+        raise AppError(
+            "gateway.credentials_rejected",
+            "demo user credentials were rejected",
+            status_code=503,
+        )
+
+    monkeypatch.setattr(mcp_client, "tools_list", rejected)
+    tools_router._cache.update(tools=None, at=0.0)
+
+    response = client.get("/api/tools?refresh=true")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["gateway_error"] == "gateway.credentials_rejected"
+    assert {tool["name"] for tool in body["tools"]} == {"code-interpreter", "browser"}

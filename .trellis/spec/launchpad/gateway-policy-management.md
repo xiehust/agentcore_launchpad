@@ -57,6 +57,10 @@ after insertion.
 - New Engine attachments and policies start `LOG_ONLY`.
 - Editing ACTIVE creates a LOG_ONLY candidate. Cutover activates candidate
   first; rollback reactivates original first.
+- The Tools catalog treats live `launchpad-gw` discovery as optional. Cognito
+  and Gateway SDK failures must be normalized to `AppError`; `GET /api/tools`
+  returns builtins plus a stable `gateway_error` instead of failing the whole
+  view. Catalog reads never repair or reset AWS credentials implicitly.
 - Mutation response: `{"operation": GovernanceOperation}`. Polling uses the
   same envelope.
 - Generation start response:
@@ -100,6 +104,8 @@ after insertion.
 - Lifecycle tests assert LOG_ONLY update, ACTIVE candidate, conservative
   cutover/partial retry/rollback, timestamp conflict, mutex, and audit
   immutability.
+- Tools tests assert Cognito authentication failures become stable domain
+  errors and the catalog still returns builtin tools.
 - Router tests assert operation and generation envelopes match
   `frontend/src/lib/api.ts`.
 - Final validation is `make verify`; real AWS runs use the guarded

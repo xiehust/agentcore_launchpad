@@ -12,6 +12,7 @@ from typing import Any
 
 import boto3
 import httpx
+from botocore.exceptions import BotoCoreError, ClientError
 
 from app.core.config import get_settings, load_yaml_config
 from app.core.errors import AppError
@@ -36,11 +37,33 @@ def get_cognito_token(username: str = "river") -> str:
             status_code=503,
         )
     client = boto3.client("cognito-idp", region_name=settings.region)
-    resp = client.initiate_auth(
-        ClientId=settings.resources["user_pool_client_id"],
-        AuthFlow="USER_PASSWORD_AUTH",
-        AuthParameters={"USERNAME": username, "PASSWORD": config_pw},
-    )["AuthenticationResult"]
+    try:
+        resp = client.initiate_auth(
+            ClientId=settings.resources["user_pool_client_id"],
+            AuthFlow="USER_PASSWORD_AUTH",
+            AuthParameters={"USERNAME": username, "PASSWORD": config_pw},
+        )["AuthenticationResult"]
+    except ClientError as exc:
+        aws_code = exc.response.get("Error", {}).get("Code", "ClientError")
+        if aws_code == "NotAuthorizedException":
+            raise AppError(
+                "gateway.credentials_rejected",
+                "demo user credentials were rejected - run make bootstrap",
+                {"aws_code": aws_code},
+                status_code=503,
+            ) from exc
+        raise AppError(
+            "gateway.identity_unavailable",
+            "Cognito authentication is unavailable",
+            {"aws_code": aws_code},
+            status_code=503,
+        ) from exc
+    except BotoCoreError as exc:
+        raise AppError(
+            "gateway.identity_unavailable",
+            "Cognito authentication is unavailable",
+            status_code=503,
+        ) from exc
     _token_cache[username] = {
         "token": resp["AccessToken"],
         "expires_at": time.time() + resp.get("ExpiresIn", 3600),
