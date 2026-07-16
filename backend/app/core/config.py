@@ -58,6 +58,11 @@ class Settings(BaseSettings):
     account_id: str = ""
     resources: dict[str, Any] = {}
 
+    # AgentCore synchronous runtime requests may run for up to 15 minutes.
+    # Keep the SDK read timeout above that service limit so buffered agents can
+    # return their final response.
+    agentcore_read_timeout_s: int = Field(default=1000, gt=0)
+
     # Studio local-debug (un-deployed flow execution + AI fix). The control-plane
     # backend env has no strands/openai; generated code runs in the dedicated
     # interpreter provisioned by scripts/setup_exec_env.sh. Endpoints return a

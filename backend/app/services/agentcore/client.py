@@ -7,6 +7,7 @@ everything else passes clients explicitly so tests can inject stubs.
 from functools import lru_cache
 
 import boto3
+from botocore.config import Config
 
 from app.core.config import get_settings
 
@@ -18,7 +19,12 @@ def control_client():
 
 @lru_cache
 def data_client():
-    return boto3.client("bedrock-agentcore", region_name=get_settings().region)
+    settings = get_settings()
+    return boto3.client(
+        "bedrock-agentcore",
+        region_name=settings.region,
+        config=Config(read_timeout=settings.agentcore_read_timeout_s),
+    )
 
 
 @lru_cache

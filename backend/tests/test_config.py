@@ -9,6 +9,7 @@ def test_defaults(tmp_path, monkeypatch):
         "LAUNCHPAD_AUTH_USERNAME",
         "LAUNCHPAD_AUTH_PASSWORD",
         "LAUNCHPAD_AUTH_COOKIE_SECURE",
+        "LAUNCHPAD_AGENTCORE_READ_TIMEOUT_S",
     ):
         monkeypatch.delenv(name, raising=False)
     s = Settings()
@@ -18,6 +19,7 @@ def test_defaults(tmp_path, monkeypatch):
     assert s.auth_username == "admin"
     assert s.auth_password is None
     assert s.auth_cookie_secure is False
+    assert s.agentcore_read_timeout_s == 1000
 
 
 def test_yaml_source_feeds_settings(tmp_path, monkeypatch):
@@ -50,3 +52,8 @@ def test_auth_settings_from_environment(monkeypatch):
     assert settings.auth_password is not None
     assert settings.auth_password.get_secret_value() == "s3cret-pass"
     assert settings.auth_cookie_secure is True
+
+
+def test_agentcore_read_timeout_from_environment(monkeypatch):
+    monkeypatch.setenv("LAUNCHPAD_AGENTCORE_READ_TIMEOUT_S", "1200")
+    assert Settings().agentcore_read_timeout_s == 1200
